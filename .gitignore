@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example

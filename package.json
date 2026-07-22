@@ -1,0 +1,39 @@
+{
+  "name": "instagram-mcp-ai",
+  "version": "0.0.1",
+  "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "author": "Ivan Baev",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test \"dist/**/*.test.js\"",
+    "test:full": "npm run build && npm test",
+    "coverage": "c8 --reporter=text --reporter=lcov npm test",
+    "check": "npm run lint && npm run format:check && npm run build && npm test",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^22.0.0",
+    "c8": "^10.1.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "fast-check": "^3.20.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

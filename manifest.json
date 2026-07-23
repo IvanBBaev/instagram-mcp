@@ -1,0 +1,82 @@
+{
+  "manifest_version": "0.3",
+  "name": "instagram-mcp-ai",
+  "display_name": "Instagram MCP",
+  "version": "0.0.1",
+  "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
+  "long_description": "instagram-mcp-ai exposes Instagram professional-account (Business/Creator) operations — content publishing, media management, comment moderation, and insights — as safe, well-annotated Model Context Protocol tools. It talks only to official Meta Graph API endpoints (graph.instagram.com, graph.facebook.com), keeps credentials in the OS keychain via Claude Desktop's user configuration, and defaults writes to a preview (plan-and-apply) mode so the model never mutates your account without explicit consent.",
+  "author": {
+    "name": "Ivan Baev"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IvanBBaev/instagram-mcp"
+  },
+  "keywords": ["instagram", "mcp", "meta", "graph-api", "social"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/src/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/src/index.js"],
+      "env": {
+        "IG_ACCESS_TOKEN": "${user_config.IG_ACCESS_TOKEN}",
+        "IG_ACCOUNT_ID": "${user_config.IG_ACCOUNT_ID}",
+        "IG_APP_ID": "${user_config.IG_APP_ID}",
+        "IG_APP_SECRET": "${user_config.IG_APP_SECRET}",
+        "IG_WRITE_MODE": "${user_config.IG_WRITE_MODE}",
+        "IG_TOOL_PACKAGES": "${user_config.IG_TOOL_PACKAGES}"
+      }
+    }
+  },
+  "user_config": {
+    "IG_ACCESS_TOKEN": {
+      "type": "string",
+      "title": "Instagram access token",
+      "description": "Long-lived Instagram Login (Path A) access token for your professional account. Obtain it via the Meta Graph API Explorer or your app dashboard — see docs/mcpb-install.md.",
+      "sensitive": true,
+      "required": true
+    },
+    "IG_ACCOUNT_ID": {
+      "type": "string",
+      "title": "Instagram account ID",
+      "description": "Your Instagram professional-account (Business/Creator) ID. Optional — the server can look it up, but supplying it skips a lookup and disambiguates multiple accounts.",
+      "required": false
+    },
+    "IG_APP_ID": {
+      "type": "string",
+      "title": "Meta app ID",
+      "description": "Your Meta app ID. Optional — needed only for token refresh, debug_token, and discovery (business_discovery / hashtag search on Path B).",
+      "required": false
+    },
+    "IG_APP_SECRET": {
+      "type": "string",
+      "title": "Meta app secret",
+      "description": "Your Meta app secret. Optional — needed only for token exchange/refresh and appsecret_proof (Path B).",
+      "sensitive": true,
+      "required": false
+    },
+    "IG_WRITE_MODE": {
+      "type": "string",
+      "title": "Write mode",
+      "description": "Standing consent for write operations: \"preview\" (plan only, default) or \"apply\" (execute writes).",
+      "default": "preview",
+      "required": false
+    },
+    "IG_TOOL_PACKAGES": {
+      "type": "string",
+      "title": "Tool packages",
+      "description": "Which tool packages to load: core | reader | publisher | all, or an explicit comma-separated list.",
+      "default": "core",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  }
+}

@@ -24,6 +24,46 @@ It talks **only to official Meta endpoints** (`graph.instagram.com`,
 `graph.facebook.com`). No private/unofficial Instagram APIs, no scraping, no
 credential automation against the Instagram app or website.
 
+## Tools
+
+The full v1 tool surface, generated from the tool registry — do not edit the
+table by hand; run `npm run gen:readme`. **Auth paths** is the login path a tool
+is valid for (`both` when unrestricted); **Access** is `Read` for read-only tools
+and `Write` for mutating ones (writes preview by default — see Configuration).
+
+<!-- BEGIN AUTOGEN:tools -->
+| Tool | Package | Auth paths | Access | Summary |
+| --- | --- | --- | --- | --- |
+| `instagram_get_account` | account | both | Read | Fetch the profile of the operated Instagram professional account: username, display name, biography, website, profile-picture URL, and follower / following / media counts. |
+| `instagram_list_linked_accounts` | account | fb-login | Read | Enumerate the Facebook Pages this token can act on and the Instagram business account linked to each (GET /me/accounts). |
+| `instagram_token_status` | account | both | Read | Report the active credential: auth path (A = ig-login / B = fb-login), whether a token is configured, the resolved account ID, and — on Path B, via debug_token — validity, granted scopes, absolute expiry and days-left (with a refresh warning as the threshold nears). |
+| `instagram_get_media` | media | both | Read | Fetch a single media object by id, including its carousel children (album items) under `children`. |
+| `instagram_list_media` | media | both | Read | List the operated account's own media (feed posts, reels, stories, albums), newest first, cursor-paginated. |
+| `instagram_set_comments_enabled` | media | both | Write | Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true\|false). |
+| `instagram_get_account_insights` | insights | both | Read | Account-level insights for the operated Instagram professional account (GET /{ig-id}/insights). |
+| `instagram_get_audience_demographics` | insights | both | Read | Follower / engaged-audience demographics for the operated account (GET /{ig-id}/insights with metric_type=total_value). |
+| `instagram_get_media_insights` | insights | both | Read | Insights for a single media object (GET /{media-id}/insights). |
+| `instagram_get_online_followers` | insights | both | Read | Hourly distribution of when the account's followers are online (GET /{ig-id}/insights?metric=online_followers&amp;period=lifetime). |
+| `instagram_create_media_container` | publishing | both | Write | Phase 1 of publishing: create a media container that Instagram ingests from a public HTTPS URL. |
+| `instagram_get_container_status` | publishing | both | Read | Read a media container's processing state: status_code is IN_PROGRESS, FINISHED, ERROR, EXPIRED, or PUBLISHED. |
+| `instagram_get_publishing_limit` | publishing | both | Read | Report the account's content-publishing usage against its rolling-window quota. |
+| `instagram_post_image` | publishing | both | Write | Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish. |
+| `instagram_post_reel` | publishing | both | Write | Publish a reel in one call: create the REELS container, wait for processing (reels can take a while), then publish. |
+| `instagram_post_story` | publishing | both | Write | Publish a photo or video story in one call: create the STORIES container, wait for processing, then publish. |
+| `instagram_publish_media` | publishing | both | Write | Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. |
+| `instagram_create_comment` | comments | both | Write | Post a new top-level comment on a media object (POST /{media-id}/comments). |
+| `instagram_delete_comment` | comments | both | Write | Permanently delete a comment (DELETE /{comment-id}). |
+| `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies. |
+| `instagram_hide_comment` | comments | both | Write | Hide a comment (POST /{comment-id}?hide=true) — reversible moderation, preferred over delete. |
+| `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies`. |
+| `instagram_list_tagged_media` | comments | both | Read | List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated. |
+| `instagram_reply_to_comment` | comments | both | Write | Post a threaded reply under an existing comment (POST /{comment-id}/replies). |
+| `instagram_unhide_comment` | comments | both | Write | Unhide a previously hidden comment (POST /{comment-id}?hide=false). |
+| `instagram_discover_business` | discovery | fb-login | Read | Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(&lt;handle&gt;){followers_count,media_count,media{...}}. |
+| `instagram_get_hashtag_media` | discovery | fb-login | Read | List PUBLIC media under a hashtag id via GET /{hashtag-id}/top_media or /{hashtag-id}/recent_media (choose via `edge`), which require the operated account's id as user_id. |
+| `instagram_search_hashtag` | discovery | fb-login | Read | Resolve a hashtag name to its Instagram hashtag id(s) via GET /ig_hashtag_search?user_id={ig-id}&amp;q=&lt;hashtag&gt; (the returned id feeds instagram_get_hashtag_media). |
+<!-- END AUTOGEN:tools -->
+
 ## Why build it
 
 Per the ecosystem research (verified 2026-07-21): the Meta **ads** niche is
@@ -85,6 +125,43 @@ reference: the production `servicenow-mcp-ai` layered design.
 > **The #1 constraint to know up front:** Instagram ingests media **by public
 > URL** — `image_url`/`video_url` must be reachable by Meta's servers. Publishing
 > a local file means hosting it somewhere public first; v1 accepts URLs only.
+
+## Configuration
+
+All settings are environment variables with the uniform `IG_` prefix; the
+canonical copy with inline comments is [`.env.example`](.env.example), and the
+table below is generated from it — do not edit it by hand; run
+`npm run gen:readme`. Choose exactly one auth path (set `IG_AUTH_MODE` only when
+both tokens are present). Writes preview by default; set `IG_WRITE_MODE=apply`
+(and `IG_ALLOW_DESTRUCTIVE=true` for deletes) to perform them.
+
+<!-- BEGIN AUTOGEN:env -->
+| Variable | Default | Description |
+| --- | --- | --- |
+| `IG_AUTH_MODE` |  | ig-login \| fb-login (auto-detected when only one token is set) |
+| `IG_ACCESS_TOKEN` |  | Path A long-lived IG-login token (secret) |
+| `IG_FB_ACCESS_TOKEN` |  | Path B page/system-user token (secret) |
+| `IG_ACCOUNT_ID` |  | IG professional-account ID (skip a lookup / disambiguate) |
+| `IG_APP_ID` |  | Meta app id (token exchange/refresh, appsecret_proof, debug_token) |
+| `IG_APP_SECRET` |  | Meta app secret (secret) |
+| `IG_ENV_FILE` |  | Env-file location override (default: XDG path) |
+| `IG_ACTIVE_PROFILE` | `default` | Profile used when a tool call passes no `account` |
+| `IG_TOOL_PACKAGES` | `core` | core \| reader \| publisher \| all, or an explicit list |
+| `IG_PACKAGES_DENY` |  | Packages to remove after profile resolution |
+| `IG_PACKAGES_READONLY` |  | Packages forced read-only |
+| `IG_WRITE_MODE` | `preview` | preview \| apply (standing consent for writes) |
+| `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (delete_comment) |
+| `IG_TRANSPORT` | `stdio` | stdio \| http |
+| `IG_HTTP_HOST` | `127.0.0.1` |  |
+| `IG_PORT` | `3000` |  |
+| `IG_HTTP_TOKEN` |  | HTTP bearer token (secret; constant-time compare) |
+| `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore |
+| `IG_MAX_ITEMS` | `200` | fetchAll hard item cap |
+| `IG_REFRESH_AFTER_DAYS` | `45` | Path-A auto-refresh threshold |
+| `IG_TIMEOUT_MS` | `30000` | Per-request timeout for Graph calls |
+| `IG_LOG_LEVEL` | `info` | debug \| info \| warn \| error |
+| `IG_PRETTY_JSON` | `false` | Pretty-print JSON results |
+<!-- END AUTOGEN:env -->
 
 ## Non-goals
 

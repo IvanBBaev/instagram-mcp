@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.IvanBBaev/instagram-mcp-ai",
+  "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
+  "repository": {
+    "url": "https://github.com/IvanBBaev/instagram-mcp",
+    "source": "github"
+  },
+  "version": "0.0.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "instagram-mcp-ai",
+      "version": "0.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "IG_ACCESS_TOKEN",
+          "description": "Long-lived Instagram access token for the professional account.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "IG_ACCOUNT_ID",
+          "description": "Instagram professional-account ID; skips a lookup and disambiguates when several accounts are reachable.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "IG_APP_ID",
+          "description": "Meta app ID; enables token exchange/refresh, appsecret_proof, and business discovery.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "IG_APP_SECRET",
+          "description": "Meta app secret; required alongside IG_APP_ID for token refresh and appsecret_proof.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

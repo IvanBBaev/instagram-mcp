@@ -4,11 +4,29 @@
   "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
   "type": "module",
   "main": "dist/src/index.js",
+  "bin": {
+    "instagram-mcp-ai": "bin/instagram-mcp-ai.cjs"
+  },
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "bin/",
+    "server.json",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22"
   },
   "license": "MIT",
   "author": "Ivan Baev",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint .",
@@ -17,6 +35,7 @@
     "test": "node --test \"dist/**/*.test.js\"",
     "test:full": "npm run build && npm test",
     "coverage": "c8 --reporter=text --reporter=lcov npm test",
+    "gen:readme": "npm run build && node scripts/gen-readme.mjs",
     "check": "npm run lint && npm run format:check && npm run build && npm test",
     "prepublishOnly": "npm run check"
   },

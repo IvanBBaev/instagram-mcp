@@ -1,0 +1,41 @@
+name: Release
+
+# Publishes the package to npm with build provenance. Provenance requires an
+# OIDC-authenticated publish from CI (id-token: write) — a plain `npm publish`
+# cannot produce it, which is why `publishConfig.provenance: true` in
+# package.json only works through this workflow.
+#
+# Trigger: cut a GitHub Release (its tag should match package.json version, e.g.
+# v0.0.1). `workflow_dispatch` allows a manual re-run. `npm publish` runs
+# `prepublishOnly` (= `npm run check`: lint + format + build + test) before it
+# packs, so the release gate re-runs in the clean CI checkout.
+#
+# Requires the repo secret `NPM_TOKEN` (an npm automation/granular token with
+# publish rights to `instagram-mcp-ai`). The MCP-registry submission is a
+# separate step (see docs/release-checklist.md) and is not done here.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance attestation (OIDC)
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      # Runs prepublishOnly (npm run check) internally, then publishes with
+      # provenance (publishConfig.provenance + the id-token permission above).
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

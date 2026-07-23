@@ -1,0 +1,1198 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<title>instagram-mcp-ai — Instagram MCP Server documentation</title>
+<meta
+  name="description"
+  content="instagram-mcp-ai is a locally-run TypeScript MCP server that exposes an Instagram professional account as 28 safe, well-annotated tools over the official Meta Graph API — no scraping, no private APIs, no credential automation."
+/>
+<link rel="canonical" href="https://ivanbbaev.github.io/instagram-mcp/" />
+
+<meta name="theme-color" content="#120a10" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbf7f9" media="(prefers-color-scheme: light)" />
+<meta name="color-scheme" content="dark light" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="instagram-mcp-ai — Instagram MCP Server" />
+<meta
+  property="og:description"
+  content="A locally-run TypeScript MCP server exposing an Instagram professional account as 28 safe tools over the official Meta Graph API. Preview-by-default writes, MIT, Node 22+."
+/>
+<meta property="og:url" content="https://ivanbbaev.github.io/instagram-mcp/" />
+<!--
+  og:image is an SVG banner (assets/og-banner.svg). Some scrapers only render
+  raster og-images; a 1200x630 assets/og-image.png can be generated from the SVG
+  later (e.g. `rsvg-convert` / `resvg og-banner.svg og-image.png`) and swapped in.
+-->
+<meta property="og:image" content="https://ivanbbaev.github.io/instagram-mcp/assets/og-banner.svg" />
+<meta property="og:image:type" content="image/svg+xml" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta
+  property="og:image:alt"
+  content="instagram-mcp-ai — Instagram MCP server. 28 tools, MIT, Node 22."
+/>
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="instagram-mcp-ai — Instagram MCP Server" />
+<meta
+  name="twitter:description"
+  content="A locally-run TypeScript MCP server exposing an Instagram professional account as 28 safe tools over the official Meta Graph API."
+/>
+<meta name="twitter:image" content="https://ivanbbaev.github.io/instagram-mcp/assets/og-banner.svg" />
+<meta name="twitter:image:alt" content="instagram-mcp-ai — 28 tools, MIT, Node 22." />
+
+<!-- GA4: add your own measurement ID here if desired -->
+
+<link
+  rel="icon"
+  href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%23feca57'/%3E%3Cstop%20offset='.5'%20stop-color='%23ff5a7e'/%3E%3Cstop%20offset='1'%20stop-color='%238a5cff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='url(%23g)'/%3E%3Ctext%20x='16'%20y='22'%20font-family='monospace'%20font-size='15'%20font-weight='700'%20text-anchor='middle'%20fill='white'%3Eig%3C/text%3E%3C/svg%3E"
+/>
+
+<link rel="stylesheet" href="assets/styles.css" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "instagram-mcp-ai",
+      "alternateName": "Instagram MCP Server",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Cross-platform (Node.js 22+)",
+      "description": "A locally-run TypeScript MCP server that exposes an Instagram professional account (Business or Creator) as 28 safe, well-annotated Model Context Protocol tools over the official Meta Graph API. Writes preview by default; no scraping, private APIs, or credential automation.",
+      "url": "https://ivanbbaev.github.io/instagram-mcp/",
+      "downloadUrl": "https://www.npmjs.com/package/instagram-mcp-ai",
+      "softwareVersion": "0.0.1",
+      "license": "https://opensource.org/licenses/MIT",
+      "author": {
+        "@type": "Person",
+        "name": "Ivan Baev"
+      },
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "keywords": "mcp, model-context-protocol, instagram, meta, graph-api, instagram-api, social-media, llm, ai"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is this an official Meta or Instagram product?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. instagram-mcp-ai is an independent, community-built project that is not affiliated with, endorsed by, or sponsored by Meta Platforms, Inc. It talks only to the official Meta Graph API endpoints; Instagram and Meta are trademarks of Meta Platforms, Inc., used nominatively to indicate compatibility."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What kind of Instagram account do I need?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "An Instagram professional account — Business or Creator. The Instagram Platform / Graph API does not expose personal accounts, so a personal profile cannot be operated by this server."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it scrape Instagram or automate my password?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Every call goes to an official Meta Graph API endpoint (graph.instagram.com or graph.facebook.com). There is no scraping, no private/undocumented API, and no credential or browser automation. Authentication uses standard OAuth access tokens."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which authentication path should I choose?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Instagram Login (Path A) is the simplest setup for publishing and engagement — it uses graph.instagram.com with granular scopes and a 60-day long-lived token. Facebook Login (Path B) uses graph.facebook.com v25.0 with an appsecret_proof, can issue a never-expiring system-user token, and is the only path that unlocks the discovery package."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can it post or delete things without my say-so?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Every write previews by default: it returns exactly what it would do and changes nothing unless you pass apply: true (and the server runs with IG_WRITE_MODE=apply). Deleting a comment is double-gated — it additionally requires IG_ALLOW_DESTRUCTIVE=true. Applied writes are appended to a local JSONL audit journal."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need to build or host anything?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. Run it locally with npx instagram-mcp-ai on Node.js 22 or newer. It speaks MCP over stdio to your client (Claude Desktop, Cursor, and other MCP-capable apps); an optional loopback HTTP transport is available for local development."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<div class="bg-glow" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="icon-btn" id="menuBtn" aria-label="Toggle navigation" aria-expanded="false">☰</button>
+  <a class="brand" href="#overview">
+    <span class="logo" aria-hidden="true">ig</span>
+    <span class="name">instagram-mcp-ai<span class="dim">@0.0.1</span></span>
+  </a>
+  <span class="spacer"></span>
+  <nav class="toplinks" aria-label="Primary">
+    <a href="#quickstart">Quickstart</a>
+    <a href="#tools">Tools</a>
+    <a href="#security">Security</a>
+    <a href="https://www.npmjs.com/package/instagram-mcp-ai" rel="noopener">npm</a>
+  </nav>
+  <span class="ver-pill">Node 22+ · MIT</span>
+  <a class="gh-btn" href="https://github.com/IvanBBaev/instagram-mcp" aria-label="GitHub repository" rel="noopener">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+</header>
+
+<div class="backdrop" id="backdrop" hidden></div>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
+    <div class="toc-search" role="search">
+      <span class="toc-search-glyph" aria-hidden="true">⌕</span>
+      <input
+        class="toc-search-input"
+        id="doc-search"
+        type="search"
+        placeholder="Search docs   /"
+        aria-label="Search the documentation"
+        autocomplete="off"
+      />
+      <span class="toc-search-count" id="doc-search-count"></span>
+    </div>
+    <p class="toc-search-empty" id="doc-search-empty">No matches on this page.</p>
+
+    <h4>Overview</h4>
+    <nav aria-label="Overview">
+      <a href="#overview">What it is</a>
+      <a href="#demo">Quick demo</a>
+      <a href="#mcp">What is MCP?</a>
+      <a href="#capabilities">Capabilities</a>
+    </nav>
+
+    <h4>Get started</h4>
+    <nav aria-label="Get started">
+      <a href="#quickstart">Quickstart</a>
+      <a href="#credentials">Credentials</a>
+      <a href="#auth">Authentication</a>
+      <a href="#cli">CLI</a>
+      <a href="#configuration">Configuration</a>
+    </nav>
+
+    <h4>Reference</h4>
+    <nav aria-label="Reference">
+      <a href="#packages">Packages &amp; profiles</a>
+      <a href="#tools">Tools (28)</a>
+      <a href="#use-cases">Use cases</a>
+    </nav>
+
+    <h4>Under the hood</h4>
+    <nav aria-label="Under the hood">
+      <a href="#security">Security &amp; write-safety</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#troubleshooting">Troubleshooting</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+  </aside>
+
+  <main class="content" id="main">
+    <!-- ============================================================ HERO -->
+    <section id="overview" class="hero">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <span class="eyebrow">Model Context Protocol · Instagram</span>
+          <h1>Give your AI assistant an <span class="accent">Instagram</span> account it can operate safely.</h1>
+          <p class="lead">
+            <strong>instagram-mcp-ai</strong> is a locally-run TypeScript MCP server that turns an
+            Instagram professional account into 28 well-annotated tools — talking only to the
+            official Meta Graph API, with writes that preview before they touch anything.
+          </p>
+          <div class="hero-cta">
+            <a class="btn primary" href="#quickstart">Get started</a>
+            <a class="btn" href="#tools">Browse the 28 tools</a>
+            <a class="btn" href="https://github.com/IvanBBaev/instagram-mcp" rel="noopener">View on GitHub</a>
+          </div>
+          <div class="badges">
+            <span class="badge ok"><span class="dot"></span>Preview-by-default writes</span>
+            <span class="badge">Node.js 22+</span>
+            <span class="badge">TypeScript · ESM</span>
+            <span class="badge">MIT</span>
+            <span class="badge">3 runtime deps</span>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="terminal-wrap">
+            <div class="terminal">
+              <div class="term-bar">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="dot" aria-hidden="true"></span>
+                <span class="dot" aria-hidden="true"></span>
+                <span class="term-label">instagram-mcp-ai</span>
+                <span class="term-live">live</span>
+              </div>
+              <div class="term-body" id="term-body" aria-hidden="true">
+                <div class="term-line cmd"><span class="p">$</span> npx instagram-mcp-ai</div>
+                <div class="term-line muted"># Instagram Login (Path A) · profile "default"</div>
+                <div class="term-line ok">✓ authenticated as @yourbrand · packages: core (25 tools)</div>
+                <div class="term-line">&nbsp;</div>
+                <div class="term-line cmd">“Post these two photos as a carousel.”</div>
+                <div class="term-line tool">→ instagram_post_image  <span style="color:var(--write)">(preview)</span></div>
+                <div class="term-line muted">  would create carousel · 2 items · caption 41 chars</div>
+                <div class="term-line tool">→ instagram_post_image  apply:true</div>
+                <div class="term-line ok">✓ published · https://www.instagram.com/p/Cx…/</div>
+                <div class="term-cursor" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat"><span class="n">28</span><span class="l">MCP tools</span></div>
+        <div class="stat"><span class="n">6</span><span class="l">packages</span></div>
+        <div class="stat"><span class="n">2</span><span class="l">auth paths</span></div>
+        <div class="stat"><span class="n">3</span><span class="l">runtime deps</span></div>
+        <div class="stat"><span class="n">v25.0</span><span class="l">Graph API</span></div>
+      </div>
+    </section>
+
+    <!-- ========================================================= QUICK DEMO -->
+    <section id="demo">
+      <h2>See it in action <a class="anchor" href="#demo" aria-label="Link to this section">#</a></h2>
+      <p class="lead">
+        You describe the outcome in plain language; the model picks the right tool and arguments.
+        Here are three real tool calls the server exposes.
+      </p>
+
+      <div class="tabs" role="tablist" aria-label="Demo scenarios">
+        <button class="tab active" role="tab" aria-selected="true" aria-controls="demo-publish" id="tab-publish">Publish a post</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="demo-comments" id="tab-comments">Read comments</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="demo-discover" id="tab-discover">Discover a business</button>
+      </div>
+
+      <div class="tab-panels">
+        <div class="tab-panel active" id="demo-publish" role="tabpanel" aria-labelledby="tab-publish">
+          <div class="tab-left">
+            <h3>Publish an image — safely</h3>
+            <p>
+              <span class="tool-pill">instagram_post_image</span> is a composite write: it builds a
+              media container and publishes it in one call. It <strong>previews by default</strong> —
+              nothing is posted until you add <code>apply: true</code>.
+            </p>
+            <p class="qs-note">
+              Single URL posts one photo; 2–10 URLs post a carousel. Only public HTTPS URLs — the
+              server never uploads or fetches your media itself.
+            </p>
+          </div>
+          <div class="tab-right">
+            <div class="code-box">
+<pre><code>// 1) Preview — changes nothing
+instagram_post_image {
+  "imageUrls": ["https://cdn.example.com/lake.jpg"],
+  "caption": "Golden hour at the lake 🌅 #travel"
+}
+// → { "preview": true, "wouldPost": "IMAGE",
+//     "caption_chars": 33, "hashtags": 1 }
+
+// 2) Apply — actually publishes
+instagram_post_image {
+  "imageUrls": ["https://cdn.example.com/lake.jpg"],
+  "caption": "Golden hour at the lake 🌅 #travel",
+  "apply": true
+}
+// → { "id": "1789…", "permalink": "https://…/p/Cx…/" }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="demo-comments" role="tabpanel" aria-labelledby="tab-comments" hidden>
+          <div class="tab-left">
+            <h3>Read the latest comments</h3>
+            <p>
+              <span class="tool-pill">instagram_list_comments</span> reads a media object's comments,
+              with threaded replies inlined. It is read-only and paginated.
+            </p>
+            <p class="qs-note">
+              All account-controlled free text (usernames, comment bodies) is returned fenced as
+              untrusted input, so a hostile comment cannot smuggle instructions to the model.
+            </p>
+          </div>
+          <div class="tab-right">
+            <div class="code-box">
+<pre><code>instagram_list_comments {
+  "mediaId": "17895695668004550",
+  "limit": 5
+}
+// → {
+//   "items": [
+//     { "id": "17865…", "username": "‹untrusted›maya‹/›",
+//       "text": "‹untrusted›Where was this shot?‹/›",
+//       "like_count": 12, "replies": [ … ] }
+//   ],
+//   "paging": { "after": "QVF…", "truncated": false }
+// }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="demo-discover" role="tabpanel" aria-labelledby="tab-discover" hidden>
+          <div class="tab-left">
+            <h3>Discover another business</h3>
+            <p>
+              <span class="tool-pill">instagram_discover_business</span> reads another public
+              business/creator profile and its recent media by handle.
+            </p>
+            <p class="qs-note">
+              Path B (Facebook Login) only, and part of the <code>discovery</code> package that ships
+              <strong>dark by default</strong>. It needs Meta's "Instagram Public Content Access",
+              which may be App-Review-gated.
+            </p>
+          </div>
+          <div class="tab-right">
+            <div class="code-box">
+<pre><code>instagram_discover_business {
+  "username": "naturehub",
+  "mediaLimit": 3
+}
+// → {
+//   "username": "‹untrusted›naturehub‹/›",
+//   "followers_count": 128400,
+//   "media_count": 512,
+//   "media": [ { "id": "1794…", "like_count": 3120,
+//               "comments_count": 88 }, … ]
+// }</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= WHAT IS MCP -->
+    <section id="mcp">
+      <h2>What is MCP? <a class="anchor" href="#mcp" aria-label="Link to this section">#</a></h2>
+      <p>
+        The <strong>Model Context Protocol</strong> is an open standard that lets AI assistants call
+        external tools through a uniform interface. An MCP <em>server</em> advertises a set of tools
+        — each with a name, a typed input schema, and safety annotations — and the assistant's client
+        decides which to call and with what arguments.
+      </p>
+      <p>
+        <strong>instagram-mcp-ai</strong> is one such server. It runs locally on your machine, holds
+        your Instagram access token, and turns Graph API operations into tools the model can invoke.
+        Because it runs where you run it, your token never leaves your environment.
+      </p>
+      <div class="cards">
+        <div class="card">
+          <div class="ico" aria-hidden="true">🧩</div>
+          <h3>Typed tools</h3>
+          <p>Every tool declares a zod input schema, so arguments are validated before any API call is spent.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🏷️</div>
+          <h3>Honest annotations</h3>
+          <p>Tools are tagged read-only, idempotent, or destructive, so clients can gate risky actions.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🔌</div>
+          <h3>Runs anywhere MCP does</h3>
+          <p>Speaks MCP over stdio to Claude Desktop, Cursor, and other MCP-capable clients.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================================================= CAPABILITIES -->
+    <section id="capabilities">
+      <h2>Capabilities <a class="anchor" href="#capabilities" aria-label="Link to this section">#</a></h2>
+      <p class="lead">One server, the full lifecycle of a professional account — read, publish, engage, measure, discover.</p>
+      <div class="cards">
+        <div class="card">
+          <div class="ico" aria-hidden="true">👤</div>
+          <h3>Account &amp; media</h3>
+          <p>Read the operated profile, list and inspect media (including carousel children), and check the linked accounts and token status.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🖼️</div>
+          <h3>Publishing</h3>
+          <p>Post images, carousels, reels, and stories via the container → publish flow, or use the composite one-call helpers.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">💬</div>
+          <h3>Comment management</h3>
+          <p>List, reply, create, hide, unhide, and (double-gated) delete comments; toggle comments on a media object.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">📊</div>
+          <h3>Insights</h3>
+          <p>Post-2025 views-based account and media insights, audience demographics, and online-follower timing.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🔎</div>
+          <h3>Discovery</h3>
+          <p>Resolve hashtags, read public hashtag media, and profile other public businesses — Path B, dark by default.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🛡️</div>
+          <h3>Safety built in</h3>
+          <p>Preview-by-default writes, a destructive double-gate, host allow-listing, and untrusted-text fencing.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= QUICKSTART -->
+    <section id="quickstart">
+      <h2>Quickstart <a class="anchor" href="#quickstart" aria-label="Link to this section">#</a></h2>
+      <p class="lead">Three steps to a working server. You will need Node.js 22+ and an Instagram professional account.</p>
+
+      <div class="qs-grid">
+        <div class="qs-steps">
+          <div class="qs-step">
+            <h3>Authenticate once</h3>
+            <p>Run the login helper to obtain and persist a long-lived token (choose <code>ig</code> or <code>fb</code>).</p>
+            <div class="qs-cmd" tabindex="0">npx instagram-mcp-ai login --path ig</div>
+          </div>
+          <div class="qs-step">
+            <h3>Verify your setup</h3>
+            <p>The doctor prints the resolved profile, packages, write mode, and token expiry.</p>
+            <div class="qs-cmd" tabindex="0">npx instagram-mcp-ai doctor</div>
+          </div>
+          <div class="qs-step">
+            <h3>Wire it into your client</h3>
+            <p>Point your MCP client at the command. The server speaks MCP over stdio by default.</p>
+            <div class="qs-cmd" tabindex="0">npx instagram-mcp-ai</div>
+          </div>
+        </div>
+
+        <div class="qs-config">
+          <div class="qs-tabs" role="tablist" aria-label="Client config">
+            <button class="qs-tab active" role="tab" aria-selected="true" aria-controls="cfg-claude" id="cfgtab-claude">Claude Desktop</button>
+            <button class="qs-tab" role="tab" aria-selected="false" aria-controls="cfg-cursor" id="cfgtab-cursor">Cursor</button>
+          </div>
+          <div class="qs-config-body">
+            <div class="qs-config-panel" id="cfg-claude" role="tabpanel" aria-labelledby="cfgtab-claude">
+              <p class="qs-config-path">~/Library/Application Support/Claude/claude_desktop_config.json</p>
+<pre><code>{
+  "mcpServers": {
+    "instagram": {
+      "command": "npx",
+      "args": ["-y", "instagram-mcp-ai"],
+      "env": {
+        "IG_ENV_FILE": "~/.config/instagram-mcp-ai/.env"
+      }
+    }
+  }
+}</code></pre>
+            </div>
+            <div class="qs-config-panel" id="cfg-cursor" role="tabpanel" aria-labelledby="cfgtab-cursor" hidden>
+              <p class="qs-config-path">.cursor/mcp.json</p>
+<pre><code>{
+  "mcpServers": {
+    "instagram": {
+      "command": "npx",
+      "args": ["-y", "instagram-mcp-ai"],
+      "env": {
+        "IG_ENV_FILE": "~/.config/instagram-mcp-ai/.env"
+      }
+    }
+  }
+}</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="c-ico" aria-hidden="true">💡</span>
+        <p>
+          <strong>Writes preview by default.</strong> Even after setup, the server changes nothing on
+          Instagram until you pass <code>apply: true</code> and run with <code>IG_WRITE_MODE=apply</code>.
+          Start in preview mode and promote to apply when you trust the calls.
+        </p>
+      </div>
+    </section>
+
+    <!-- ======================================================== CREDENTIALS -->
+    <section id="credentials">
+      <h2>Credentials <a class="anchor" href="#credentials" aria-label="Link to this section">#</a></h2>
+      <p>
+        The server authenticates with a standard Meta Graph API <strong>access token</strong>. There
+        is no scraping and no password automation — a live login requires a
+        <strong>registered Meta app</strong> (app id + secret and a whitelisted OAuth redirect URI).
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>You need</th><th>Why</th><th>Where it goes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Instagram professional account</td><td>Business or Creator — personal accounts aren't exposed by the Graph API</td><td><code>IG_ACCOUNT_ID</code> (optional; auto-resolved when possible)</td></tr>
+            <tr><td>A Meta app (id + secret)</td><td>Required to run OAuth and, on Path B, to sign requests</td><td><code>IG_APP_ID</code>, <code>IG_APP_SECRET</code></td></tr>
+            <tr><td>An access token</td><td>Authorizes every Graph API call</td><td><code>IG_ACCESS_TOKEN</code> (Path A) or <code>IG_FB_ACCESS_TOKEN</code> (Path B)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The <code>login</code> subcommand writes the token to your XDG / <code>APPDATA</code> env
+        file (<code>chmod 0600</code> on POSIX) and <strong>never prints it</strong>. Secrets are
+        also registered with a redactor so they are masked in all log output.
+      </p>
+    </section>
+
+    <!-- ======================================================= AUTHENTICATION -->
+    <section id="auth">
+      <h2>Authentication — two paths <a class="anchor" href="#auth" aria-label="Link to this section">#</a></h2>
+      <p class="lead">
+        The server supports two official OAuth paths. It auto-detects which you configured; you can
+        also pin it with <code>IG_AUTH_MODE</code>.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>&nbsp;</th><th>Path A — Instagram Login</th><th>Path B — Facebook Login</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Mode</strong></td><td><code>ig-login</code></td><td><code>fb-login</code></td></tr>
+            <tr><td><strong>Endpoint</strong></td><td><code>graph.instagram.com</code></td><td><code>graph.facebook.com</code> (pinned <code>v25.0</code>)</td></tr>
+            <tr><td><strong>Request signing</strong></td><td>None</td><td><code>appsecret_proof</code> (HMAC-SHA256 of the token)</td></tr>
+            <tr><td><strong>Token lifetime</strong></td><td>60-day long-lived, refreshable</td><td>Can be a never-expiring system-user token</td></tr>
+            <tr><td><strong>Discovery package</strong></td><td>Not available</td><td>Available (subject to Meta feature access)</td></tr>
+            <tr><td><strong>Best for</strong></td><td>The simplest publishing &amp; engagement setup</td><td>Discovery, or a token that never expires</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <span class="c-ico" aria-hidden="true">🧭</span>
+        <p>
+          <strong>Not sure?</strong> Start with <strong>Instagram Login (Path A)</strong>. Switch to
+          Facebook Login (Path B) only when you need the <code>discovery</code> package or a
+          never-expiring token. The tool surface is otherwise the same — discovery tools are simply
+          absent on Path A.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================== CLI -->
+    <section id="cli">
+      <h2>Command-line interface <a class="anchor" href="#cli" aria-label="Link to this section">#</a></h2>
+      <p>
+        The <code>instagram-mcp-ai</code> binary is both the MCP server and a small operator CLI.
+        Run it with no subcommand to start the configured transport; the three subcommands below
+        never start a transport — they act and exit.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Command</th><th>What it does</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>login --path &lt;ig|fb&gt;</code></td>
+              <td>Interactive browser OAuth to obtain and persist a long-lived token. Options: <code>--profile</code>, <code>--app-id</code>, <code>--app-secret</code>, <code>--redirect-uri</code>, <code>--account-id</code>, <code>--scopes</code>. Requires a registered Meta app.</td>
+            </tr>
+            <tr>
+              <td><code>doctor</code></td>
+              <td>Health-check the active profile: prints auth path, transport, write mode, destructive gate, active packages, and a token-expiry verdict (<code>valid</code> / <code>never</code> / <code>expiring_soon</code> / <code>expired</code> / <code>unknown</code>). Exit code reflects health.</td>
+            </tr>
+            <tr>
+              <td><code>refresh</code></td>
+              <td>Refresh the active profile's long-lived token, rewrite the credentials file, and print the new expiry (token itself never printed).</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="codeblock" data-lang="bash">
+<pre><code>npx instagram-mcp-ai login --path ig --profile default
+npx instagram-mcp-ai doctor
+npx instagram-mcp-ai refresh</code></pre>
+      </div>
+    </section>
+
+    <!-- ======================================================= CONFIGURATION -->
+    <section id="configuration">
+      <h2>Configuration <a class="anchor" href="#configuration" aria-label="Link to this section">#</a></h2>
+      <p>
+        Everything is configured through <code>IG_*</code> environment variables (loaded from the
+        process env and, optionally, an env file via <code>IG_ENV_FILE</code>). A
+        <span class="req">*</span> marks a value you'll usually need to set.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>IG_AUTH_MODE</code></td><td><em>auto</em></td><td>Pin the auth path: <code>ig-login</code> or <code>fb-login</code>. Auto-detected from which token is present.</td></tr>
+            <tr><td><code>IG_ACCESS_TOKEN</code> <span class="req">*</span></td><td>—</td><td>Path A (Instagram Login) access token.</td></tr>
+            <tr><td><code>IG_FB_ACCESS_TOKEN</code></td><td>—</td><td>Path B (Facebook Login) access token.</td></tr>
+            <tr><td><code>IG_ACCOUNT_ID</code></td><td><em>resolved</em></td><td>The Instagram professional-account id to operate.</td></tr>
+            <tr><td><code>IG_APP_ID</code> / <code>IG_APP_SECRET</code></td><td>—</td><td>Meta app credentials — required for <code>login</code> and for Path B request signing.</td></tr>
+            <tr><td><code>IG_ENV_FILE</code></td><td>—</td><td>Path to an env file to load before resolving settings.</td></tr>
+            <tr><td><code>IG_ACTIVE_PROFILE</code></td><td><code>default</code></td><td>Which named profile is active.</td></tr>
+            <tr><td><code>IG_PROFILE_&lt;NAME&gt;_*</code></td><td>—</td><td>Per-profile overrides (token, account id, app id/secret) for multi-account setups.</td></tr>
+            <tr><td><code>IG_TOOL_PACKAGES</code></td><td><code>core</code></td><td>A profile (<code>core</code>/<code>reader</code>/<code>publisher</code>/<code>all</code>) or a comma/space list of package names.</td></tr>
+            <tr><td><code>IG_PACKAGES_DENY</code></td><td>—</td><td>Packages to remove from the selection.</td></tr>
+            <tr><td><code>IG_PACKAGES_READONLY</code></td><td>—</td><td>Packages forced to expose only their read tools.</td></tr>
+            <tr><td><code>IG_WRITE_MODE</code></td><td><code>preview</code></td><td><code>preview</code> refuses to apply writes; <code>apply</code> allows them (still needs <code>apply: true</code> per call).</td></tr>
+            <tr><td><code>IG_ALLOW_DESTRUCTIVE</code></td><td><code>false</code></td><td>Second gate required to delete a comment.</td></tr>
+            <tr><td><code>IG_TRANSPORT</code></td><td><code>stdio</code></td><td>Transport: <code>stdio</code> or <code>http</code>.</td></tr>
+            <tr><td><code>IG_HTTP_HOST</code> / <code>IG_PORT</code></td><td><code>127.0.0.1</code> / <code>3000</code></td><td>Bind address for the optional loopback HTTP transport.</td></tr>
+            <tr><td><code>IG_HTTP_TOKEN</code></td><td>—</td><td>Bearer token required by the HTTP transport.</td></tr>
+            <tr><td><code>IG_MAX_CONCURRENT</code></td><td><code>4</code></td><td>Max concurrent Graph API requests.</td></tr>
+            <tr><td><code>IG_MAX_ITEMS</code></td><td><code>200</code></td><td>Server-side cap on items returned from paginated reads.</td></tr>
+            <tr><td><code>IG_REFRESH_AFTER_DAYS</code></td><td><code>45</code></td><td>When the doctor starts warning that a token is expiring soon.</td></tr>
+            <tr><td><code>IG_TIMEOUT_MS</code></td><td><code>30000</code></td><td>Per-request timeout in milliseconds.</td></tr>
+            <tr><td><code>IG_LOG_LEVEL</code></td><td><code>info</code></td><td>Log verbosity (<code>debug</code> … <code>error</code>). Secrets are always redacted.</td></tr>
+            <tr><td><code>IG_PRETTY_JSON</code></td><td><code>false</code></td><td>Pretty-print JSON in tool results.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Write mode &amp; the destructive gate</h3>
+      <p>
+        Two independent switches guard mutations. <code>IG_WRITE_MODE</code> is the server-wide gate
+        (default <code>preview</code>); each write tool additionally needs <code>apply: true</code>.
+        Deleting a comment is <strong>double-gated</strong> — it requires <code>apply: true</code>
+        <em>and</em> <code>IG_ALLOW_DESTRUCTIVE=true</code>.
+      </p>
+      <div class="codeblock" data-lang="dotenv">
+<pre><code># A read-mostly reviewer that can publish but never delete
+IG_TOOL_PACKAGES=publisher
+IG_WRITE_MODE=apply
+IG_ALLOW_DESTRUCTIVE=false</code></pre>
+      </div>
+    </section>
+
+    <!-- =========================================================== PACKAGES -->
+    <section id="packages">
+      <h2>Packages &amp; profiles <a class="anchor" href="#packages" aria-label="Link to this section">#</a></h2>
+      <p>
+        The 28 tools are grouped into six <strong>packages</strong>. You choose which to expose with
+        <code>IG_TOOL_PACKAGES</code> — either a named <strong>profile</strong> or an explicit list.
+        The default is <code>core</code>, which deliberately leaves <code>discovery</code> dark.
+      </p>
+      <ul>
+        <li><strong>Profiles</strong> — <code>core</code> (default): account, media, publishing, comments, insights (25 tools). <code>reader</code>: account, media, insights, comments, discovery. <code>publisher</code>: account, media, publishing, comments. <code>all</code>: every package (28 tools).</li>
+        <li><strong>Packages</strong> — <code>account</code>, <code>media</code>, <code>publishing</code>, <code>comments</code>, <code>insights</code>, <code>discovery</code>.</li>
+      </ul>
+      <div class="codeblock" data-lang="dotenv">
+<pre><code># Named profile …
+IG_TOOL_PACKAGES=reader
+
+# … or an explicit package list
+IG_TOOL_PACKAGES=account,media,insights</code></pre>
+      </div>
+      <div class="callout">
+        <span class="c-ico" aria-hidden="true">🌑</span>
+        <p>
+          The <code>discovery</code> package is <strong>not</strong> in <code>core</code>. It reads the
+          public content graph, is Path B only, and needs Meta's "Instagram Public Content Access" —
+          so it ships dark and you opt in explicitly (e.g. the <code>reader</code> or <code>all</code> profile).
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================== TOOLS -->
+    <section id="tools">
+      <h2>Tools <a class="anchor" href="#tools" aria-label="Link to this section">#</a></h2>
+      <p>
+        All 28 tools, grouped by package. <span class="pill ro">read</span> tools never mutate;
+        <span class="pill wr">write</span> tools preview by default and act only with <code>apply: true</code>.
+        <span class="pill pb">Path&nbsp;B</span> marks tools available only on Facebook Login.
+      </p>
+
+      <div class="tools-search" role="search">
+        <span class="ts-glyph" aria-hidden="true">⌘</span>
+        <input id="tools-filter" type="search" placeholder="Filter tools by name or description…" aria-label="Filter tools" autocomplete="off" />
+        <span class="ts-count" id="tools-count"></span>
+      </div>
+      <div class="tools-controls">
+        <button class="ghost-btn" id="expand-all-tools">Expand all</button>
+        <button class="ghost-btn" id="collapse-all-tools">Collapse all</button>
+      </div>
+      <p class="tools-empty" id="tools-empty">No tools match your filter.</p>
+
+      <div id="tools-root">
+        <!-- account -->
+        <h3 class="pkg-head" id="pkg-account">account <span class="pkg-meta">— profile, linked accounts &amp; token status <em>(3 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_get_account</code> <span class="pill ro">read</span><span class="tool-sum">Read the operated professional account's profile (username, name, biography, website, counts). Free-text fields are returned fenced.</span></summary>
+          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_list_linked_accounts</code> <span class="pill ro">read</span><span class="pill pb">Path B</span><span class="tool-sum">List the Facebook Pages and Instagram accounts linked to the token. Facebook Login only.</span></summary>
+          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_token_status</code> <span class="pill ro">read</span><span class="tool-sum">Report the access token's type and expiry. Path B resolves expiry via debug_token; on Path A expiry may be reported as unknown.</span></summary>
+          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+        </details>
+
+        <!-- media -->
+        <h3 class="pkg-head" id="pkg-media">media <span class="pkg-meta">— list &amp; inspect media, toggle comments <em>(3 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_list_media</code> <span class="pill ro">read</span><span class="tool-sum">List the account's media objects, newest first, with paging.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor from a previous page.</td></tr>
+            <tr><td><code>fetchAll</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Follow paging up to the server item cap.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_media</code> <span class="pill ro">read</span><span class="tool-sum">Fetch one media object; carousel albums include their children.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>mediaId</code></td><td>string</td><td><span class="req">required</span></td><td>The media object id.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_set_comments_enabled</code> <span class="pill wr">write</span><span class="tool-sum">Enable or disable comments on a media object. Idempotent.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>mediaId</code></td><td>string</td><td><span class="req">required</span></td><td>The media object to update.</td></tr>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><span class="req">required</span></td><td><code>true</code> enables comments; <code>false</code> disables them.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+
+        <!-- publishing -->
+        <h3 class="pkg-head" id="pkg-publishing">publishing <span class="pkg-meta">— containers, publish &amp; composite posters <em>(7 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_create_media_container</code> <span class="pill wr">write</span><span class="tool-sum">Create a media container (step 1 of publish). Supports images, reels, stories, carousels, and carousel items.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>mediaType</code></td><td>enum</td><td><span class="opt">optional</span></td><td>One of: <code>REELS</code> · <code>STORIES</code> · <code>CAROUSEL</code>. Omit for a single image.</td></tr>
+            <tr><td><code>imageUrl</code></td><td>string</td><td><span class="opt">optional</span></td><td>Public HTTPS image URL.</td></tr>
+            <tr><td><code>videoUrl</code></td><td>string</td><td><span class="opt">optional</span></td><td>Public HTTPS video URL (reels/stories).</td></tr>
+            <tr><td><code>caption</code></td><td>string</td><td><span class="opt">optional</span></td><td>≤2200 chars, ≤30 hashtags, ≤20 mentions.</td></tr>
+            <tr><td><code>children</code></td><td>string[]</td><td><span class="opt">optional</span></td><td>2–10 carousel-item container ids.</td></tr>
+            <tr><td><code>locationId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Page/location id to tag.</td></tr>
+            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag in the media.</td></tr>
+            <tr><td><code>coverUrl</code> / <code>thumbOffset</code></td><td>string / number</td><td><span class="opt">optional</span></td><td>Reel cover image or thumbnail frame offset.</td></tr>
+            <tr><td><code>shareToFeed</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Also share a reel to the main feed.</td></tr>
+            <tr><td><code>isCarouselItem</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Mark this container as a carousel child.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_container_status</code> <span class="pill ro">read</span><span class="tool-sum">Poll a container's processing status before publishing.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>containerId</code></td><td>string</td><td><span class="req">required</span></td><td>The container (creation) id to inspect.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_publish_media</code> <span class="pill wr">write</span><span class="tool-sum">Publish a ready container (step 2). Never auto-retried, to avoid accidental duplicate posts.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>creationId</code></td><td>string</td><td><span class="req">required</span></td><td>The container id to publish.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_publishing_limit</code> <span class="pill ro">read</span><span class="tool-sum">Report how much of the account's rolling publishing quota is used.</span></summary>
+          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_post_image</code> <span class="pill wr">write</span><span class="tool-sum">Composite: build the container(s) and publish a photo or carousel in one call.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>imageUrls</code></td><td>string[]</td><td><span class="req">required</span></td><td>1 URL = single photo; 2–10 = carousel. Public HTTPS only.</td></tr>
+            <tr><td><code>caption</code></td><td>string</td><td><span class="opt">optional</span></td><td>≤2200 chars, ≤30 hashtags, ≤20 mentions.</td></tr>
+            <tr><td><code>locationId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Location/page id to tag.</td></tr>
+            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag.</td></tr>
+            <tr><td><code>resumeContainerId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Resume a previously-created container instead of rebuilding.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_post_reel</code> <span class="pill wr">write</span><span class="tool-sum">Composite: build and publish a reel from a public video URL in one call.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>videoUrl</code></td><td>string</td><td><span class="req">required</span></td><td>Public HTTPS video URL.</td></tr>
+            <tr><td><code>caption</code></td><td>string</td><td><span class="opt">optional</span></td><td>≤2200 chars, ≤30 hashtags, ≤20 mentions.</td></tr>
+            <tr><td><code>coverUrl</code> / <code>thumbOffset</code></td><td>string / number</td><td><span class="opt">optional</span></td><td>Cover image URL or thumbnail frame offset.</td></tr>
+            <tr><td><code>shareToFeed</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Also share the reel to the feed.</td></tr>
+            <tr><td><code>locationId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Location/page id to tag.</td></tr>
+            <tr><td><code>resumeContainerId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Resume a previously-created container.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_post_story</code> <span class="pill wr">write</span><span class="tool-sum">Composite: publish a story from one image XOR one video. Stories expire after 24 hours.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>imageUrl</code></td><td>string</td><td><span class="opt">optional</span></td><td>Public HTTPS image URL (mutually exclusive with <code>videoUrl</code>).</td></tr>
+            <tr><td><code>videoUrl</code></td><td>string</td><td><span class="opt">optional</span></td><td>Public HTTPS video URL (mutually exclusive with <code>imageUrl</code>).</td></tr>
+            <tr><td><code>resumeContainerId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Resume a previously-created container.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+
+        <!-- comments -->
+        <h3 class="pkg-head" id="pkg-comments">comments <span class="pkg-meta">— read &amp; moderate comments <em>(8 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_list_comments</code> <span class="pill ro">read</span><span class="tool-sum">List a media object's comments, with threaded replies inlined. Text is returned fenced.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>mediaId</code></td><td>string</td><td><span class="req">required</span></td><td>The media object to read comments for.</td></tr>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor.</td></tr>
+            <tr><td><code>fetchAll</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Follow paging up to the server item cap.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_comment</code> <span class="pill ro">read</span><span class="tool-sum">Fetch a single comment by id.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>commentId</code></td><td>string</td><td><span class="req">required</span></td><td>The comment id.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_list_tagged_media</code> <span class="pill ro">read</span><span class="tool-sum">List media the account is tagged in. Note: tags are not @mentions.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor.</td></tr>
+            <tr><td><code>fetchAll</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Follow paging up to the server item cap.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_reply_to_comment</code> <span class="pill wr">write</span><span class="tool-sum">Reply to a comment.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>commentId</code></td><td>string</td><td><span class="req">required</span></td><td>The comment to reply to.</td></tr>
+            <tr><td><code>message</code></td><td>string</td><td><span class="req">required</span></td><td>The reply text.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_create_comment</code> <span class="pill wr">write</span><span class="tool-sum">Post a top-level comment on a media object.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>mediaId</code></td><td>string</td><td><span class="req">required</span></td><td>The media object to comment on.</td></tr>
+            <tr><td><code>message</code></td><td>string</td><td><span class="req">required</span></td><td>The comment text.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_hide_comment</code> <span class="pill wr">write</span><span class="tool-sum">Hide a comment. Idempotent.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>commentId</code></td><td>string</td><td><span class="req">required</span></td><td>The comment to hide.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_unhide_comment</code> <span class="pill wr">write</span><span class="tool-sum">Unhide a previously hidden comment. Idempotent.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>commentId</code></td><td>string</td><td><span class="req">required</span></td><td>The comment to unhide.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_delete_comment</code> <span class="pill wr">write</span><span class="pill dz">destructive</span><span class="tool-sum">Permanently delete a comment. Irreversible, and double-gated: needs apply:true AND IG_ALLOW_DESTRUCTIVE=true.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>commentId</code></td><td>string</td><td><span class="req">required</span></td><td>The comment to delete. This cannot be undone.</td></tr>
+            <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; also requires <code>IG_ALLOW_DESTRUCTIVE=true</code>.</td></tr>
+          </tbody></table></div>
+        </details>
+
+        <!-- insights -->
+        <h3 class="pkg-head" id="pkg-insights">insights <span class="pkg-meta">— post-2025 views-based analytics <em>(4 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_get_account_insights</code> <span class="pill ro">read</span><span class="tool-sum">Account-level insights using the post-2025 metric set. Ranges are bounded by Meta's 90-day retention.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>metrics</code></td><td>enum[]</td><td><span class="opt">optional</span></td><td>Post-2025 metrics; defaults to all. Legacy names (impressions, profile_views, video_views) are rejected.</td></tr>
+            <tr><td><code>period</code></td><td>enum</td><td><span class="opt">optional</span></td><td>Aggregation period; defaults to <code>day</code>.</td></tr>
+            <tr><td><code>metric_type</code></td><td>enum</td><td><span class="opt">optional</span></td><td><code>total_value</code> (default) or <code>time_series</code>.</td></tr>
+            <tr><td><code>since</code> / <code>until</code></td><td>number</td><td><span class="opt">optional</span></td><td>Unix seconds. Fully-expired ranges are rejected; partial ranges are clamped and flagged.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_media_insights</code> <span class="pill ro">read</span><span class="tool-sum">Insights for one media object. The valid metric set depends on the media product type.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>media_id</code></td><td>string</td><td><span class="req">required</span></td><td>The media object to measure.</td></tr>
+            <tr><td><code>metrics</code></td><td>enum[]</td><td><span class="opt">optional</span></td><td>Defaults to views, reach, likes, comments, saved, shares, total_interactions. <code>navigation</code>/<code>replies</code> are story-only.</td></tr>
+            <tr><td><code>media_product_type</code></td><td>string</td><td><span class="opt">optional</span></td><td>Hint (FEED / REELS / STORY) to reject invalid metric combinations client-side.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_audience_demographics</code> <span class="pill ro">read</span><span class="tool-sum">Follower / engaged-audience demographics. Requires a breakdown, a timeframe, and ≥100 followers.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>metrics</code></td><td>enum[]</td><td><span class="opt">optional</span></td><td>Defaults to <code>follower_demographics</code>; <code>engaged_audience_demographics</code> also available.</td></tr>
+            <tr><td><code>breakdown</code></td><td>enum</td><td><span class="req">required</span></td><td>The single dimension to break down by.</td></tr>
+            <tr><td><code>timeframe</code></td><td>enum</td><td><span class="req">required</span></td><td>The window demographics are computed over. Needs an account with ≥100 followers.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_online_followers</code> <span class="pill ro">read</span><span class="tool-sum">Hourly distribution of when followers are online (last 30 days). On Meta's deprecation watch-list.</span></summary>
+          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+        </details>
+
+        <!-- discovery -->
+        <h3 class="pkg-head" id="pkg-discovery">discovery <span class="pkg-meta">— public content graph · dark by default <em>(3 tools)</em></span></h3>
+        <details class="tool">
+          <summary><code>instagram_search_hashtag</code> <span class="pill ro">read</span><span class="pill pb">Path B</span><span class="tool-sum">Resolve a hashtag name to its hashtag id(s). Budget: 30 unique hashtags per account per rolling 7 days.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>hashtag</code></td><td>string</td><td><span class="req">required</span></td><td>1–150 chars, with or without a leading <code>#</code>. Counts against the 30/7-day budget.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_get_hashtag_media</code> <span class="pill ro">read</span><span class="pill pb">Path B</span><span class="tool-sum">List public media under a hashtag id, top or recent. Captions are fenced; owners are not disclosed.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>hashtagId</code></td><td>string</td><td><span class="req">required</span></td><td>From <code>instagram_search_hashtag</code>.</td></tr>
+            <tr><td><code>edge</code></td><td>enum</td><td><span class="req">required</span></td><td>One of: <code>top</code> · <code>recent</code>.</td></tr>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+          </tbody></table></div>
+        </details>
+        <details class="tool">
+          <summary><code>instagram_discover_business</code> <span class="pill ro">read</span><span class="pill pb">Path B</span><span class="tool-sum">Fetch another public business/creator profile and recent media by handle. Free text is fenced.</span></summary>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>username</code></td><td>string</td><td><span class="req">required</span></td><td>1–30 chars, without a leading <code>@</code>. Private/personal/unknown handles error.</td></tr>
+            <tr><td><code>mediaLimit</code></td><td>number</td><td><span class="opt">optional</span></td><td>0–100 recent media; defaults to min(25, server cap).</td></tr>
+          </tbody></table></div>
+        </details>
+      </div>
+    </section>
+
+    <!-- =========================================================== USE CASES -->
+    <section id="use-cases">
+      <h2>Use cases <a class="anchor" href="#use-cases" aria-label="Link to this section">#</a></h2>
+      <p class="lead">A few workflows the tool set makes natural.</p>
+
+      <div class="usecase">
+        <h3>📅 Draft, review, then publish</h3>
+        <div class="who">Solo creator / small brand</div>
+        <p>Compose a carousel and read back exactly what would post before anything goes live, then apply.</p>
+        <div class="prompt"><span class="tag">Prompt</span> “Draft a 3-photo carousel from these URLs with a short caption, show me the preview, and post it only if it looks right.”</div>
+        <div class="under-hood"><span class="tag">Tools</span> <code>instagram_post_image</code> <span class="arrow">→</span> <code>instagram_get_publishing_limit</code></div>
+      </div>
+
+      <div class="usecase">
+        <h3>💬 Triage the morning's comments</h3>
+        <div class="who">Community manager</div>
+        <p>Pull the latest comments across recent posts, reply to questions, and hide spam — with deletes kept behind the destructive gate.</p>
+        <div class="prompt"><span class="tag">Prompt</span> “Summarize new comments on my last post, reply to genuine questions, and hide anything that's obvious spam.”</div>
+        <div class="under-hood"><span class="tag">Tools</span> <code>instagram_list_comments</code> <span class="arrow">→</span> <code>instagram_reply_to_comment</code> <span class="arrow">→</span> <code>instagram_hide_comment</code></div>
+      </div>
+
+      <div class="usecase">
+        <h3>📈 Weekly performance readout</h3>
+        <div class="who">Marketer</div>
+        <p>Roll up account and per-post insights into a plain-language summary using the post-2025 views-based metrics.</p>
+        <div class="prompt"><span class="tag">Prompt</span> “How did last week go? Give me reach and views for the account and my three most recent posts.”</div>
+        <div class="under-hood"><span class="tag">Tools</span> <code>instagram_get_account_insights</code> <span class="arrow">→</span> <code>instagram_list_media</code> <span class="arrow">→</span> <code>instagram_get_media_insights</code></div>
+      </div>
+
+      <div class="usecase">
+        <h3>🔎 Scout a competitor</h3>
+        <div class="who">Growth / research (Path B)</div>
+        <p>Profile another public business and skim their recent posts' engagement — subject to Meta's public-content access.</p>
+        <div class="prompt"><span class="tag">Prompt</span> “Look up @naturehub and tell me their follower count and how their last few posts performed.”</div>
+        <div class="under-hood"><span class="tag">Tools</span> <code>instagram_discover_business</code> <span class="arrow">→</span> <code>instagram_search_hashtag</code> <span class="arrow">→</span> <code>instagram_get_hashtag_media</code></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ SECURITY -->
+    <section id="security">
+      <h2>Security &amp; write-safety <a class="anchor" href="#security" aria-label="Link to this section">#</a></h2>
+      <p>
+        The server is built to be handed to an autonomous model without becoming a liability. Safety
+        is layered — no single switch is the only thing standing between the model and an
+        irreversible action.
+      </p>
+      <div class="cards">
+        <div class="card">
+          <div class="ico" aria-hidden="true">👁️</div>
+          <h3>Preview by default</h3>
+          <p>Every write returns what it would do and changes nothing until <code>apply: true</code> and <code>IG_WRITE_MODE=apply</code>.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🚧</div>
+          <h3>Destructive double-gate</h3>
+          <p>Deleting a comment is irreversible, so it also requires <code>IG_ALLOW_DESTRUCTIVE=true</code> — off by default.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">📝</div>
+          <h3>Audit journal</h3>
+          <p>Applied writes are appended to a local JSONL journal at <code>~/.local/state/instagram-mcp-ai/writes.jsonl</code>.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🧷</div>
+          <h3>Untrusted-text fencing</h3>
+          <p>Captions, usernames, and bios are fenced before returning, so hostile text can't smuggle instructions to the model.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🌐</div>
+          <h3>Official endpoints only</h3>
+          <p>Requests go only to <code>graph.instagram.com</code> and <code>graph.facebook.com</code> — no scraping, no private APIs.</p>
+        </div>
+        <div class="card">
+          <div class="ico" aria-hidden="true">🔒</div>
+          <h3>No media fetching (SSRF-safe)</h3>
+          <p>Publishing accepts only public HTTPS URLs; the server never fetches or proxies your media itself.</p>
+        </div>
+      </div>
+      <div class="callout security">
+        <span class="c-ico" aria-hidden="true">⚠️</span>
+        <p>
+          <strong>Treat your token like a password.</strong> It authorizes real actions on a real
+          account. The <code>login</code> flow stores it with restrictive permissions and the logger
+          redacts it, but anyone with the token — or your env file — can act as the account.
+        </p>
+      </div>
+    </section>
+
+    <!-- ========================================================= ARCHITECTURE -->
+    <section id="architecture">
+      <h2>Architecture <a class="anchor" href="#architecture" aria-label="Link to this section">#</a></h2>
+      <p>
+        The codebase is a strict four-layer stack. Dependencies point one way — a
+        <code>tools</code> spec may import <code>api</code> and <code>mcp</code>, but never reaches
+        into <code>core</code> transport directly. The direction is enforced by an ESLint
+        <code>no-restricted-imports</code> rule, so the boundary can't quietly rot.
+      </p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 720 260" role="img" aria-label="Four-layer architecture: tools depends on mcp and api; api depends on core.">
+          <rect class="box accent" x="30" y="24" width="660" height="46" rx="8" />
+          <text class="lbl" x="52" y="46">tools</text>
+          <text class="sub" x="52" y="62">28 tool specs, grouped into 6 packages (tools-as-data)</text>
+          <text class="tag" x="640" y="52" text-anchor="end">Layer 3</text>
+
+          <rect class="box" x="30" y="86" width="320" height="46" rx="8" />
+          <text class="lbl" x="52" y="108">mcp</text>
+          <text class="sub" x="52" y="124">registry · define · result shaping · fencing</text>
+          <text class="tag" x="330" y="114" text-anchor="end">Layer 2</text>
+
+          <rect class="box" x="370" y="86" width="320" height="46" rx="8" />
+          <text class="lbl" x="392" y="108">api</text>
+          <text class="sub" x="392" y="124">Graph API domain calls (account, media, …)</text>
+          <text class="tag" x="670" y="114" text-anchor="end">Layer 1</text>
+
+          <rect class="box" x="30" y="148" width="660" height="46" rx="8" />
+          <text class="lbl" x="52" y="170">core</text>
+          <text class="sub" x="52" y="186">http · auth · settings · profiles · logging · redaction</text>
+          <text class="tag" x="640" y="176" text-anchor="end">Layer 0</text>
+
+          <line class="edge" x1="120" y1="70" x2="120" y2="86" />
+          <polygon class="ah" points="120,86 116,78 124,78" />
+          <line class="edge" x1="360" y1="70" x2="520" y2="86" />
+          <polygon class="ah" points="520,86 511,84 515,77" />
+          <line class="edge" x1="530" y1="132" x2="530" y2="148" />
+          <polygon class="ah" points="530,148 526,140 534,140" />
+          <line class="edge" x1="190" y1="132" x2="190" y2="148" />
+          <polygon class="ah" points="190,148 186,140 194,140" />
+        </svg>
+        <figcaption>Four layers, one-way dependencies — enforced by ESLint, not just convention.</figcaption>
+      </figure>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 720 170" role="img" aria-label="Request lifecycle: MCP client to tool to api to Graph API and back.">
+          <rect class="box" x="16" y="60" width="120" height="46" rx="8" />
+          <text class="lbl" x="76" y="82" text-anchor="middle">client</text>
+          <text class="sub" x="76" y="98" text-anchor="middle">AI assistant</text>
+
+          <rect class="box accent" x="176" y="60" width="120" height="46" rx="8" />
+          <text class="lbl" x="236" y="82" text-anchor="middle">tool</text>
+          <text class="sub" x="236" y="98" text-anchor="middle">validate · gate</text>
+
+          <rect class="box" x="336" y="60" width="120" height="46" rx="8" />
+          <text class="lbl" x="396" y="82" text-anchor="middle">api + core</text>
+          <text class="sub" x="396" y="98" text-anchor="middle">sign · request</text>
+
+          <rect class="box" x="512" y="60" width="180" height="46" rx="8" />
+          <text class="lbl" x="602" y="82" text-anchor="middle">Meta Graph API</text>
+          <text class="sub" x="602" y="98" text-anchor="middle">graph.*.com</text>
+
+          <line class="edge" x1="136" y1="83" x2="176" y2="83" />
+          <polygon class="ah" points="176,83 168,79 168,87" />
+          <line class="edge" x1="296" y1="83" x2="336" y2="83" />
+          <polygon class="ah" points="336,83 328,79 328,87" />
+          <line class="edge" x1="456" y1="83" x2="512" y2="83" />
+          <polygon class="ah" points="512,83 504,79 504,87" />
+
+          <path class="edge" d="M602,106 C602,140 236,140 236,110" />
+          <polygon class="ah" points="236,110 232,120 240,120" />
+          <text class="edge-lbl" x="419" y="136" text-anchor="middle">fenced, shaped result</text>
+        </svg>
+        <figcaption>A call is validated and gated before it ever reaches the network; the response is shaped and fenced on the way back.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ========================================================= TROUBLESHOOTING -->
+    <section id="troubleshooting">
+      <h2>Troubleshooting <a class="anchor" href="#troubleshooting" aria-label="Link to this section">#</a></h2>
+      <p>Run <code>npx instagram-mcp-ai doctor</code> first — it diagnoses most of the below in one shot.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>"No account profile is configured"</td><td>No token has been persisted yet</td><td>Run <code>login --path &lt;ig|fb&gt;</code> to create the default profile.</td></tr>
+            <tr><td>A write "previews" but never posts</td><td>Server is in preview mode, or <code>apply</code> was omitted</td><td>Set <code>IG_WRITE_MODE=apply</code> and pass <code>apply: true</code>.</td></tr>
+            <tr><td>Delete is refused even with <code>apply: true</code></td><td>The destructive gate is closed</td><td>Set <code>IG_ALLOW_DESTRUCTIVE=true</code> (only when you mean it).</td></tr>
+            <tr><td>Discovery tools aren't listed</td><td>On Path A, or <code>discovery</code> not selected</td><td>Use Facebook Login and include <code>discovery</code> (e.g. <code>IG_TOOL_PACKAGES=reader</code>).</td></tr>
+            <tr><td>Discovery calls error with a permissions message</td><td>Missing "Instagram Public Content Access"</td><td>Request the feature for your Meta app; it may be App-Review-gated.</td></tr>
+            <tr><td>Publishing fails on your media URL</td><td>URL isn't public HTTPS, or is still processing</td><td>Host the media at a public HTTPS URL; poll <code>get_container_status</code> before publishing.</td></tr>
+            <tr><td>Demographics return an error</td><td>Account has fewer than 100 followers</td><td>Demographics require ≥100 followers, plus a breakdown and timeframe.</td></tr>
+            <tr><td>Token "expiring_soon" / "expired" in doctor</td><td>Long-lived token nearing its window</td><td>Run <code>refresh</code> before it lapses (Path A) or issue a fresh token.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <span class="c-ico" aria-hidden="true">🔎</span>
+        <p>Still stuck? Set <code>IG_LOG_LEVEL=debug</code> for verbose (redacted) logs, then open an issue with the output on <a href="https://github.com/IvanBBaev/instagram-mcp/issues" rel="noopener">GitHub</a>.</p>
+      </div>
+    </section>
+
+    <!-- ================================================================ FAQ -->
+    <section id="faq">
+      <h2>FAQ <a class="anchor" href="#faq" aria-label="Link to this section">#</a></h2>
+
+      <h3>Is this an official Meta or Instagram product?</h3>
+      <p>No. instagram-mcp-ai is an independent, community-built project — not affiliated with, endorsed by, or sponsored by Meta Platforms, Inc. It talks only to the official Meta Graph API; Instagram and Meta are trademarks of Meta Platforms, Inc., used nominatively to indicate compatibility.</p>
+
+      <h3>What kind of Instagram account do I need?</h3>
+      <p>An Instagram <strong>professional</strong> account — Business or Creator. The Instagram Platform / Graph API does not expose personal accounts, so a personal profile cannot be operated by this server.</p>
+
+      <h3>Does it scrape Instagram or automate my password?</h3>
+      <p>No. Every call goes to an official Meta Graph API endpoint (<code>graph.instagram.com</code> or <code>graph.facebook.com</code>). There is no scraping, no private/undocumented API, and no credential or browser automation — authentication uses standard OAuth access tokens.</p>
+
+      <h3>Which authentication path should I choose?</h3>
+      <p>Instagram Login (Path A) is the simplest setup for publishing and engagement — <code>graph.instagram.com</code>, granular scopes, and a 60-day long-lived token. Facebook Login (Path B) uses <code>graph.facebook.com</code> v25.0 with an <code>appsecret_proof</code>, can issue a never-expiring system-user token, and is the only path that unlocks the discovery package.</p>
+
+      <h3>Can it post or delete things without my say-so?</h3>
+      <p>No. Every write previews by default and acts only when you pass <code>apply: true</code> (with <code>IG_WRITE_MODE=apply</code>). Deleting a comment is double-gated — it additionally requires <code>IG_ALLOW_DESTRUCTIVE=true</code> — and applied writes are appended to a local JSONL audit journal.</p>
+
+      <h3>Do I need to build or host anything?</h3>
+      <p>No. Run it locally with <code>npx instagram-mcp-ai</code> on Node.js 22 or newer. It speaks MCP over stdio to your client (Claude Desktop, Cursor, and other MCP-capable apps); an optional loopback HTTP transport is available for local development.</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="foot-inner">
+    <div>
+      <strong>instagram-mcp-ai</strong> · v0.0.1 · MIT License<br />
+      A locally-run MCP server for Instagram professional accounts.
+    </div>
+    <div>
+      <a href="https://github.com/IvanBBaev/instagram-mcp" rel="noopener">GitHub</a> ·
+      <a href="https://www.npmjs.com/package/instagram-mcp-ai" rel="noopener">npm</a> ·
+      <a href="https://github.com/IvanBBaev/instagram-mcp/issues" rel="noopener">Issues</a> ·
+      <a href="#quickstart">Quickstart</a> ·
+      <a href="#tools">Tools</a>
+    </div>
+  </div>
+  <p class="disclaimer">
+    <strong>Instagram and Meta are trademarks of Meta Platforms, Inc.</strong> This is an
+    independent, unaffiliated project. Registry name: <code>io.github.IvanBBaev/instagram-mcp-ai</code>.
+  </p>
+</footer>
+
+<button id="toTop" class="to-top" aria-label="Back to top">↑</button>
+
+<script src="assets/app.js"></script>

@@ -2,6 +2,7 @@
   "name": "instagram-mcp-ai",
   "version": "0.0.1",
   "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
+  "mcpName": "io.github.IvanBBaev/instagram-mcp-ai",
   "type": "module",
   "main": "dist/src/index.js",
   "bin": {
@@ -22,7 +23,15 @@
     "node": ">=22"
   },
   "license": "MIT",
-  "author": "Ivan Baev",
+  "author": "Ivan Baev <ivanbbaev@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IvanBBaev/instagram-mcp.git"
+  },
+  "homepage": "https://ivanbbaev.github.io/instagram-mcp/",
+  "bugs": {
+    "url": "https://github.com/IvanBBaev/instagram-mcp/issues"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true
@@ -54,5 +63,17 @@
     "prettier": "^3.3.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.0.0"
-  }
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "instagram",
+    "meta",
+    "graph-api",
+    "instagram-api",
+    "social-media",
+    "llm",
+    "ai"
+  ],
+  "trademark": "instagram-mcp-ai is an independent, community-built project and is not affiliated with, endorsed by, or sponsored by Meta Platforms, Inc. Instagram and Meta are trademarks of Meta Platforms, Inc., used here only nominatively to indicate compatibility."
 }

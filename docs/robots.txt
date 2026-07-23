@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ivanbbaev.github.io/instagram-mcp/sitemap.xml

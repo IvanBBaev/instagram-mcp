@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Open Graph banner for instagram-mcp-ai (1200x630).
+  Self-contained, no external assets, no Meta/Instagram logos or brand marks.
+  Some social scrapers render only raster og-images; a PNG can be generated from
+  this file later and swapped into the meta tags, e.g.:
+    resvg og-banner.svg og-image.png       # or: rsvg-convert -o og-image.png og-banner.svg
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="instagram-mcp-ai — an Instagram MCP server. 28 tools, MIT, Node 22.">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a0f16"/>
+      <stop offset="1" stop-color="#120a10"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#feca57"/>
+      <stop offset="0.42" stop-color="#ff6b8b"/>
+      <stop offset="0.74" stop-color="#d648c4"/>
+      <stop offset="1" stop-color="#8a5cff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.16" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#ff5a7e" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ff5a7e" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.92" cy="0.9" r="0.8">
+      <stop offset="0" stop-color="#8a5cff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#8a5cff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+
+  <!-- top accent hairline -->
+  <rect x="0" y="0" width="1200" height="6" fill="url(#accent)"/>
+
+  <!-- logo tile -->
+  <g transform="translate(96,96)">
+    <rect width="120" height="120" rx="30" fill="url(#accent)"/>
+    <text x="60" y="82" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="58" font-weight="700" text-anchor="middle" fill="#ffffff">ig</text>
+  </g>
+
+  <!-- eyebrow -->
+  <text x="248" y="150" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="26" font-weight="600" letter-spacing="3" fill="#ff90a8">MODEL CONTEXT PROTOCOL · INSTAGRAM</text>
+
+  <!-- wordmark -->
+  <text x="248" y="212" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="66" font-weight="700" fill="#ffffff">instagram-mcp-ai</text>
+
+  <!-- tagline -->
+  <text x="96" y="336" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="46" font-weight="700" fill="#f4eef1">A locally-run MCP server that turns an Instagram</text>
+  <text x="96" y="396" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="46" font-weight="700" fill="#f4eef1">professional account into <tspan fill="#ff90a8">safe</tspan>, well-annotated tools.</text>
+
+  <!-- sub-tagline -->
+  <text x="96" y="452" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="27" fill="#c9bcc4">Official Meta Graph API only · no scraping · writes preview by default.</text>
+
+  <!-- feature chips -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="26" font-weight="600">
+    <g transform="translate(96,506)">
+      <rect width="196" height="56" rx="16" fill="rgba(255,90,126,0.14)" stroke="#ff5a7e" stroke-opacity="0.4"/>
+      <text x="98" y="37" text-anchor="middle" fill="#ff90a8">28 tools</text>
+    </g>
+    <g transform="translate(312,506)">
+      <rect width="240" height="56" rx="16" fill="rgba(138,92,255,0.14)" stroke="#8a5cff" stroke-opacity="0.4"/>
+      <text x="120" y="37" text-anchor="middle" fill="#c6a8ff">6 packages</text>
+    </g>
+    <g transform="translate(572,506)">
+      <rect width="164" height="56" rx="16" fill="rgba(254,202,87,0.14)" stroke="#feca57" stroke-opacity="0.4"/>
+      <text x="82" y="37" text-anchor="middle" fill="#ffd98a">MIT</text>
+    </g>
+    <g transform="translate(756,506)">
+      <rect width="216" height="56" rx="16" fill="rgba(255,255,255,0.06)" stroke="#ffffff" stroke-opacity="0.22"/>
+      <text x="108" y="37" text-anchor="middle" fill="#e7dde2">Node 22+</text>
+    </g>
+  </g>
+
+  <!-- footer url -->
+  <text x="96" y="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="24" fill="#9a8b93">github.com/IvanBBaev/instagram-mcp</text>
+
+  <!-- bottom accent hairline -->
+  <rect x="0" y="624" width="1200" height="6" fill="url(#accent)"/>
+</svg>

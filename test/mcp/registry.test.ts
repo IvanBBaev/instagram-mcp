@@ -139,11 +139,11 @@ function spec(over: Partial<ToolSpec> & Pick<ToolSpec, 'name'>): ToolSpec {
 
 // --- buildManifest ---------------------------------------------------------
 
-test('buildManifest groups the three v1 packages and holds the tag invariant', () => {
+test('buildManifest groups every v1 package and holds the tag invariant', () => {
   const manifest = buildManifest(allTools);
   assert.deepEqual(
     manifest.map((p) => p.name),
-    ['account', 'insights', 'media'],
+    ['account', 'comments', 'discovery', 'insights', 'media', 'publishing'],
   );
   // Invariant: every tool in a package's list actually carries that package tag.
   for (const pkg of manifest) {
@@ -158,13 +158,39 @@ test('buildManifest snapshot: package -> sorted tool names', () => {
 
   assert.deepEqual(snapshot, {
     account: ['instagram_get_account', 'instagram_list_linked_accounts', 'instagram_token_status'],
+    comments: [
+      'instagram_create_comment',
+      'instagram_delete_comment',
+      'instagram_get_comment',
+      'instagram_hide_comment',
+      'instagram_list_comments',
+      'instagram_list_tagged_media',
+      'instagram_reply_to_comment',
+      'instagram_unhide_comment',
+    ],
+    discovery: [
+      'instagram_discover_business',
+      'instagram_get_hashtag_media',
+      'instagram_search_hashtag',
+    ],
     insights: [
       'instagram_get_account_insights',
       'instagram_get_audience_demographics',
       'instagram_get_media_insights',
       'instagram_get_online_followers',
     ],
-    media: ['instagram_get_media', 'instagram_list_media'],
+    // `instagram_set_comments_enabled` lives in tools/comments.ts but carries
+    // `package: 'media'`, so the registry regroups it under media.
+    media: ['instagram_get_media', 'instagram_list_media', 'instagram_set_comments_enabled'],
+    publishing: [
+      'instagram_create_media_container',
+      'instagram_get_container_status',
+      'instagram_get_publishing_limit',
+      'instagram_post_image',
+      'instagram_post_reel',
+      'instagram_post_story',
+      'instagram_publish_media',
+    ],
   });
 });
 
@@ -179,9 +205,9 @@ test('buildManifest throws on a spec with an empty package tag', () => {
 
 const v1Manifest: PackageManifest[] = buildManifest(allTools);
 
-test('selectPackages: core (default) selects all three v1 packages', () => {
+test('selectPackages: core (default) selects the core-profile packages (discovery ships dark)', () => {
   const { active, readonly } = selectPackages(v1Manifest, {});
-  assert.deepEqual([...active].sort(), ['account', 'insights', 'media']);
+  assert.deepEqual([...active].sort(), ['account', 'comments', 'insights', 'media', 'publishing']);
   assert.equal(readonly.size, 0);
 });
 
@@ -192,7 +218,14 @@ test('selectPackages: explicit comma list selects exactly those packages', () =>
 
 test('selectPackages: all selects every package in the manifest', () => {
   const { active } = selectPackages(v1Manifest, { IG_TOOL_PACKAGES: 'all' });
-  assert.deepEqual([...active].sort(), ['account', 'insights', 'media']);
+  assert.deepEqual([...active].sort(), [
+    'account',
+    'comments',
+    'discovery',
+    'insights',
+    'media',
+    'publishing',
+  ]);
 });
 
 test('selectPackages: IG_PACKAGES_DENY removes a package after profile resolution', () => {
@@ -200,7 +233,7 @@ test('selectPackages: IG_PACKAGES_DENY removes a package after profile resolutio
     IG_TOOL_PACKAGES: 'all',
     IG_PACKAGES_DENY: 'insights',
   });
-  assert.deepEqual([...active].sort(), ['account', 'media']);
+  assert.deepEqual([...active].sort(), ['account', 'comments', 'discovery', 'media', 'publishing']);
 });
 
 test('selectPackages: IG_PACKAGES_READONLY is surfaced as the readonly set', () => {

@@ -29,10 +29,14 @@ import { createAuthProvider } from './core/auth.js';
 import { createLogger } from './core/log.js';
 import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
-import { isInstagramError } from './core/types.js';
-import type { Logger, ResolvedProfile } from './core/types.js';
+import { refreshToken } from './core/refresh.js';
+import { writeCredentials } from './core/config-write.js';
+import { InstagramError, isInstagramError } from './core/types.js';
+import type { ResolvedProfile } from './core/types.js';
 import { registerTools } from './mcp/registry.js';
 import { startHttp, startStdio } from './mcp/transport.js';
+import { runLogin } from './cli/login.js';
+import { runDoctor } from './cli/doctor.js';
 import { allTools } from './tools/index.js';
 
 /** Mirrors package.json — the identity advertised to MCP clients. */
@@ -85,13 +89,25 @@ function registerProfileSecrets(profiles: ResolvedProfile[]): void {
   if (httpToken !== undefined && httpToken !== '') registerSecret(httpToken);
 }
 
-/** Subcommands are owned by later workplan tasks; the entry routes them honestly. */
-const SUBCOMMANDS = new Set(['login', 'doctor', 'refresh']);
+/** Resolve the active (default) profile, or throw a clear auth error. */
+function activeProfile(profiles: ResolvedProfile[], defaultName: string): ResolvedProfile {
+  const found = profiles.find((p) => p.name === defaultName) ?? profiles[0];
+  if (found === undefined) {
+    throw new InstagramError(
+      'No account profile is configured — run the `login` subcommand first.',
+      {
+        kind: 'auth',
+      },
+    );
+  }
+  return found;
+}
 
-function handleSubcommand(name: string, log: Logger): never {
-  log.error('subcommand not yet implemented', { subcommand: name });
-  process.stderr.write(`'${name}' is not implemented yet.\n`);
-  process.exit(1);
+/** Human-readable, token-free expiry line for the `refresh` success message. */
+function expiryLabel(expiresAtSec: number | undefined): string {
+  if (expiresAtSec === undefined) return 'unknown';
+  if (expiresAtSec === 0) return 'never';
+  return new Date(expiresAtSec * 1000).toISOString();
 }
 
 async function main(): Promise<void> {
@@ -100,6 +116,13 @@ async function main(): Promise<void> {
 
   const settings = loadSettings();
   const clock = systemClock;
+  const subcommand = process.argv[2];
+
+  // `login` runs before profile resolution — it is what an operator runs when
+  // there is no valid credential yet, so it must not require a loadable profile.
+  if (subcommand === 'login') {
+    process.exit(await runLogin(process.argv.slice(3)));
+  }
 
   // Build the logger with redaction wired in: register token/secret values,
   // then hand the redactor to the logger so every field is scrubbed at the sink.
@@ -111,13 +134,8 @@ async function main(): Promise<void> {
     redact: createRedactor(),
   });
 
-  const subcommand = process.argv[2];
-  if (subcommand !== undefined && SUBCOMMANDS.has(subcommand)) handleSubcommand(subcommand, log);
-
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-
   // The one network seam, resolved per profile at call time. This is the join
-  // point the registry stays decoupled from.
+  // point the registry stays decoupled from, and the CLI diagnostics reuse.
   const makeRequest = (profile: ResolvedProfile) =>
     createIgRequest({
       auth: createAuthProvider(profile),
@@ -126,6 +144,47 @@ async function main(): Promise<void> {
       log,
       onUsage: (host, usage) => log.debug('graph usage', { host, maxPct: usage.maxPct }),
     });
+
+  // `doctor` / `refresh` operate on the resolved active profile via that seam,
+  // then exit — they never start a transport.
+  if (subcommand === 'doctor') {
+    const profile = activeProfile(profiles, defaultName);
+    const { report, exitCode } = await runDoctor({
+      req: makeRequest(profile),
+      profile,
+      settings,
+      log,
+      nowMs: clock.now(),
+    });
+    process.stdout.write(`${report}\n`);
+    process.exit(exitCode);
+  }
+
+  if (subcommand === 'refresh') {
+    const profile = activeProfile(profiles, defaultName);
+    const refreshed = await refreshToken(makeRequest(profile), {
+      authPath: profile.authPath,
+      accessToken: profile.accessToken,
+      appId: profile.appId,
+      appSecret: profile.appSecret,
+      nowMs: clock.now(),
+    });
+    const written = await writeCredentials(profile.name, {
+      accessToken: refreshed.accessToken,
+      authPath: profile.authPath,
+      accountId: profile.accountId,
+      appId: profile.appId,
+      appSecret: profile.appSecret,
+      expiresAtSec: refreshed.expiresAtSec,
+    });
+    process.stderr.write(
+      `Refreshed ${profile.authPath} token for profile '${profile.name}' -> ${written.path} ` +
+        `(expires: ${expiryLabel(refreshed.expiresAtSec)}).\n`,
+    );
+    process.exit(0);
+  }
+
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
   const { registered } = registerTools({
     server,

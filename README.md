@@ -2,9 +2,10 @@
 
 **MCP server for the Instagram Platform (Meta Graph API) — design documentation.**
 
-> **Status: design phase.** This repository currently contains only documentation.
-> The documents under `docs/` are the source of truth for the upcoming implementation.
-> No code exists yet; nothing here is published to npm.
+> **Status: implementation in progress.** The read path (account, media, insights)
+> and the write path (content publishing, comment moderation) are implemented and
+> tested; discovery ships behind the `reader` package profile. The documents under
+> `docs/` remain the source of truth for the design. Not yet published to npm.
 
 ## What this will be
 

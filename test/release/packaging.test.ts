@@ -1,8 +1,9 @@
 /**
- * Distribution / packaging gate (G5). Verifies the two published-but-not-compiled
- * artifacts — the CommonJS bin launcher and the MCP-registry server.json — stay
- * consistent with the package identity, and that the launcher hands off to the
- * built ESM entry without tripping its own Node guard on a supported runtime.
+ * Distribution / packaging gate (G5). Verifies the published-but-not-compiled
+ * artifacts — the CommonJS bin launcher, the MCP-registry server.json, and the
+ * Claude Code plugin manifest — stay consistent with the package identity, and
+ * that the launcher hands off to the built ESM entry without tripping its own
+ * Node guard on a supported runtime.
  *
  * Runs from the repo root (cwd), so the artifacts are read by their repo paths.
  */
@@ -17,6 +18,7 @@ const repoRoot = process.cwd();
 const binPath = path.join(repoRoot, 'bin', 'instagram-mcp-ai.cjs');
 const serverJsonPath = path.join(repoRoot, 'server.json');
 const packageJsonPath = path.join(repoRoot, 'package.json');
+const pluginJsonPath = path.join(repoRoot, '.claude-plugin', 'plugin.json');
 
 test('bin launcher exists and starts with the Node shebang', () => {
   assert.ok(existsSync(binPath), 'bin/instagram-mcp-ai.cjs must exist');
@@ -41,6 +43,68 @@ test('server.json is valid JSON with the registry name and package version', () 
 
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version: string };
   assert.equal(manifest.version, pkg.version);
+});
+
+test('Claude Code plugin manifest lives at .claude-plugin/plugin.json and is well formed', () => {
+  assert.ok(existsSync(pluginJsonPath), '.claude-plugin/plugin.json must exist');
+  const plugin = JSON.parse(readFileSync(pluginJsonPath, 'utf8')) as Record<string, unknown>;
+
+  // `name` is the only field Claude Code requires, and it must be kebab-case.
+  assert.equal(typeof plugin.name, 'string', 'plugin.json.name must be a string');
+  assert.match(
+    plugin.name as string,
+    /^[a-z0-9]+(-[a-z0-9]+)*$/,
+    'plugin.json.name must be kebab-case (lowercase alphanumerics separated by single hyphens)',
+  );
+
+  // Component paths are relative to the plugin root; this plugin ships no
+  // commands/agents/skills, so declaring any of them would point at nothing.
+  for (const key of ['commands', 'agents', 'skills', 'hooks']) {
+    assert.ok(!(key in plugin), `plugin.json must not declare "${key}" — the plugin ships none`);
+  }
+});
+
+test('plugin manifest launches the server from npm, not from an unbuilt repo path', () => {
+  const plugin = JSON.parse(readFileSync(pluginJsonPath, 'utf8')) as {
+    mcpServers?: Record<string, { command?: string; args?: string[] }>;
+  };
+  const servers = plugin.mcpServers ?? {};
+  const names = Object.keys(servers);
+  assert.ok(names.length > 0, 'plugin.json must declare at least one MCP server');
+
+  for (const name of names) {
+    const server = servers[name];
+    const args = server?.args ?? [];
+    // A Claude Code plugin is installed from git, where `dist/` does not exist
+    // (it is gitignored). Referencing a built path would produce a plugin that
+    // installs cleanly and then fails to start.
+    for (const arg of args) {
+      assert.ok(
+        !arg.includes('dist/'),
+        `plugin.json server "${name}" must not reference a built dist/ path — ` +
+          `plugins are installed from git, which carries no dist/`,
+      );
+    }
+    assert.ok(
+      args.some((arg) => arg.startsWith('instagram-mcp-ai@')),
+      `plugin.json server "${name}" must launch a pinned npm version of instagram-mcp-ai`,
+    );
+  }
+});
+
+test('the plugin manifest is deliberately excluded from the npm tarball', () => {
+  // `files` is an allowlist, so .claude-plugin/ is already out — this asserts the
+  // exclusion is intentional and stays that way. The Claude Code plugin channel
+  // installs from the git repo / a marketplace, never from node_modules, so a
+  // copy inside the tarball would be dead weight that can silently go stale.
+  const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { files?: string[] };
+  assert.ok(Array.isArray(pkg.files), 'package.json must keep an explicit `files` allowlist');
+  for (const entry of pkg.files) {
+    assert.ok(
+      !entry.includes('.claude-plugin'),
+      `package.json "files" must not ship .claude-plugin/ (found "${entry}")`,
+    );
+  }
 });
 
 test('launcher hands off to the ESM entry without tripping its Node guard', () => {

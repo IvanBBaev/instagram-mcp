@@ -103,10 +103,14 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
   when < 10 days remain (Path A) so the operator runs `refresh`/`login` in time.
 - Auto-refresh policy (Path A): `refresh_access_token` transparently when the token
   is older than `IG_REFRESH_AFTER_DAYS` (default 45) at first use of a session.
-- **Known design gate (architecture F-2 / devops F-1):** a token injected via the
-  MCP client's `env` always wins over the XDG file, so a refreshed token persisted
-  to XDG never takes effect for client-env users — the refresh story per config
-  channel (client env vs XDG file vs keychain) must be resolved by design before M2.
+- **Design gate D2 (architecture F-2 / devops F-1) — RESOLVED, option (a).** A
+  token injected via the MCP client's `env` always wins over the XDG file, so a
+  refreshed token persisted to XDG would never take effect for client-env users.
+  Resolution: the **XDG env file is the only token home**. `core/refresh.ts`
+  performs the exchange and deliberately does not persist; only the `login` /
+  `refresh` CLI writes, via `core/config-write.ts`. Tokens injected through the
+  client `env` are treated as **static** — the server never pretends to rotate
+  them in place, and says so instead (see [stability.md](stability.md)).
 
 ## 4. Storage rules
 
@@ -126,9 +130,22 @@ scope names confirmed; Path A confirmed to lack hashtag search / `business_disco
 product tags; `debug_token` confirmed Path-B-only; `graph.instagram.com/v25.0/`
 versioned paths confirmed.
 
+**Resolved 2026-07-29:** token-refresh persistence across config channels — gate
+D2, option (a); the XDG env file is the sole token home (see §3). The single
+token variable question is settled too: `IG_ACCESS_TOKEN` carries the token on
+**both** paths, and the path is inferred from `IG_APP_ID` + `IG_APP_SECRET`
+unless `IG_AUTH_MODE` pins it.
+
 Still open:
 
-- "Instagram Public Content Access" feature gating for hashtag endpoints — M1 probe.
+- "Instagram Public Content Access" feature gating for hashtag endpoints —
+  the probe itself is **blocked on live credentials** (workplan T-E3), so its
+  consequence was decided without it on 2026-07-29: the `discovery` package
+  **stays registered** in the `reader` and `all` profiles. It is double-gated
+  (non-default profile + Path-B capability filtering), every tool description
+  carries the App-Review caveat, and a missing feature surfaces as a mapped
+  `kind: 'permission'` error rather than a crash. Running the probe later can
+  only confirm or reverse that call — see [roadmap.md](roadmap.md) for the
+  one-line reversal.
 - Messaging (Path A `instagram_business_manage_messages` vs Path B via Page): which
   to target for the phase-2 `messaging` package.
-- Token-refresh persistence across config channels (see the §3 design gate).

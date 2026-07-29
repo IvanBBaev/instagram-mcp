@@ -39,6 +39,21 @@ const NAMED_PREFIX = 'IG_PROFILE_';
 const SUFFIXES = ['ACCESS_TOKEN', 'AUTH_PATH', 'ACCOUNT_ID', 'APP_ID', 'APP_SECRET'] as const;
 type Suffix = (typeof SUFFIXES)[number];
 
+/**
+ * Accepted alias suffixes, mapped to their canonical suffix. `AUTH_MODE` is the
+ * name used by the env catalog (architecture §12) and `.env.example`;
+ * `AUTH_PATH` is this module's canonical name and what `login`/`refresh` write.
+ * Both spellings work on the default **and** named profiles, so
+ * `IG_PROFILE_<NAME>_*` really is "the same keys, prefixed". The canonical
+ * suffix wins when a profile sets both.
+ */
+const SUFFIX_ALIASES: Readonly<Record<string, Suffix>> = { AUTH_MODE: 'AUTH_PATH' };
+
+/** Every accepted suffix spelling, longest first so `_AUTH_PATH` never matches as `_PATH`. */
+const READABLE_SUFFIXES: readonly string[] = [...SUFFIXES, ...Object.keys(SUFFIX_ALIASES)].sort(
+  (a, b) => b.length - a.length,
+);
+
 /** The raw (string) fields collected for one profile before validation. */
 type RawProfile = Partial<Record<Suffix, string>>;
 
@@ -56,7 +71,7 @@ function clean(value: string | undefined): string | undefined {
 }
 
 /** The concrete env var name a profile field is read from (for error messages). */
-function envVarFor(name: string, suffix: Suffix): string {
+function envVarFor(name: string, suffix: string): string {
   return name === DEFAULT_PROFILE_NAME
     ? `IG_${suffix}`
     : `${NAMED_PREFIX}${name.toUpperCase()}_${suffix}`;
@@ -66,9 +81,9 @@ function envVarFor(name: string, suffix: Suffix): string {
 function readDefaultRaw(env: Env): RawProfile {
   return {
     ACCESS_TOKEN: env.IG_ACCESS_TOKEN,
-    // `IG_AUTH_PATH` is this module's canonical name; `IG_AUTH_MODE` is the name
-    // used by the env catalog (architecture §12) / .env.example — accepted as a
-    // fallback so existing configs keep working. See the integration note.
+    // Canonical `IG_AUTH_PATH`, with `IG_AUTH_MODE` (the env catalog's name)
+    // accepted as an alias — see {@link SUFFIX_ALIASES}, which gives named
+    // profiles the same pair.
     AUTH_PATH: clean(env.IG_AUTH_PATH) ?? clean(env.IG_AUTH_MODE),
     ACCOUNT_ID: env.IG_ACCOUNT_ID,
     APP_ID: env.IG_APP_ID,
@@ -82,12 +97,17 @@ function readNamedRaw(env: Env): Map<string, RawProfile> {
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || !key.startsWith(NAMED_PREFIX)) continue;
     const rest = key.slice(NAMED_PREFIX.length);
-    const suffix = SUFFIXES.find((s) => rest.length > s.length + 1 && rest.endsWith(`_${s}`));
-    if (suffix === undefined) continue;
-    const name = rest.slice(0, rest.length - (suffix.length + 1)).toLowerCase();
+    const spelling = READABLE_SUFFIXES.find(
+      (s) => rest.length > s.length + 1 && rest.endsWith(`_${s}`),
+    );
+    if (spelling === undefined) continue;
+    const suffix = SUFFIX_ALIASES[spelling] ?? (spelling as Suffix);
+    const name = rest.slice(0, rest.length - (spelling.length + 1)).toLowerCase();
     // The bare `IG_*` vars own the default profile; ignore a colliding named one.
     if (name === '' || name === DEFAULT_PROFILE_NAME) continue;
     const existing = out.get(name) ?? {};
+    // An alias never overwrites the canonical spelling (`_AUTH_PATH` wins).
+    if (spelling !== suffix && existing[suffix] !== undefined) continue;
     existing[suffix] = value;
     out.set(name, existing);
   }
@@ -103,8 +123,10 @@ function resolveAuthPath(name: string, raw: RawProfile): AuthPath {
   const explicit = clean(raw.AUTH_PATH);
   if (explicit !== undefined) {
     if (!isAuthPath(explicit)) {
+      // Name both accepted spellings: the caller may have set either one, and a
+      // message naming the variable they did not set reads like a bug.
       throw new InstagramError(
-        `${envVarFor(name, 'AUTH_PATH')} has an unknown value '${explicit}'; expected 'ig-login' or 'fb-login'.`,
+        `${envVarFor(name, 'AUTH_MODE')} (alias ${envVarFor(name, 'AUTH_PATH')}) has an unknown value '${explicit}'; expected 'ig-login' or 'fb-login'.`,
         { kind: 'validation' },
       );
     }

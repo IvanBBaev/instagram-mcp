@@ -57,7 +57,7 @@ half that matches your path:
 
 - **Path A** — configure **"Instagram API with Instagram login"** (Business Login
   for Instagram). Under its settings, add the OAuth **redirect URI** you will use
-  for `login` (default `http://localhost:8723/callback`, see §5).
+  for `login` (default `http://127.0.0.1:8723/callback`, see §5).
 - **Path B** — configure **Facebook Login** and the **Instagram** product; make
   sure the IG professional account is linked to a Facebook Page you administer,
   and (for a never-expiring token) claim the app into a Business portfolio and
@@ -125,12 +125,13 @@ Both paths reach the **same** IG professional account; pick by your situation.
 | Existing Business Manager / `facebook-mcp` user | **B (`fb-login`)** — one app for both, never-expiring system-user token |
 | Needs **hashtag search / business discovery** | **B (`fb-login`)** — those are **Path-B-only**, and additionally need "Instagram Public Content Access" |
 
-The auth path is auto-detected from which token var you set; set `IG_AUTH_MODE`
-explicitly only when **both** `IG_ACCESS_TOKEN` and `IG_FB_ACCESS_TOKEN` are
-present (otherwise startup fails rather than guessing — see
-[troubleshooting.md](troubleshooting.md)). Capability differences (e.g. discovery
-tools are hidden on Path A) are handled automatically: tools that a path cannot
-serve are not registered for that profile.
+Both paths put their token in the **same** variable, `IG_ACCESS_TOKEN` — the path
+only decides which host it is sent to and whether an `appsecret_proof` HMAC is
+attached. The path is inferred as `fb-login` when both `IG_APP_ID` and
+`IG_APP_SECRET` are set, otherwise `ig-login`; set `IG_AUTH_MODE` explicitly to
+override. Capability differences (e.g. discovery tools are hidden on Path A) are
+handled automatically: tools that a path cannot serve are not registered for that
+profile.
 
 ## 7. Get a long-lived token, two ways
 
@@ -157,7 +158,7 @@ npx instagram-mcp-ai login --path fb \
 
 What happens: the command **prints an authorization URL to stderr** — open it in a
 browser, approve the scopes, and the loopback redirect
-(`http://localhost:8723/callback` by default) captures the code. The CLI then does
+(`http://127.0.0.1:8723/callback` by default) captures the code. The CLI then does
 both token exchanges and writes the long-lived token. **No token or secret is ever
 printed.**
 
@@ -167,7 +168,7 @@ Useful flags (`login --help` for the full list):
 |---|---|
 | `--path <ig\|fb>` | Auth path. **Required.** |
 | `--app-id` / `--app-secret` | App credentials (or env `IG_APP_ID` / `IG_APP_SECRET`). |
-| `--redirect-uri <uri>` | OAuth redirect (default `http://localhost:8723/callback`) — must match an entry whitelisted in the app. |
+| `--redirect-uri <uri>` | OAuth redirect (default `http://127.0.0.1:8723/callback`) — must match an entry whitelisted in the app **literally**: Meta treats `127.0.0.1` and `localhost` as different entries. |
 | `--account-id <id>` | Pre-set the IG professional-account id (skips a lookup). |
 | `--profile <name>` | Which account profile to write (default `default`). |
 | `--scopes <csv>` | Override the per-path scope defaults. |
@@ -183,11 +184,11 @@ expires):
 - **Path B, system-user (never-expiring):** App Dashboard / Business settings →
   create an **admin system user**, assign the Page + IG account as assets, and
   **Generate Token** with the Path-B scopes from §5. Put it in
-  `IG_FB_ACCESS_TOKEN`. This survives password changes and needs no browser
+  `IG_ACCESS_TOKEN`. This survives password changes and needs no browser
   re-auth.
 - **Path B, user token:** in the **Graph API Explorer**, select your app and the
   Path-B scopes, generate a user token, then exchange it for a long-lived one
-  (`fb_exchange_token`). Put the long-lived token in `IG_FB_ACCESS_TOKEN`.
+  (`fb_exchange_token`). Put the long-lived token in `IG_ACCESS_TOKEN`.
 - **Path A:** generate a short-lived token in the Instagram login flow, then
   exchange it for a long-lived one (`ig_exchange_token`). Put it in
   `IG_ACCESS_TOKEN`.
@@ -234,8 +235,9 @@ The full catalog is [.env.example](../.env.example) (canonical:
 IG_ACCESS_TOKEN=<long-lived ig-login token>
 IG_ACCOUNT_ID=<ig professional-account id>   # optional: skips a lookup
 
-# Path B — Facebook Login (adds app id/secret for appsecret_proof + refresh)
-IG_FB_ACCESS_TOKEN=<page / system-user token>
+# Path B — Facebook Login (same token var; app id/secret select the path and
+# supply appsecret_proof + refresh)
+IG_ACCESS_TOKEN=<page / system-user token>
 IG_ACCOUNT_ID=<ig professional-account id>
 IG_APP_ID=<meta app id>
 IG_APP_SECRET=<meta app secret>
@@ -281,7 +283,7 @@ The token/secret env vars passed here **always win** over the XDG env file
       "command": "npx",
       "args": ["-y", "instagram-mcp-ai"],
       "env": {
-        "IG_FB_ACCESS_TOKEN": "<page / system-user token>",
+        "IG_ACCESS_TOKEN": "<page / system-user token>",
         "IG_ACCOUNT_ID": "<ig professional account id>",
         "IG_APP_ID": "<meta app id>",
         "IG_APP_SECRET": "<meta app secret>",

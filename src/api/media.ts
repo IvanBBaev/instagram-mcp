@@ -8,12 +8,21 @@
  * headers) lives behind `req`. Writes (e.g. toggling `comment_enabled`) and
  * publishing are intentionally out of scope here.
  *
+ * This module also owns {@link fetchPagedEdge}, the ONE cursor-walk used by
+ * every paginated edge in the api layer (`api/comments.ts` imports it) — the
+ * loop's termination guards are safety-critical, so they exist once.
+ *
  * Corner cases covered: CC-DATA-1 (stale cursor mid-listing), CC-DATA-2 (fields
  * Meta omits rather than nulls — every field but `id` is optional), CC-DATA-4
  * (`fetchAll` cap / off-by-one), CC-DATA-6 (open Meta enums pass through as
  * strings). CC-DATA-5 (deleted object) surfaces as a propagated InstagramError.
  */
-import { isInstagramError, type GraphListResponse, type IgRequestFn } from '../core/types.js';
+import {
+  isInstagramError,
+  type GraphListResponse,
+  type IgRequestFn,
+  type IgRequestOptions,
+} from '../core/types.js';
 
 /** Field set requested for a media object (feed post, reel, story, album). */
 const MEDIA_FIELDS = [
@@ -92,13 +101,20 @@ function normalizeDetail(raw: RawMediaDetail): MediaDetail {
   return detail;
 }
 
-export interface ListMediaParams {
-  /** IG account whose media to list — the numeric IG-user id or `me`. */
-  igAccountId: string;
-  /**
-   * Hard item cap for `fetchAll` (the resolved `IG_MAX_ITEMS`). Always supplied
-   * by the caller so the api layer never reads settings itself.
-   */
+// --- Shared cursor pagination ----------------------------------------------
+
+/**
+ * Hard ceiling on the pages a single `fetchAll` will follow. With the default
+ * `IG_MAX_ITEMS` (200) and a typical page size (25) a complete walk is ~8 pages,
+ * so this only fires when the edge misbehaves — it is a safety net, not a cap
+ * an ordinary listing can hit.
+ */
+const MAX_PAGES = 50;
+
+/** Paging inputs shared by every listing. `maxItems` is always supplied by the
+ * caller so the api layer never reads settings itself. */
+export interface PageParams {
+  /** Hard item cap for `fetchAll` (the resolved `IG_MAX_ITEMS`). */
   maxItems: number;
   /** Per-page size hint forwarded to Graph's `limit`. */
   limit?: number;
@@ -110,30 +126,47 @@ export interface ListMediaParams {
 
 /**
  * Result of a listing. `after` is the cursor to continue from (present when a
- * single page left more, or when `fetchAll` stopped at the cap with more to
- * come). `truncated` is true **iff** the read was capped while more data
- * genuinely remained — a capped read is never presented as complete. `note`
- * carries a non-fatal explanation (e.g. a cursor that went stale mid-listing).
+ * single page left more, or when the walk stopped early with more to come).
+ * `truncated` is true **iff** the read was cut short while more data genuinely
+ * remained — a capped read is never presented as complete. `note` carries a
+ * non-fatal explanation (a stale cursor, or an edge that stopped making
+ * progress).
  */
-export interface PagedMedia {
-  items: MediaItem[];
+export interface PagedResult<T> {
+  items: T[];
   after?: string;
   truncated: boolean;
   note?: string;
 }
 
+export type PagedMedia = PagedResult<MediaItem>;
+
 /**
- * List the operated account's own media, newest-first, cursor-paginated.
+ * Walk a Graph edge by cursor. Single page by default; with `fetchAll` follows
+ * `paging.cursors.after` until the edge is exhausted or `maxItems` is reached
+ * (CC-DATA-4). A cursor invalidated between pages keeps the partial result with
+ * `truncated: true` and a `note` (CC-DATA-1); a first-page failure propagates.
  *
- * Single page by default. With `fetchAll`, follows `paging.cursors.after` until
- * the edge is exhausted or `maxItems` is reached (CC-DATA-4). If a cursor is
- * invalidated between pages (media deleted mid-listing), the partial result is
- * returned with `truncated: true` and a `note` rather than discarded
- * (CC-DATA-1); a first-page failure is a genuine error and propagates.
+ * The walk is **bounded three ways**, because Graph can hand back a page that
+ * makes no progress (privacy-filtered or deleted items yield `data: []` while
+ * still advertising an `after` cursor) and an unbounded `for(;;)` would then
+ * hammer Meta until the whole app is throttled:
+ *
+ *   1. the cursor must actually change (a repeated `after` is the same request);
+ *   2. a page that contributed no items ends the walk;
+ *   3. at most {@link MAX_PAGES} pages per call.
+ *
+ * Every such stop returns `truncated: true` plus the `after` cursor, so nothing
+ * is silently dropped — the caller can resume exactly where the walk gave up.
  */
-export async function listMedia(req: IgRequestFn, params: ListMediaParams): Promise<PagedMedia> {
+export async function fetchPagedEdge<TRaw, T>(
+  req: IgRequestFn,
+  build: (after: string | undefined) => IgRequestOptions,
+  params: PageParams,
+  normalize: (raw: TRaw) => T,
+): Promise<PagedResult<T>> {
   const cap = Math.max(0, Math.floor(params.maxItems));
-  const items: MediaItem[] = [];
+  const items: T[] = [];
   let cursor = params.after;
   let resultAfter: string | undefined;
   let truncated = false;
@@ -141,17 +174,13 @@ export async function listMedia(req: IgRequestFn, params: ListMediaParams): Prom
   let pageIndex = 0;
 
   for (;;) {
-    let page: GraphListResponse<MediaItem>;
+    let page: GraphListResponse<TRaw>;
     try {
-      page = await req<GraphListResponse<MediaItem>>({
-        method: 'GET',
-        path: `/${params.igAccountId}/media`,
-        params: { fields: MEDIA_FIELDS, limit: params.limit, after: cursor },
-      });
+      page = await req<GraphListResponse<TRaw>>(build(cursor));
     } catch (err) {
       // CC-DATA-1: a cursor that went stale mid-listing keeps what we gathered.
       if (pageIndex > 0 && isInstagramError(err)) {
-        note = 'cursor may be stale (media changed between pages) — restart the listing';
+        note = 'cursor may be stale (data changed between pages) — restart the listing';
         truncated = true;
         break;
       }
@@ -161,12 +190,14 @@ export async function listMedia(req: IgRequestFn, params: ListMediaParams): Prom
 
     const data = page.data ?? [];
     let overflowed = false;
+    let added = 0;
     for (const item of data) {
       if (items.length >= cap) {
         overflowed = true;
         break;
       }
-      items.push(item);
+      items.push(normalize(item));
+      added += 1;
     }
     const nextAfter = page.paging?.cursors?.after;
 
@@ -185,13 +216,54 @@ export async function listMedia(req: IgRequestFn, params: ListMediaParams): Prom
       break;
     }
     if (nextAfter === undefined) break; // exhausted every page
+
+    // Termination guards — each keeps what was gathered and hands back a cursor.
+    if (nextAfter === cursor) {
+      note = 'the edge returned the same cursor twice (no forward progress) — resume from `after`';
+    } else if (added === 0) {
+      note =
+        'a page returned no items while more remained (filtered or deleted) — resume from `after`';
+    } else if (pageIndex >= MAX_PAGES) {
+      note = `stopped after ${MAX_PAGES} pages (per-call page ceiling) — resume from \`after\``;
+    }
+    if (note !== undefined) {
+      truncated = true;
+      resultAfter = nextAfter;
+      break;
+    }
+
     cursor = nextAfter;
   }
 
-  const result: PagedMedia = { items, truncated };
+  const result: PagedResult<T> = { items, truncated };
   if (resultAfter !== undefined) result.after = resultAfter;
   if (note !== undefined) result.note = note;
   return result;
+}
+
+// --- list_media -------------------------------------------------------------
+
+export interface ListMediaParams extends PageParams {
+  /** IG account whose media to list — the numeric IG-user id or `me`. */
+  igAccountId: string;
+}
+
+/**
+ * List the operated account's own media, newest-first, cursor-paginated.
+ * Pagination semantics (cap, resume cursor, termination guards) live in
+ * {@link fetchPagedEdge}.
+ */
+export async function listMedia(req: IgRequestFn, params: ListMediaParams): Promise<PagedMedia> {
+  return fetchPagedEdge<MediaItem, MediaItem>(
+    req,
+    (after) => ({
+      method: 'GET',
+      path: `/${params.igAccountId}/media`,
+      params: { fields: MEDIA_FIELDS, limit: params.limit, after },
+    }),
+    params,
+    (m) => m,
+  );
 }
 
 export interface GetMediaParams {

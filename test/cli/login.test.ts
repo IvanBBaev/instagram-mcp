@@ -6,28 +6,39 @@
  * the reusable, deterministic CORE and never a real browser: the pure helpers
  * (`buildAuthorizeUrl`, both token exchanges, `computeExpiresAtSec`) against an
  * injected `fetch`, and `runLogin` with the browser step (`captureCode`) and the
- * clock injected out. The loopback capture is intentionally NOT covered — it is
- * thin best-effort glue. The `fb_exchange_token` / `ig_exchange_token` step is
- * what a real login would perform after the redirect.
+ * clock injected out. The `fb_exchange_token` / `ig_exchange_token` step is what
+ * a real login would perform after the redirect.
+ *
+ * The loopback capture IS covered, through injected fakes only: a server factory
+ * that never opens a socket and the deterministic {@link fakeClock}, so the
+ * routing rules, the bind address and the five-minute timeout are asserted
+ * without a browser, a port or a real timer.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import dotenv from 'dotenv';
 
 import {
+  DEFAULT_REDIRECT_URI,
   buildAuthorizeUrl,
+  captureAuthorizationCode,
+  classifyCallbackRequest,
   computeExpiresAtSec,
   exchangeCodeForToken,
   exchangeForLongLivedToken,
+  listenHostFor,
   runLogin,
+  type CallbackRequest,
+  type CallbackResponse,
+  type CreateCallbackServer,
   type LoginDeps,
 } from '../../src/cli/login.js';
 import { loadProfiles } from '../../src/core/config.js';
 import { isInstagramError } from '../../src/core/types.js';
 import type { Credentials, WriteCredentialsResult } from '../../src/core/config-write.js';
+import { configHomeEnv, envFileIn, makeTempConfigHome } from '../helpers/config-home.js';
+import { fakeClock } from '../helpers/fake-clock.js';
 
 const GRAPH_VERSION = 'v25.0';
 const LONG_TOKEN = 'EAAlongLIVEDtokenVALUE0123456789abcXYZsecretZZ';
@@ -234,6 +245,241 @@ test('computeExpiresAtSec: undefined stays undefined; <=0 is 0; else now+lifetim
   assert.equal(computeExpiresAtSec(3600.9, 2_000_000), 2000 + 3600);
 });
 
+// --- Loopback capture of the authorization code -----------------------------
+
+/**
+ * A {@link CreateCallbackServer} that opens no socket. `send` drives one inbound
+ * request through the handler and returns what was written back; `listens` and
+ * `closes` record the lifecycle the capture is supposed to manage.
+ */
+function fakeCallbackServer(): {
+  create: CreateCallbackServer;
+  listens: Array<{ port: number; host: string }>;
+  closes: () => number;
+  send: (url: string) => { status: number; body: string };
+  fail: (err: Error) => void;
+} {
+  let handler: ((req: CallbackRequest, res: CallbackResponse) => void) | undefined;
+  let onError: ((err: Error) => void) | undefined;
+  const listens: Array<{ port: number; host: string }> = [];
+  let closeCount = 0;
+
+  const create: CreateCallbackServer = (h) => {
+    handler = h;
+    return {
+      listen: (port, host) => void listens.push({ port, host }),
+      close: () => void (closeCount += 1),
+      on: (_event, listener) => void (onError = listener),
+    };
+  };
+
+  return {
+    create,
+    listens,
+    closes: () => closeCount,
+    send: (url) => {
+      let status = 0;
+      let body = '';
+      handler?.(
+        { url },
+        {
+          writeHead: (s) => void (status = s),
+          end: (b) => void (body = b ?? ''),
+        },
+      );
+      return { status, body };
+    },
+    fail: (err) => onError?.(err),
+  };
+}
+
+/** True while `promise` has not settled (checked across a macrotask turn). */
+async function isPending(promise: Promise<unknown>): Promise<boolean> {
+  const marker = Symbol('pending');
+  const settled = await Promise.race([
+    promise.then(
+      () => 'resolved',
+      () => 'rejected',
+    ),
+    new Promise((resolve) => setTimeout(() => resolve(marker), 0)),
+  ]);
+  return settled === marker;
+}
+
+test('the default redirect URI is loopback-literal and matches the address the capture binds', async () => {
+  // Regression: with the URI spelled "localhost" and the listener bound to
+  // 127.0.0.1, macOS/Windows resolve localhost to ::1 first, the browser hits a
+  // closed socket and `login` waits forever.
+  const url = new URL(DEFAULT_REDIRECT_URI);
+  assert.equal(url.hostname, '127.0.0.1', 'the default must not be spelled "localhost"');
+
+  const server = fakeCallbackServer();
+  const clock = fakeClock(0);
+  const pending = captureAuthorizationCode(
+    { redirectUri: DEFAULT_REDIRECT_URI, state: 's' },
+    { createServerImpl: server.create, clock },
+  );
+
+  assert.deepEqual(server.listens, [{ port: 8723, host: url.hostname }]);
+  server.send('/callback?code=ok&state=s');
+  assert.equal(await pending, 'ok');
+});
+
+test('runLogin --help advertises the loopback default redirect URI', async () => {
+  const { deps, out } = stderrSink();
+  await runLogin(['--help'], deps);
+  assert.ok(out().includes(DEFAULT_REDIRECT_URI));
+  assert.ok(/verbatim/i.test(out()), 'help warns the URI must be registered verbatim');
+});
+
+test('listenHostFor normalizes localhost to IPv4 and refuses non-loopback hosts', () => {
+  assert.equal(listenHostFor('http://localhost:8723/callback'), '127.0.0.1');
+  assert.equal(listenHostFor('http://127.0.0.1:8723/callback'), '127.0.0.1');
+  assert.equal(listenHostFor('http://[::1]:8723/callback'), '::1');
+  assert.throws(
+    () => listenHostFor('http://0.0.0.0:8723/callback'),
+    (err: unknown) => isInstagramError(err) && err.kind === 'validation',
+  );
+  assert.throws(
+    () => listenHostFor('https://example.com/callback'),
+    (err: unknown) => isInstagramError(err) && err.kind === 'validation',
+  );
+});
+
+test('captureAuthorizationCode refuses a non-loopback redirect URI without binding anything', async () => {
+  const server = fakeCallbackServer();
+  await assert.rejects(
+    () =>
+      captureAuthorizationCode(
+        { redirectUri: 'http://192.168.1.10:8723/callback', state: 's' },
+        { createServerImpl: server.create, clock: fakeClock(0) },
+      ),
+    (err: unknown) => isInstagramError(err) && err.kind === 'validation',
+  );
+  assert.equal(server.listens.length, 0, 'nothing may listen on a routable interface');
+});
+
+test('captureAuthorizationCode ignores requests off the redirect path and keeps waiting', async () => {
+  // Regression: before the path check, ANY request carrying a `code` (a probe, a
+  // favicon fetch that inherited the query) could settle the capture.
+  const server = fakeCallbackServer();
+  const pending = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 'st8' },
+    { createServerImpl: server.create, clock: fakeClock(0) },
+  );
+
+  assert.equal(server.send('/').status, 404);
+  assert.equal(server.send('/favicon.ico?code=bogus&state=st8').status, 404);
+  assert.equal(await isPending(pending), true, 'off-path requests must not settle the capture');
+  assert.equal(server.closes(), 0, 'the listener stays open for the real redirect');
+
+  server.send('/callback?code=real&state=st8');
+  assert.equal(await pending, 'real');
+  assert.equal(server.closes(), 1, 'the listener is closed exactly once');
+});
+
+test('captureAuthorizationCode rejects a state mismatch and an explicit denial', async () => {
+  const mismatch = fakeCallbackServer();
+  const p1 = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 'expected' },
+    { createServerImpl: mismatch.create, clock: fakeClock(0) },
+  );
+  assert.equal(mismatch.send('/callback?code=c&state=forged').status, 400);
+  await assert.rejects(p1, (err: unknown) => isInstagramError(err) && err.kind === 'auth');
+  assert.equal(mismatch.closes(), 1);
+
+  const denied = fakeCallbackServer();
+  const p2 = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 's' },
+    { createServerImpl: denied.create, clock: fakeClock(0) },
+  );
+  denied.send('/callback?error=access_denied&error_description=User+said+no');
+  await assert.rejects(
+    p2,
+    (err: unknown) =>
+      isInstagramError(err) && err.kind === 'auth' && /User said no/.test(err.message),
+  );
+});
+
+test('captureAuthorizationCode times out on the injected clock with an actionable error', async () => {
+  // Regression: the capture had no deadline at all, so a redirect that never
+  // arrives (unregistered URI, wrong loopback family) hung `login` forever.
+  const server = fakeCallbackServer();
+  const clock = fakeClock(0);
+  const pending = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 's' },
+    { createServerImpl: server.create, clock, timeoutMs: 300_000 },
+  );
+
+  clock.advance(299_999);
+  assert.equal(await isPending(pending), true, 'the capture waits out its full budget');
+  assert.equal(server.closes(), 0);
+
+  clock.advance(1);
+  await assert.rejects(
+    pending,
+    (err: unknown) =>
+      isInstagramError(err) &&
+      /timed out/i.test(err.message) &&
+      err.message.includes('http://127.0.0.1:8723/callback') &&
+      /Valid OAuth Redirect URIs/i.test(err.message),
+  );
+  assert.equal(server.closes(), 1, 'the listener is released on timeout');
+});
+
+test('a captured code settles before the deadline and later time travel is inert', async () => {
+  const server = fakeCallbackServer();
+  const clock = fakeClock(0);
+  const pending = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 's' },
+    { createServerImpl: server.create, clock, timeoutMs: 300_000 },
+  );
+
+  const answer = server.send('/callback?code=good&state=s');
+  assert.equal(answer.status, 200);
+  assert.equal(await pending, 'good');
+
+  clock.advance(10 * 300_000); // The elapsed timeout must not re-settle or re-close.
+  assert.equal(await pending, 'good');
+  assert.equal(server.closes(), 1);
+});
+
+test('a listen failure surfaces as a validation error naming the address', async () => {
+  const server = fakeCallbackServer();
+  const pending = captureAuthorizationCode(
+    { redirectUri: 'http://127.0.0.1:8723/callback', state: 's' },
+    { createServerImpl: server.create, clock: fakeClock(0) },
+  );
+  server.fail(Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }));
+
+  await assert.rejects(
+    pending,
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.kind === 'validation' &&
+      err.message.includes('127.0.0.1:8723') &&
+      /EADDRINUSE/.test(err.message),
+  );
+});
+
+test('classifyCallbackRequest routes by path, error, code and state', () => {
+  const base = { expectedPath: '/callback', state: 'st' };
+  assert.equal(classifyCallbackRequest({ ...base, requestUrl: undefined }).kind, 'ignore');
+  assert.equal(classifyCallbackRequest({ ...base, requestUrl: '/other?code=c' }).kind, 'ignore');
+  assert.equal(classifyCallbackRequest({ ...base, requestUrl: '/callback' }).kind, 'ignore');
+  assert.equal(
+    classifyCallbackRequest({ ...base, requestUrl: '/callback?error=denied' }).kind,
+    'denied',
+  );
+  assert.equal(
+    classifyCallbackRequest({ ...base, requestUrl: '/callback?code=c&state=nope' }).kind,
+    'state-mismatch',
+  );
+  const ok = classifyCallbackRequest({ ...base, requestUrl: '/callback?code=c&state=st' });
+  assert.equal(ok.kind, 'code');
+  assert.equal(ok.kind === 'code' ? ok.code : undefined, 'c');
+});
+
 // --- runLogin: argument handling --------------------------------------------
 
 /** Collect stderr output for a runLogin invocation. */
@@ -402,7 +648,7 @@ test('runLogin returns 1 when an exchange fails', async () => {
 // --- runLogin end-to-end through the REAL writeCredentials -----------------
 
 test('runLogin wires the real writeCredentials: the token round-trips from the env file', async () => {
-  const configHome = await mkdtemp(path.join(tmpdir(), 'igmcp-login-'));
+  const configHome = await makeTempConfigHome('igmcp-login-');
   const { fetchFn } = routingFetch([
     {
       match: 'api.instagram.com/oauth/access_token',
@@ -413,20 +659,30 @@ test('runLogin wires the real writeCredentials: the token round-trips from the e
       body: { access_token: LONG_TOKEN, expires_in: 5184000 },
     },
   ]);
-  const { deps } = stderrSink();
+  const { deps, out } = stderrSink();
 
-  // No `persist` injected -> the default writeCredentials runs, resolving the
-  // config home from env.XDG_CONFIG_HOME (POSIX). The token is written, chmod'd,
-  // and must parse back through loadProfiles.
+  // No `persist` injected -> the real writeCredentials runs and resolves the
+  // config home from the env map below. That map MUST carry the variable the
+  // RUNNING platform reads (`%APPDATA%` on win32, `$XDG_CONFIG_HOME` elsewhere)
+  // — with neither present the resolver falls back to the developer's real
+  // config home and this write would replace a live IG_ACCESS_TOKEN there.
+  // `configHomeEnv` picks the right one; see test/helpers/config-home.ts.
   const code = await runLogin(['--path', 'ig', '--app-id', '55500', '--app-secret', APP_SECRET], {
     ...deps,
-    env: { XDG_CONFIG_HOME: configHome },
+    env: configHomeEnv(configHome),
     fetchFn,
     captureCode: async () => 'auth-code',
   });
 
   assert.equal(code, 0);
-  const filePath = path.join(configHome, 'instagram-mcp-ai', '.env');
+  const filePath = envFileIn(configHome);
+  // The success line names the file that was written: assert it is the temp one,
+  // so a write that escaped to the real config home fails loudly and precisely
+  // instead of surfacing as a bare ENOENT on the read below.
+  assert.ok(
+    out().includes(filePath),
+    `credentials were written outside the temp config home: ${out()}`,
+  );
   const env = dotenv.parse(await readFile(filePath, 'utf8'));
   const { profiles } = loadProfiles(env);
   assert.equal(profiles[0]?.accessToken, LONG_TOKEN);

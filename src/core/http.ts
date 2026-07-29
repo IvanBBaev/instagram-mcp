@@ -33,6 +33,12 @@ export interface IgRequestDeps {
   fetchImpl?: typeof fetch;
   /** Invoked on every response with the parsed rate-limit headers. */
   onUsage?: (host: GraphHost, usage: UsageSnapshot) => void;
+  /**
+   * Per-host concurrency counters. Defaults to the process-wide registry so the
+   * limit holds across every seam this factory produces; tests inject their own
+   * to stay hermetic (see {@link createSemaphoreRegistry}).
+   */
+  semaphores?: SemaphoreRegistry;
 }
 
 // --- Tunables (docs/operations.md §§1–2) -----------------------------------
@@ -83,6 +89,41 @@ function createSemaphore(max: number): Semaphore {
       }),
   };
 }
+
+/**
+ * Holder of the per-host semaphores. `IG_MAX_CONCURRENT` is a budget against
+ * **Meta**, not against a call site, so the counters must outlive any single
+ * {@link createIgRequest} call: the composition root builds a fresh seam per
+ * tool call, and a map owned by the factory would silently multiply the limit
+ * by the number of in-flight calls.
+ */
+export interface SemaphoreRegistry {
+  /**
+   * Take a slot for `host`, resolving with its release function. `max` is used
+   * only the first time a host is seen — `maxConcurrent` is resolved once per
+   * process by the composition root, so every caller passes the same value.
+   */
+  acquire(host: GraphHost, max: number): Promise<() => void>;
+}
+
+/** An independent set of per-host counters (one per process; tests make their own). */
+export function createSemaphoreRegistry(): SemaphoreRegistry {
+  // One semaphore per host, created lazily; only allowlisted hosts reach here.
+  const semaphores = new Map<GraphHost, Semaphore>();
+  return {
+    acquire(host: GraphHost, max: number): Promise<() => void> {
+      let sem = semaphores.get(host);
+      if (sem === undefined) {
+        sem = createSemaphore(max);
+        semaphores.set(host, sem);
+      }
+      return sem.acquire();
+    },
+  };
+}
+
+/** The registry every seam shares unless one is injected. */
+const sharedSemaphores = createSemaphoreRegistry();
 
 // --- Usage-header parsing (docs/operations.md §1) ---------------------------
 
@@ -156,13 +197,16 @@ function parseUsage(headers: Headers): UsageSnapshot {
 // --- Retry helpers ----------------------------------------------------------
 
 /**
- * A mapped error is retryable when it is a throttle (any method) or a transient
- * upstream failure on an idempotent call. `validation`/`auth`/`permission` are
- * never retried (docs/operations.md §2).
+ * A throttle or a transient upstream failure is retryable — but only on an
+ * idempotent call. A non-idempotent write is never replayed: Meta may have
+ * accepted it before the 429/5xx reached us, so retrying `media_publish` costs
+ * publishing quota and leaves a duplicate, publicly visible post, and retrying
+ * a comment write duplicates the comment (`api/publishing.ts`, docs/operations.md
+ * §2). `validation`/`auth`/`permission` are never retried at all. GET is
+ * idempotent by default, so read-path throttle retries are unaffected.
  */
 function isRetryableKind(kind: string, idempotent: boolean): boolean {
-  if (kind === 'rate_limit') return true;
-  if (kind === 'upstream') return idempotent;
+  if (kind === 'rate_limit' || kind === 'upstream') return idempotent;
   return false;
 }
 
@@ -213,21 +257,16 @@ async function readBody(res: Response): Promise<unknown> {
  * host, merges auth params, pins the version, enforces per-host concurrency and
  * a timeout, retries per the matrix, parses usage headers, and returns the
  * parsed JSON body.
+ *
+ * Cheap to call — the composition root builds one seam per tool call. The
+ * concurrency counters deliberately live outside this factory
+ * ({@link SemaphoreRegistry}) so `maxConcurrent` bounds the process, not the
+ * seam.
  */
 export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
   const { auth, settings, clock, log, onUsage } = deps;
   const doFetch = deps.fetchImpl ?? globalThis.fetch;
-
-  // One semaphore per host, created lazily; only allowlisted hosts reach here.
-  const semaphores = new Map<GraphHost, Semaphore>();
-  const semaphoreFor = (host: GraphHost): Semaphore => {
-    let sem = semaphores.get(host);
-    if (sem === undefined) {
-      sem = createSemaphore(settings.maxConcurrent);
-      semaphores.set(host, sem);
-    }
-    return sem;
-  };
+  const semaphores = deps.semaphores ?? sharedSemaphores;
 
   /** Parse usage headers, notify `onUsage`, and return the snapshot. */
   const reportUsage = (host: GraphHost, headers: Headers): UsageSnapshot => {
@@ -270,7 +309,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     // Never log the token or the query string (both carry secrets) — path only.
     log.debug('graph request', { method: opts.method, host, path: opts.path });
 
-    const release = await semaphoreFor(host).acquire();
+    const release = await semaphores.acquire(host, settings.maxConcurrent);
     try {
       for (let attempt = 0; ; attempt++) {
         const lastAttempt = attempt >= MAX_ATTEMPTS - 1;

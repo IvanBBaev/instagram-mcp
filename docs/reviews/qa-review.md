@@ -275,7 +275,7 @@ operations subsection):
 4. **Contract-fixture capture**: a `scripts/capture-fixtures.mjs` run against
    the live account records *sanitized* real Graph responses (error envelopes,
    usage headers, container status sequences, the already-published-container
-   error, the EXPIRED code) into `test/fixtures/graph/`. Mocked tests replay
+   error, the EXPIRED code) into `test/fixtures/`. Mocked tests replay
    these fixtures. This is the mechanism that keeps mocks honest and retires the
    docs' many **[verify]** items into pinned test data — including the
    double-post-risk claim (F4) and the exact 9007/EXPIRED and 2207051 subcodes.
@@ -416,7 +416,7 @@ Layout mirrors the reference: flat `test/*.test.js` over built output,
 | `live:publish` | story publish end-to-end (self-expiring) | manual only |
 | `live:destructive` | comment create → delete round-trip | manual only |
 | `live:acceptance-m2` | scripted M2 exit: image + reel, preview → apply, quota before/after | manual, once per milestone |
-| `scripts/capture-fixtures.mjs` | records sanitized live envelopes into `test/fixtures/graph/` | manual, on Graph-version bumps |
+| `scripts/capture-fixtures.mjs` | records sanitized live envelopes into `test/fixtures/` (flat, not the `graph/` subdirectory this review first proposed) | manual, on Graph-version bumps |
 
 **CI**: mocked suites on the full matrix (Node 20/22/24 × 3 OS) via `test:full`
 (build + test); live suites are never PR-triggered — `workflow_dispatch` with

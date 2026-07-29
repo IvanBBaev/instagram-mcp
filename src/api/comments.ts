@@ -17,12 +17,13 @@
  * but `id` is optional), CC-DATA-4 (`fetchAll` cap / off-by-one). A deleted
  * comment / media surfaces as a propagated InstagramError (CC-DATA-5).
  */
-import {
-  isInstagramError,
-  type GraphListResponse,
-  type IgRequestFn,
-  type IgRequestOptions,
-} from '../core/types.js';
+import type { IgRequestFn } from '../core/types.js';
+import { fetchPagedEdge, type PagedResult, type PageParams } from './media.js';
+
+// The cursor walk is shared with `api/media.ts` — one loop, one set of
+// termination guards. Re-exported so callers of this module keep seeing the
+// paging vocabulary here.
+export type { PagedResult, PageParams };
 
 // --- Field sets ------------------------------------------------------------
 
@@ -78,17 +79,6 @@ export interface TaggedMedia {
   username?: string;
 }
 
-/** Result envelope shared by every listing: items + a resume cursor + truncation flag. */
-export interface PagedResult<T> {
-  items: T[];
-  /** Cursor (`paging.cursors.after`) to continue from, when more remains. */
-  after?: string;
-  /** True iff the read was capped while more data genuinely remained (CC-DATA-4). */
-  truncated: boolean;
-  /** Non-fatal explanation (e.g. a cursor that went stale mid-listing). */
-  note?: string;
-}
-
 export type PagedComments = PagedResult<Comment>;
 export type PagedTaggedMedia = PagedResult<TaggedMedia>;
 
@@ -134,91 +124,6 @@ function normalizeCommentDetail(raw: RawCommentDetail): CommentDetail {
   return detail;
 }
 
-// --- Pagination ------------------------------------------------------------
-
-/** Shared paging inputs. `maxItems` is always supplied by the caller so the
- * api layer never reads settings itself. */
-export interface PageParams {
-  maxItems: number;
-  /** Per-page size hint forwarded to Graph's `limit`. */
-  limit?: number;
-  /** Opaque cursor (`paging.cursors.after`) to resume from. */
-  after?: string;
-  /** Page beyond the first, up to `maxItems`. Defaults to a single page. */
-  fetchAll?: boolean;
-}
-
-/**
- * Generic cursor paginator over a Graph edge, mirroring `api/media.ts`. Single
- * page by default; with `fetchAll` follows `paging.cursors.after` until the
- * edge is exhausted or `maxItems` is reached (CC-DATA-4). A cursor invalidated
- * between pages keeps the partial result with `truncated: true` and a `note`
- * (CC-DATA-1); a first-page failure propagates.
- */
-async function fetchPaged<TRaw, T>(
-  req: IgRequestFn,
-  build: (after: string | undefined) => IgRequestOptions,
-  params: PageParams,
-  normalize: (raw: TRaw) => T,
-): Promise<PagedResult<T>> {
-  const cap = Math.max(0, Math.floor(params.maxItems));
-  const items: T[] = [];
-  let cursor = params.after;
-  let resultAfter: string | undefined;
-  let truncated = false;
-  let note: string | undefined;
-  let pageIndex = 0;
-
-  for (;;) {
-    let page: GraphListResponse<TRaw>;
-    try {
-      page = await req<GraphListResponse<TRaw>>(build(cursor));
-    } catch (err) {
-      // CC-DATA-1: a cursor that went stale mid-listing keeps what we gathered.
-      if (pageIndex > 0 && isInstagramError(err)) {
-        note = 'cursor may be stale (data changed between pages) — restart the listing';
-        truncated = true;
-        break;
-      }
-      throw err;
-    }
-    pageIndex += 1;
-
-    const data = page.data ?? [];
-    let overflowed = false;
-    for (const item of data) {
-      if (items.length >= cap) {
-        overflowed = true;
-        break;
-      }
-      items.push(normalize(item));
-    }
-    const nextAfter = page.paging?.cursors?.after;
-
-    if (!params.fetchAll) {
-      // Single page: expose the cursor so the caller can continue explicitly.
-      resultAfter = nextAfter;
-      if (overflowed) truncated = true;
-      break;
-    }
-    if (items.length >= cap) {
-      // Capped: truncated only when more data genuinely remains (CC-DATA-4).
-      if (overflowed || nextAfter !== undefined) {
-        truncated = true;
-        resultAfter = nextAfter;
-      }
-      break;
-    }
-    if (nextAfter === undefined) break; // exhausted every page
-    cursor = nextAfter;
-  }
-
-  const result: PagedResult<T> = { items, truncated };
-  if (resultAfter !== undefined) result.after = resultAfter;
-  if (note !== undefined) result.note = note;
-  return result;
-}
-
 // --- Reads -----------------------------------------------------------------
 
 export interface ListCommentsParams extends PageParams {
@@ -234,7 +139,7 @@ export async function listComments(
   req: IgRequestFn,
   params: ListCommentsParams,
 ): Promise<PagedComments> {
-  return fetchPaged<RawComment, Comment>(
+  return fetchPagedEdge<RawComment, Comment>(
     req,
     (after) => ({
       method: 'GET',
@@ -276,7 +181,7 @@ export async function listTaggedMedia(
   req: IgRequestFn,
   params: ListTaggedMediaParams,
 ): Promise<PagedTaggedMedia> {
-  return fetchPaged<TaggedMedia, TaggedMedia>(
+  return fetchPagedEdge<TaggedMedia, TaggedMedia>(
     req,
     (after) => ({
       method: 'GET',

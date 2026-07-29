@@ -43,13 +43,15 @@
     "format:check": "prettier --check .",
     "test": "node --test \"dist/**/*.test.js\"",
     "test:full": "npm run build && npm test",
-    "coverage": "c8 --reporter=text --reporter=lcov npm test",
+    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --statements=95 --branches=86 --functions=85 --lines=95 npm test",
+    "audit": "npm audit --audit-level=high --omit=dev",
+    "audit:dev": "npm audit --audit-level=high",
     "gen:readme": "npm run build && node scripts/gen-readme.mjs",
-    "check": "npm run lint && npm run format:check && npm run build && npm test",
+    "check": "npm run lint && npm run format:check && npm run build && npm run coverage && npm run audit",
     "prepublishOnly": "npm run check"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^16.4.0",
     "zod": "^3.23.0"
   },

@@ -1,0 +1,33 @@
+{
+  "_synthetic": "Hand-written example, NOT a capture. Every value here was invented; see README.md in this directory. Fixtures written by scripts/capture-fixtures.mjs do not carry this marker.",
+  "data": [
+    {
+      "id": "17800000000000001",
+      "caption": "[synthetic text: 42 code points removed]",
+      "media_type": "IMAGE",
+      "media_product_type": "FEED",
+      "media_url": "https://example.invalid/media_url/1",
+      "permalink": "https://example.invalid/permalink/2",
+      "thumbnail_url": "https://example.invalid/thumbnail_url/3",
+      "timestamp": "2026-01-15T09:30:00+0000",
+      "like_count": 12,
+      "comments_count": 3
+    },
+    {
+      "id": "17800000000000002",
+      "caption": "[synthetic text: 8 code points removed]",
+      "media_type": "CAROUSEL_ALBUM",
+      "media_product_type": "FEED",
+      "permalink": "https://example.invalid/permalink/4",
+      "timestamp": "2026-01-14T18:02:11+0000",
+      "comments_count": 0
+    }
+  ],
+  "paging": {
+    "cursors": {
+      "before": "SYNTHETIC_OPAQUE_1",
+      "after": "SYNTHETIC_OPAQUE_2"
+    },
+    "next": "https://graph.facebook.com/v25.0/17800000000000003/media?after=SYNTHETIC_OPAQUE_2&limit=25"
+  }
+}

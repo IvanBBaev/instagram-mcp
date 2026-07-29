@@ -25,18 +25,22 @@ import {
   discoverBusiness,
   getHashtagMedia,
   searchHashtag,
+  INSTAGRAM_USERNAME_PATTERN,
   type BusinessDiscovery,
   type DiscoveredMedia,
   type HashtagMediaItem,
 } from '../api/discovery.js';
 
-// --- Hashtag-search budget (in-process, best-effort) -----------------------
+// --- Hashtag-search budget (in-process, advisory only) ---------------------
 // Meta enforces a 30-unique-hashtags / 7-days-per-account budget on
-// ig_hashtag_search. We surface a best-effort approximation so callers can
-// pace themselves. It is INTENTIONALLY not persisted: it lives in module memory
-// only, resets when the process restarts, and is not shared across processes
-// (v1 scope). Keyed by account id; each value maps a normalized hashtag to the
-// epoch-ms it was first seen inside the current rolling window.
+// ig_hashtag_search. This counter is an ADVISORY approximation so callers can
+// pace themselves — it is NOT an enforcement mechanism and must not be read as
+// one: nothing here blocks a search, `overBudget` only reports what this process
+// has seen, and the map lives in module memory, so it resets on every restart
+// and is not shared across processes (v1 scope). A long-lived stdio session is
+// the only case where the count is even approximately right; Meta's own
+// rejection remains the single hard signal. Keyed by account id; each value maps
+// a normalized hashtag to the epoch-ms it was first seen in the rolling window.
 
 const HASHTAG_BUDGET_LIMIT = 30;
 const HASHTAG_BUDGET_WINDOW_DAYS = 7;
@@ -79,7 +83,10 @@ function recordHashtagUsage(accountId: string, hashtag: string, nowMs: number): 
     windowDays: HASHTAG_BUDGET_WINDOW_DAYS,
     remaining: Math.max(0, HASHTAG_BUDGET_LIMIT - used),
     overBudget: used > HASHTAG_BUDGET_LIMIT,
-    note: 'In-process best-effort counter — resets on process restart, not persisted, not shared across processes (v1).',
+    note:
+      'Advisory counter, NOT an enforced limit: the server never blocks a search on it. ' +
+      'In-process only — resets on process restart, not persisted, not shared across processes ' +
+      "(v1). Meta's own rejection is the hard signal.",
   };
 }
 
@@ -169,8 +176,9 @@ const searchHashtagTool = defineTool({
     'Resolve a hashtag name to its Instagram hashtag id(s) via ' +
     'GET /ig_hashtag_search?user_id={ig-id}&q=<hashtag> (the returned id feeds ' +
     'instagram_get_hashtag_media). Budget: Meta allows only 30 UNIQUE hashtags ' +
-    'per account per rolling 7 days; the result carries a best-effort in-process ' +
-    'usage counter for this (it resets on process restart and is NOT persisted).' +
+    'per account per rolling 7 days; the result carries an ADVISORY in-process ' +
+    'counter for this — it is not an enforced limit (nothing is blocked on it), ' +
+    'it resets on process restart, and it is NOT persisted or shared.' +
     DISCOVERY_HONESTY,
   package: 'discovery',
   paths: ['fb-login'],
@@ -208,6 +216,9 @@ const getHashtagMediaTool = defineTool({
     '/{hashtag-id}/recent_media (choose via `edge`), which require the operated ' +
     "account's id as user_id. Results are capped at the server item cap " +
     '(IG_MAX_ITEMS) with paging.truncated=true when the page exceeded the cap. ' +
+    'To read the next page, pass the returned paging.after value back as `after`; ' +
+    'it is omitted when paging.truncated=true, because the cap cut the page mid-way ' +
+    'and no cursor can resume from there (lower `limit` instead). ' +
     'Captions are returned as fenced, untrusted text; the owner is not disclosed.' +
     DISCOVERY_HONESTY,
   package: 'discovery',
@@ -232,6 +243,14 @@ const getHashtagMediaTool = defineTool({
       .describe(
         'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that bounds the result.',
       ),
+    after: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Continuation cursor: the `paging.after` value returned by a previous call for the same ' +
+          'hashtag id and edge. Omit to read the first page.',
+      ),
   },
   output: {
     items: z.array(hashtagMediaOutput),
@@ -246,6 +265,7 @@ const getHashtagMediaTool = defineTool({
       edge: args.edge,
       maxItems: ctx.settings.maxItems,
       limit: args.limit,
+      after: args.after,
     });
 
     const paging: Record<string, unknown> = { truncated: page.truncated };
@@ -273,7 +293,17 @@ const discoverBusinessTool = defineTool({
       .string()
       .min(1)
       .max(30)
-      .describe('The target public Instagram handle to look up, without a leading "@".'),
+      // The handle is interpolated into a Graph field expression by the api
+      // layer, which has no escaping mechanism — so the input is constrained to
+      // the exact Instagram handle charset. `api/discovery` re-checks it.
+      .regex(
+        INSTAGRAM_USERNAME_PATTERN,
+        'must be a plain Instagram handle: letters, digits, "." and "_" only',
+      )
+      .describe(
+        'The target public Instagram handle to look up, without a leading "@". ' +
+          'Letters, digits, "." and "_" only (1-30 characters).',
+      ),
     mediaLimit: z
       .number()
       .int()

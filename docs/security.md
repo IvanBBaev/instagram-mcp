@@ -33,9 +33,11 @@
 
 ## 3. Network policy (SSRF)
 
-- Hard host allowlist: `graph.instagram.com`, `graph.facebook.com`,
-  `rupload.facebook.com`. Everything else — including redirect targets — is refused
-  in `core/host.ts` before the socket opens. No env override widens this in v1.
+- Hard host allowlist: `graph.instagram.com`, `graph.facebook.com` — those two and
+  nothing else. Everything else, including redirect targets, is refused in
+  `core/host.ts` before the socket opens. No env override widens this in v1.
+  `rupload.facebook.com` is deliberately **not** in the list: it joins only when a
+  resumable-upload phase ships, so v1 carries no dead allowlist entry.
 - `image_url`/`video_url` inputs are **passed to Meta**, not fetched locally — the
   server never retrieves user-supplied URLs itself. Consequence: publish previews
   cannot verify URL reachability, and say so ([tools.md](tools.md)). If a future
@@ -56,6 +58,45 @@
   rather than burning the last slots on retries.
 - Packages can be force-read-only (`IG_PACKAGES_READONLY`) — e.g. run `publishing`
   dark while testing prompts.
+
+### Design gate D3 — human confirmation (option (a): MCP elicitation) — **implemented**
+
+D3 asked whether write confirmation should be (a) an interactive MCP *elicitation*
+prompt or (b) env flags alone. **Option (a) is implemented**, layered on top of (b)
+rather than replacing it — the env flags remain the floor.
+
+- **Where.** `src/mcp/write-mode.ts` runs the confirmation as the *third* gate, after
+  `apply`/`IG_WRITE_MODE` and after `IG_ALLOW_DESTRUCTIVE` have both already said
+  yes. Placing it last is what makes the safety property structural: the step can
+  only ever turn an allowed write into a refused one. **It can never permit a write
+  the env flags blocked**, and it never prompts for a preview — a call that changes
+  nothing does not interrupt a human.
+- **The prompt.** A single required boolean, plus a server-built statement of the
+  tool verb, the account, the target id and whether the action is destructive. The
+  schema deliberately carries **no default**, so a client honouring
+  `elicitation.form.applyDefaults` cannot answer on the operator's behalf. Any text
+  relayed from Instagram (captions, comments) is rendered inside the standard
+  untrusted fence (§7) and announced as data, so upstream content cannot forge the
+  facts the human is approving. The access token and app secret are stripped from
+  the finished message and from anything the failure path logs.
+- **Fail closed.** The *only* outcome that permits the write is `accept` carrying an
+  explicit `confirm: true`. Decline, cancel, an accept with the box unchecked or
+  with no content, a timeout, a transport error, a protocol error, or a broken
+  capability probe all refuse. **A failure to reach the human is never read as
+  consent.**
+- **Fallback.** The prompt is sent only when the connected client advertises *form*
+  elicitation. A client without it — or one advertising only `elicitation.url`,
+  which cannot render this form — sees exactly the pre-existing env-flag behaviour,
+  unchanged. This is a real limitation, not a formality: against such a client
+  `apply: true` is still model-controllable, and `IG_WRITE_MODE`/`IG_ALLOW_DESTRUCTIVE`
+  are the whole of the protection.
+- **Known gaps** (deliberate, not oversights): the server cannot force a client to
+  support elicitation, so the fallback cannot be closed from this side; the request
+  is a server→client round trip, so over a stateless HTTP transport a client that
+  advertises the capability may be unreachable and its writes will be refused rather
+  than performed unconfirmed; and consent is **per call** — there is no "remember
+  this for the session", because that would recreate standing consent under a
+  different name (`IG_WRITE_MODE=apply` already exists for operators who want it).
 
 ## 5. Platform-side hardening
 

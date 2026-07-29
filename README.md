@@ -135,15 +135,18 @@ Credentials are read from `~/.config/instagram-mcp-ai/.env` (XDG), the project
 
 All settings are environment variables with the uniform `IG_` prefix; the
 canonical copy with inline comments is [`.env.example`](.env.example). Choose
-**exactly one** of the two Meta auth paths (set `IG_AUTH_MODE` only when both
-tokens are present):
+**exactly one** of the two Meta auth paths. Both read the account token from the
+**same** variable, `IG_ACCESS_TOKEN` — the path decides which host it is sent to
+and how it is signed:
 
-| Path | `IG_AUTH_MODE` | Token var | Host | Notes |
-| ---- | -------------- | --------- | ---- | ----- |
-| **A — Instagram Login** | `ig-login` | `IG_ACCESS_TOKEN` | `graph.instagram.com` | Token-only; `appsecret_proof` is **not** supported and never sent. The simplest path. |
-| **B — Facebook Login** | `fb-login` | `IG_FB_ACCESS_TOKEN` | `graph.facebook.com` | Page/system-user token; requests carry an `appsecret_proof` HMAC (needs `IG_APP_SECRET`). **Required for the discovery tools** (hashtag search, business discovery). |
+| Path | `IG_AUTH_MODE` | Host | Also needs | Notes |
+| ---- | -------------- | ---- | ---------- | ----- |
+| **A — Instagram Login** | `ig-login` | `graph.instagram.com` | — | `IG_ACCESS_TOKEN` holds a long-lived IG-login token. `appsecret_proof` is **not** supported and never sent. The simplest path. |
+| **B — Facebook Login** | `fb-login` | `graph.facebook.com` | `IG_APP_ID` + `IG_APP_SECRET` | `IG_ACCESS_TOKEN` holds a Page / system-user token; requests carry an `appsecret_proof` HMAC. **Required for the discovery tools** (hashtag search, business discovery). |
 
-When only one token is set the mode is auto-detected. Discovery tools are
+With `IG_AUTH_MODE` unset the path is inferred: `fb-login` when both
+`IG_APP_ID` and `IG_APP_SECRET` are set, otherwise `ig-login`. Set it explicitly
+to override (`IG_AUTH_PATH` is accepted as an alias). Discovery tools are
 capability-filtered to Path B, so on Path A they are not registered at all.
 
 ### `login` — obtain a long-lived token
@@ -208,16 +211,28 @@ explicit comma list of packages:
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
 | `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 25 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery (Path B for discovery) | 21 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 15 |
 | `publisher` | `account, media, publishing, comments` | publish and moderate | 21 |
 | `all` | every package | the full surface | 28 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
 packages after the profile resolves, and `IG_PACKAGES_READONLY` forces a
-package's write tools off (its read tools stay). Auth-path capability filtering
-runs on top — a `reader` profile on Path A drops the three `fb-login`-only
-discovery tools.
+package's write tools off (its read tools stay).
+
+`reader` is read-only **by name, not by arithmetic**: its `comments` and `media`
+packages do contain write tools, so selecting it forces every package it resolves
+to read-only, exactly as if `IG_PACKAGES_READONLY` had listed them all. No tool
+that posts, hides, deletes or toggles anything is ever registered under `reader`
+— that is why it exposes 15 tools and not 21. A hand-written package list is not
+a read-only boundary; only the profile name (or `IG_PACKAGES_READONLY`) is.
+
+Auth-path capability filtering runs on top: a tool restricted to one login path
+is registered only when at least one configured profile is on that path, and the
+per-call guard still rejects a mismatched `account` argument. So a deployment
+with Path A credentials only drops the four `fb-login`-only tools
+(`instagram_list_linked_accounts` plus the three discovery tools), while adding a
+single Path B profile alongside brings them back.
 
 ## Tools
 
@@ -272,9 +287,8 @@ file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
 <!-- BEGIN AUTOGEN:env -->
 | Variable | Default | Description |
 | --- | --- | --- |
-| `IG_AUTH_MODE` |  | ig-login \| fb-login (auto-detected when only one token is set) |
-| `IG_ACCESS_TOKEN` |  | Path A long-lived IG-login token (secret) |
-| `IG_FB_ACCESS_TOKEN` |  | Path B page/system-user token (secret) |
+| `IG_AUTH_MODE` |  | ig-login \| fb-login; alias IG_AUTH_PATH (inferred fb-login when IG_APP_ID+IG_APP_SECRET are set) |
+| `IG_ACCESS_TOKEN` |  | The account's long-lived token, whichever path (secret) |
 | `IG_ACCOUNT_ID` |  | IG professional-account ID (skip a lookup / disambiguate) |
 | `IG_APP_ID` |  | Meta app id (token exchange/refresh, appsecret_proof, debug_token) |
 | `IG_APP_SECRET` |  | Meta app secret (secret) |
@@ -285,6 +299,7 @@ file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
 | `IG_PACKAGES_READONLY` |  | Packages forced read-only |
 | `IG_WRITE_MODE` | `preview` | preview \| apply (standing consent for writes) |
 | `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (delete_comment) |
+| `IG_WRITE_JOURNAL` |  | Applied-write audit log (default: $XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl) |
 | `IG_TRANSPORT` | `stdio` | stdio \| http |
 | `IG_HTTP_HOST` | `127.0.0.1` |  |
 | `IG_PORT` | `3000` |  |

@@ -1,8 +1,10 @@
 /**
  * Unit tests for credential persistence (src/core/config-write.ts).
  *
- * Every test writes to a throwaway temp directory via the `configDir` injection
- * point, so the real config home is never touched. The central guarantee is a
+ * Every test writes to a throwaway temp directory — via the `configDir`
+ * injection point, or (for the resolution tests) via an `env` map built by
+ * `test/helpers/config-home.ts`, which sets the variable the RUNNING platform
+ * reads. The real config home is never touched. The central guarantee is a
  * round-trip: what {@link writeCredentials} writes must parse back through the
  * same dotenv + {@link loadProfiles} scheme `core/config.ts` reads, for both the
  * default (`IG_*`) and named (`IG_PROFILE_<NAME>_*`) key layouts. Secret safety
@@ -11,16 +13,20 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
 
-import { writeCredentials } from '../../src/core/config-write.js';
+import { resolveConfigHome, writeCredentials } from '../../src/core/config-write.js';
 import { loadProfiles } from '../../src/core/config.js';
 import { isInstagramError } from '../../src/core/types.js';
-
-const SERVER_DIR = 'instagram-mcp-ai';
+import {
+  SERVER_DIR,
+  configHomeEnv,
+  envFileIn,
+  makeTempConfigHome,
+} from '../helpers/config-home.js';
 
 /** A distinctive, token-shaped secret so redaction assertions are meaningful. */
 const LONG_TOKEN = 'EAAlongLIVEDtokenVALUE0123456789abcXYZsecretZZ';
@@ -28,7 +34,7 @@ const APP_SECRET = 'app-secret-value-0123456789abcdef';
 
 /** Fresh temp config-home base for one test. */
 async function tempConfigDir(): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), 'igmcp-cfgwrite-'));
+  return makeTempConfigHome('igmcp-cfgwrite-');
 }
 
 /** Parse a written env file back into a plain env map (as dotenv/loadProfiles see it). */
@@ -241,6 +247,45 @@ test('the env file is chmod 0600 on POSIX', async () => {
     const mode = (await stat(res.path)).mode & 0o777;
     assert.equal(mode, 0o600, `expected 0600, got 0o${mode.toString(8)}`);
   }
+});
+
+// --- Config-home resolution (the path taken with NO configDir override) ----
+
+test('without a configDir override the env file lands under the platform config home', async () => {
+  const home = await makeTempConfigHome('igmcp-cfghome-');
+  const res = await writeCredentials(
+    'default',
+    { accessToken: LONG_TOKEN, authPath: 'ig-login' },
+    { env: configHomeEnv(home) },
+  );
+
+  assert.equal(res.path, envFileIn(home), 'the write must stay inside the injected config home');
+  const { profiles } = loadProfiles(await parseEnvFile(res.path));
+  assert.equal(profiles[0]?.accessToken, LONG_TOKEN);
+});
+
+test('resolveConfigHome reads APPDATA on win32 and XDG_CONFIG_HOME elsewhere', () => {
+  const dir = path.join(tmpdir(), 'igmcp-resolve-home');
+  const onWindows = process.platform === 'win32';
+  // The documented per-platform default when the variable is absent or blank.
+  const fallback = onWindows
+    ? path.join(homedir(), 'AppData', 'Roaming')
+    : path.join(homedir(), '.config');
+
+  assert.equal(resolveConfigHome(configHomeEnv(dir)), dir, "the platform's own variable wins");
+  assert.equal(resolveConfigHome(configHomeEnv('   ')), fallback, 'a blank value is ignored');
+  assert.equal(resolveConfigHome({}), fallback, 'an empty env falls back to the default');
+
+  // The OTHER platform's variable must NOT be honored: a resolver that read it
+  // would send credentials into the real user config home on that platform.
+  const otherPlatformOnly: NodeJS.ProcessEnv = onWindows
+    ? { XDG_CONFIG_HOME: dir }
+    : { APPDATA: dir };
+  assert.equal(
+    resolveConfigHome(otherPlatformOnly),
+    fallback,
+    "the other platform's variable is ignored",
+  );
 });
 
 // --- Validation ------------------------------------------------------------

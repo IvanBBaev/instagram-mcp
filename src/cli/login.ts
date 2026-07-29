@@ -12,9 +12,10 @@
  * and secret plus a redirect URI whitelisted in the app's OAuth settings. This
  * module therefore cannot be exercised end-to-end here; what IS verified by the
  * unit tests is the reusable core: authorize-URL construction, both token
- * exchanges (against an injected `fetch`), the expiry math, and persistence via
- * {@link writeCredentials}. The loopback redirect capture is a thin, best-effort
- * helper and is not part of the tested surface.
+ * exchanges (against an injected `fetch`), the expiry math, persistence via
+ * {@link writeCredentials}, and — through injected server/clock fakes, never a
+ * real socket or a real timer — the loopback capture's routing, `state` check
+ * and timeout ({@link captureAuthorizationCode}).
  *
  * The OAuth token endpoints (api.instagram.com, graph.*) are addressed here with
  * an injected `fetch`, deliberately outside the runtime SSRF allowlist in
@@ -24,6 +25,8 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 
+import { systemClock } from '../core/clock.js';
+import type { Clock } from '../core/clock.js';
 import { GRAPH_VERSION } from '../core/host.js';
 import { DEFAULT_PROFILE_NAME } from '../core/config.js';
 import { InstagramError } from '../core/types.js';
@@ -38,9 +41,34 @@ const IG_GRAPH_BASE = 'https://graph.instagram.com';
 const FB_WWW_BASE = 'https://www.facebook.com';
 const FB_GRAPH_BASE = 'https://graph.facebook.com';
 
-/** Loopback redirect used to capture the authorization `code` (127.0.0.1). */
+/**
+ * Loopback redirect used to capture the authorization `code`.
+ *
+ * The host is the literal `127.0.0.1`, NOT `localhost`, and it must stay that
+ * way: {@link captureAuthorizationCode} binds a single loopback address, while
+ * `localhost` resolves to `::1` before `127.0.0.1` on most macOS and Windows
+ * boxes. With the two spellings disagreeing the browser hits a closed IPv6
+ * socket, the `code` never arrives, and `login` waits forever.
+ *
+ * OPERATOR NOTE: this exact string is what Meta redirects to, so it must be
+ * registered verbatim in the Meta app (App settings → Instagram/Facebook Login →
+ * Valid OAuth Redirect URIs). An app whitelisted with the old
+ * `http://localhost:8723/callback` must have `http://127.0.0.1:8723/callback`
+ * added (or `--redirect-uri` passed) — Meta matches redirect URIs literally.
+ */
 const DEFAULT_REDIRECT_PORT = 8723;
-const DEFAULT_REDIRECT_URI = `http://localhost:${DEFAULT_REDIRECT_PORT}/callback`;
+/** The only loopback addresses this CLI will bind (see {@link listenHostFor}). */
+const LOOPBACK_IPV4 = '127.0.0.1';
+const LOOPBACK_IPV6 = '::1';
+export const DEFAULT_REDIRECT_URI = `http://${LOOPBACK_IPV4}:${DEFAULT_REDIRECT_PORT}/callback`;
+
+/**
+ * Absolute budget for the browser round-trip. Without it a redirect that never
+ * arrives (wrong/unregistered redirect URI, closed browser tab, loopback
+ * mismatch) leaves `login` hanging with no diagnostic — defect: the listener had
+ * no timeout at all.
+ */
+const CAPTURE_TIMEOUT_MS = 5 * 60_000;
 
 /** Default granular scopes per path (docs/auth.md §1). */
 const DEFAULT_SCOPES: Record<AuthPath, readonly string[]> = {
@@ -280,50 +308,226 @@ export function computeExpiresAtSec(
   return Math.floor(nowMs / 1000) + Math.floor(expiresInSec);
 }
 
-// --- Best-effort loopback capture (not part of the tested surface) ----------
+// --- Loopback capture of the authorization code -----------------------------
+
+/** The subset of a `node:http` request this module reads. */
+export interface CallbackRequest {
+  url?: string | undefined;
+}
+
+/** The subset of a `node:http` response this module drives. */
+export interface CallbackResponse {
+  writeHead(status: number, headers?: Record<string, string>): void;
+  end(body?: string): void;
+}
+
+/** The subset of a `node:http` server this module drives. */
+export interface CallbackServer {
+  listen(port: number, host: string): void;
+  close(): void;
+  on(event: 'error', listener: (err: Error) => void): void;
+}
+
+/** Server factory seam — `node:http` in production, a fake (no socket) in tests. */
+export type CreateCallbackServer = (
+  handler: (req: CallbackRequest, res: CallbackResponse) => void,
+) => CallbackServer;
+
+const defaultCreateServer: CreateCallbackServer = (handler) =>
+  createServer((req, res) => {
+    handler(req, res);
+  });
+
+/** What the listener should do with one inbound request. */
+export type CallbackOutcome =
+  | { kind: 'ignore'; status: number; body: string }
+  | { kind: 'code'; code: string; status: number; body: string }
+  | { kind: 'denied'; status: number; body: string; reason: string }
+  | { kind: 'state-mismatch'; status: number; body: string };
 
 /**
- * Bind a loopback HTTP server to the redirect URI's port and resolve with the
- * `code` once the browser is redirected back. Best-effort: it validates the
- * `state` and closes on the first matching request. Injected out in tests.
+ * Decide what an inbound loopback request means. Pure, so the routing rules are
+ * testable without a socket.
+ *
+ * The **path check** is load-bearing: anything on this port that is not the
+ * redirect path (a stray `GET /`, a probe, a favicon fetch that inherited the
+ * query string) is answered 404 and ignored, so it can neither resolve the
+ * capture with a bogus `code` nor abort a login that is still in flight.
  */
-function captureAuthorizationCode(params: { redirectUri: string; state: string }): Promise<string> {
+export function classifyCallbackRequest(params: {
+  requestUrl: string | undefined;
+  expectedPath: string;
+  state: string;
+}): CallbackOutcome {
+  // The base is only a parsing anchor — a loopback listener has no other origin.
+  const url = new URL(params.requestUrl ?? '/', `http://${LOOPBACK_IPV4}`);
+  if (url.pathname !== params.expectedPath) {
+    return { kind: 'ignore', status: 404, body: 'Not found.' };
+  }
+
+  const error = url.searchParams.get('error');
+  if (error !== null) {
+    return {
+      kind: 'denied',
+      status: 400,
+      body: 'Authorization failed. You may close this window.',
+      reason: url.searchParams.get('error_description') ?? error,
+    };
+  }
+
+  const code = url.searchParams.get('code');
+  if (code === null) {
+    return { kind: 'ignore', status: 400, body: 'Missing authorization code.' };
+  }
+  if (url.searchParams.get('state') !== params.state) {
+    return { kind: 'state-mismatch', status: 400, body: 'State mismatch — request rejected.' };
+  }
+  return {
+    kind: 'code',
+    code,
+    status: 200,
+    body: 'Login complete. You may close this window and return to the terminal.',
+  };
+}
+
+/**
+ * The address to bind for a redirect URI. Only loopback is accepted: binding a
+ * routable interface would expose the authorization-code catcher to the network.
+ * `localhost` is normalized to {@link LOOPBACK_IPV4} — Node would resolve it and
+ * bind whichever family DNS returns first, which is precisely the mismatch this
+ * CLI must avoid (see {@link DEFAULT_REDIRECT_URI}).
+ */
+export function listenHostFor(redirectUri: string): string {
+  const hostname = new URL(redirectUri).hostname.toLowerCase();
+  if (hostname === LOOPBACK_IPV4 || hostname === 'localhost') return LOOPBACK_IPV4;
+  // The WHATWG URL parser keeps IPv6 hosts bracketed; `listen` wants them bare.
+  if (hostname === `[${LOOPBACK_IPV6}]` || hostname === LOOPBACK_IPV6) return LOOPBACK_IPV6;
+  throw new InstagramError(
+    `login can only capture the OAuth redirect on loopback, but --redirect-uri points at "${hostname}". ` +
+      `Use ${DEFAULT_REDIRECT_URI} (and register it in your Meta app), or capture the code yourself.`,
+    { kind: 'validation' },
+  );
+}
+
+/** Injectable collaborators for {@link captureAuthorizationCode}. */
+export interface CaptureDeps {
+  /** Server factory. Defaults to `node:http`; tests inject a socket-free fake. */
+  createServerImpl?: CreateCallbackServer;
+  /** Clock the timeout runs on. Defaults to the system clock. */
+  clock?: Clock;
+  /** Absolute wait budget. Defaults to {@link CAPTURE_TIMEOUT_MS} (5 minutes). */
+  timeoutMs?: number;
+}
+
+/**
+ * Bind a loopback HTTP server on the redirect URI's port and resolve with the
+ * `code` once the browser is redirected back.
+ *
+ * Guarantees: it binds the address the redirect URI names (loopback only), only
+ * requests on the redirect **path** are considered, the OAuth `state` must
+ * match, and the wait is bounded by `timeoutMs` — after which the listener is
+ * closed and the promise rejects with a message naming the likely causes. The
+ * server is closed on every exit path.
+ */
+export function captureAuthorizationCode(
+  params: { redirectUri: string; state: string },
+  deps: CaptureDeps = {},
+): Promise<string> {
   const url = new URL(params.redirectUri);
   const port = url.port !== '' ? Number(url.port) : DEFAULT_REDIRECT_PORT;
+  const expectedPath = url.pathname === '' ? '/' : url.pathname;
+  const clock = deps.clock ?? systemClock;
+  const timeoutMs = deps.timeoutMs ?? CAPTURE_TIMEOUT_MS;
+  const createServerImpl = deps.createServerImpl ?? defaultCreateServer;
+
+  let listenHost: string;
+  try {
+    listenHost = listenHostFor(params.redirectUri);
+  } catch (err) {
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
 
   return new Promise<string>((resolve, reject) => {
-    const server = createServer((req, res) => {
-      const reqUrl = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
-      const code = reqUrl.searchParams.get('code');
-      const state = reqUrl.searchParams.get('state');
-      const error = reqUrl.searchParams.get('error');
+    let settled = false;
+    // Aborting cancels the pending timeout sleep (and clears its timer, so a
+    // successful login does not hold the event loop open for five minutes).
+    const finished = new AbortController();
 
-      if (error !== null) {
-        res.writeHead(400, { 'content-type': 'text/plain' });
-        res.end('Authorization failed. You may close this window.');
-        server.close();
-        reject(new InstagramError(`Authorization was denied: ${error}`, { kind: 'auth' }));
-        return;
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      finished.abort();
+      server.close();
+      action();
+    };
+
+    const server = createServerImpl((req, res) => {
+      const outcome = classifyCallbackRequest({
+        requestUrl: req.url,
+        expectedPath,
+        state: params.state,
+      });
+      res.writeHead(outcome.status, { 'content-type': 'text/plain' });
+      res.end(outcome.body);
+
+      switch (outcome.kind) {
+        case 'ignore':
+          return; // Not the redirect — keep waiting.
+        case 'code':
+          settle(() => resolve(outcome.code));
+          return;
+        case 'denied':
+          settle(() =>
+            reject(
+              new InstagramError(`Authorization was denied: ${outcome.reason}`, {
+                kind: 'auth',
+              }),
+            ),
+          );
+          return;
+        case 'state-mismatch':
+          settle(() =>
+            reject(new InstagramError('OAuth state mismatch — aborting.', { kind: 'auth' })),
+          );
+          return;
       }
-      if (code !== null) {
-        const ok = state === params.state;
-        res.writeHead(ok ? 200 : 400, { 'content-type': 'text/plain' });
-        res.end(
-          ok
-            ? 'Login complete. You may close this window and return to the terminal.'
-            : 'State mismatch — request rejected.',
-        );
-        server.close();
-        if (ok) resolve(code);
-        else reject(new InstagramError('OAuth state mismatch — aborting.', { kind: 'auth' }));
-        return;
-      }
-      // Unrelated request (e.g. favicon) — acknowledge without resolving.
-      res.writeHead(204);
-      res.end();
     });
-    server.on('error', reject);
-    server.listen(port, '127.0.0.1');
+
+    server.on('error', (err) => {
+      settle(() =>
+        reject(
+          new InstagramError(
+            `Could not listen on ${listenHost}:${port} for the OAuth redirect (${err.message}). ` +
+              'Another login may be running, or the port is taken — pass --redirect-uri with a free ' +
+              'port that is also registered in your Meta app.',
+            { kind: 'validation', cause: err },
+          ),
+        ),
+      );
+    });
+
+    server.listen(port, listenHost);
+
+    void clock.sleep(timeoutMs, finished.signal).then(
+      () => {
+        settle(() =>
+          reject(
+            new InstagramError(
+              `Timed out after ${Math.round(timeoutMs / 60_000)} minute(s) waiting for the OAuth ` +
+                `redirect to ${params.redirectUri}. Check that this EXACT URI is registered in your ` +
+                'Meta app (App settings -> Instagram/Facebook Login -> Valid OAuth Redirect URIs), ' +
+                'that you completed the browser prompt, and that the redirect URI host matches the ' +
+                `address this listener bound (${listenHost}) — a URI spelled "localhost" can resolve ` +
+                'to ::1 and never reach it.',
+              { kind: 'upstream' },
+            ),
+          ),
+        );
+      },
+      () => {
+        // Aborted because the capture already settled — nothing to do.
+      },
+    );
   });
 }
 
@@ -380,9 +584,12 @@ Options:
   --help, -h             Show this help.
 
 A live login requires a REGISTERED META APP: the app id/secret above and a
-redirect URI whitelisted in the app's OAuth settings. Without those it cannot
-run — there is no offline login. The token is written to the XDG/APPDATA env
-file (chmod 0600 on POSIX) and is never printed.
+redirect URI whitelisted in the app's OAuth settings. Meta matches redirect URIs
+literally, so the value above must be registered VERBATIM under
+"Valid OAuth Redirect URIs" — "127.0.0.1" and "localhost" are different entries,
+and only the loopback address is bound here. Without those it cannot run — there
+is no offline login. The token is written to the XDG/APPDATA env file
+(chmod 0600 on POSIX) and is never printed.
 `;
 
 function clean(value: string | undefined): string | undefined {
@@ -522,7 +729,17 @@ export async function runLogin(argv: string[], deps: LoginDeps = {}): Promise<nu
     stderr(`Open this URL in a browser to authorize (${path}):\n${authorizeUrl}\n`);
     if (deps.openUrl !== undefined) await deps.openUrl(authorizeUrl);
 
-    const capture = deps.captureCode ?? ((p) => captureAuthorizationCode(p));
+    // The waiting notice belongs to the real listener only — an injected capture
+    // (tests, or an operator pasting the code) does not bind a socket or wait.
+    let capture = deps.captureCode;
+    if (capture === undefined) {
+      stderr(
+        `Waiting up to ${Math.round(CAPTURE_TIMEOUT_MS / 60_000)} minutes for the redirect to ` +
+          `${redirectUri}. That EXACT URI must be listed under the Meta app's Valid OAuth ` +
+          'Redirect URIs, or the browser never comes back here.\n',
+      );
+      capture = (p) => captureAuthorizationCode(p);
+    }
     const code = await capture({ redirectUri, state, authorizeUrl });
 
     const short = await exchangeCodeForToken(

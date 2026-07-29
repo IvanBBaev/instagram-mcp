@@ -247,6 +247,91 @@ test('path A (ig-login): states debug_token is unavailable and does not crash', 
   assert.equal(calls.length, 1, 'only the reachability GET is issued');
 });
 
+// --- package summary (must match the registry, not a hardcoded guess) ------
+
+/** The `Active packages:` line of a report, without its status prefix. */
+function packagesLine(report: string): string {
+  const line = report.split('\n').find((l) => l.includes('Active packages:'));
+  assert.ok(line !== undefined, 'the report has an Active packages line');
+  return line;
+}
+
+function healthyReq(): IgRequestFn {
+  return fakeReq(
+    routing({
+      debug: () => ({ data: { is_valid: true, expires_at: (NOW + 200 * DAY) / 1000, scopes: [] } }),
+      account: () => ({ id: '178414', username: 'acme' }),
+    }),
+  ).req;
+}
+
+test('the default package summary names the real core profile, including its write packages', async () => {
+  const res = await runDoctor({
+    req: healthyReq(),
+    profile: fbProfile(),
+    settings: baseSettings,
+    nowMs: NOW,
+    env: {},
+  });
+
+  const line = packagesLine(res.report);
+  // The registry's core profile is account, media, publishing, comments,
+  // insights — under-reporting it hides 12 write tools from the operator.
+  for (const pkg of ['account', 'media', 'publishing', 'comments', 'insights']) {
+    assert.ok(line.includes(pkg), `the packages line names '${pkg}': ${line}`);
+  }
+});
+
+test('an explicitly selected profile is expanded into the packages it resolves to', async () => {
+  const res = await runDoctor({
+    req: healthyReq(),
+    profile: fbProfile(),
+    settings: baseSettings,
+    nowMs: NOW,
+    env: { IG_TOOL_PACKAGES: 'publisher' },
+  });
+
+  const line = packagesLine(res.report);
+  assert.ok(line.includes('publisher'), 'the selection itself is echoed');
+  for (const pkg of ['account', 'media', 'publishing', 'comments']) {
+    assert.ok(line.includes(pkg), `the packages line names '${pkg}': ${line}`);
+  }
+  assert.ok(!line.includes('insights'), 'publisher does not include insights');
+});
+
+test('the reader profile is reported as forced read-only', async () => {
+  const res = await runDoctor({
+    req: healthyReq(),
+    profile: fbProfile(),
+    settings: baseSettings,
+    nowMs: NOW,
+    env: { IG_TOOL_PACKAGES: 'reader' },
+  });
+
+  assert.ok(
+    packagesLine(res.report).includes('forced read-only'),
+    'the read-only guarantee of the reader profile is surfaced',
+  );
+});
+
+test('deny and read-only refinements are surfaced in the package summary', async () => {
+  const res = await runDoctor({
+    req: healthyReq(),
+    profile: fbProfile(),
+    settings: baseSettings,
+    nowMs: NOW,
+    env: {
+      IG_TOOL_PACKAGES: 'all',
+      IG_PACKAGES_DENY: 'insights',
+      IG_PACKAGES_READONLY: 'comments',
+    },
+  });
+
+  const line = packagesLine(res.report);
+  assert.ok(line.includes('deny: insights'), 'the deny list is shown');
+  assert.ok(line.includes('read-only: comments'), 'the forced read-only list is shown');
+});
+
 test('runDoctor tolerates an omitted nowMs (defaults to the wall clock)', async () => {
   const { req } = fakeReq(
     routing({

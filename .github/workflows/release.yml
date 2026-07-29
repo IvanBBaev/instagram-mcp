@@ -19,13 +19,22 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Publishing is not cancellable: a half-run publish cannot be undone, so
+# concurrent releases queue instead of superseding each other.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
-  id-token: write # npm provenance attestation (OIDC)
 
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation (OIDC)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,6 +42,20 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+      # npm rejects a duplicate version, but a tag/version mismatch would
+      # silently publish something other than what the release announces — and
+      # the git tag is what the changelog and provenance point at. Fail early.
+      - name: Verify release tag matches package.json version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$RELEASE_TAG" != "$PKG_VERSION" ]; then
+            echo "::error::Release tag '$RELEASE_TAG' does not match package.json version '$PKG_VERSION'"
+            exit 1
+          fi
+          echo "Release tag '$RELEASE_TAG' matches package.json."
       - run: npm ci
       # Runs prepublishOnly (npm run check) internally, then publishes with
       # provenance (publishConfig.provenance + the id-token permission above).

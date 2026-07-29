@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Writable } from 'node:stream';
 
 import { createLogger } from '../../src/core/log.js';
+import { createRedactor } from '../../src/core/redact.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 
 interface Collector {
@@ -133,6 +134,47 @@ test('the injected redactor is applied to the merged fields object', () => {
     safe: true,
     token: '[REDACTED]',
   });
+});
+
+test('the injected redactor also scrubs the message string', () => {
+  const sink = collector();
+  const secret = 'EAAGm0PX4ZCpsBA' + 'x'.repeat(40);
+  const redact = createRedactor({ extraSecrets: [secret] });
+  const log = createLogger({ level: 'debug', stream: sink.stream, clock: fakeClock(7), redact });
+
+  // An interpolated message is the realistic leak: a Graph error text or a URL
+  // carrying `access_token=` reaches the sink as `msg`, not as a field.
+  log.error(`request failed: https://graph.facebook.com/me?access_token=${secret}`);
+
+  const raw = sink.raw();
+  assert.equal(raw.includes(secret), false, 'the secret must not reach the stream');
+  assert.match(String(sink.records()[0]?.msg), /access_token=\[REDACTED\]/);
+});
+
+test('a message-only leak of a token-shaped string is masked without registration', () => {
+  const sink = collector();
+  const log = createLogger({
+    level: 'debug',
+    stream: sink.stream,
+    clock: fakeClock(1),
+    redact: createRedactor(),
+  });
+
+  log.warn('token EAA0123456789abcdefghijklmnop rejected by Meta');
+
+  assert.equal(sink.records()[0]?.msg, 'token [REDACTED] rejected by Meta');
+});
+
+test('a redactor that does not return a string leaves msg intact', () => {
+  const sink = collector();
+  // An object-only redactor (returns a record for any input) must not turn the
+  // message into "[object Object]" — msg falls back to the original string.
+  const redact = (): unknown => ({});
+  const log = createLogger({ level: 'debug', stream: sink.stream, clock: fakeClock(1), redact });
+
+  log.info('plain message');
+
+  assert.deepEqual(sink.records()[0], { level: 'info', msg: 'plain message', time: 1 });
 });
 
 test('time advances with the injected clock', () => {

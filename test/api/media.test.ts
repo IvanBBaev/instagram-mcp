@@ -121,6 +121,82 @@ test('listMedia fetchAll keeps a partial result when a cursor goes stale mid-lis
   assert.equal(calls.length, 2);
 });
 
+// --- fetchAll termination guards -------------------------------------------
+//
+// Every case below would spin forever (or replay the same request) without a
+// bound in the cursor walk. The fake edge therefore trips a plain `Error` once
+// the call count is clearly past what a correct walk needs: it is NOT an
+// InstagramError, so the CC-DATA-1 branch cannot swallow it and a runaway loop
+// fails the test loudly instead of hanging the suite.
+function runawayGuard(limit: number): () => void {
+  let n = 0;
+  return () => {
+    n += 1;
+    if (n > limit) throw new Error(`runaway pagination: ${n} requests for a bounded walk`);
+  };
+}
+
+test('listMedia fetchAll stops when a page returns no items but still advertises a cursor', async () => {
+  // Graph does this for privacy-filtered / deleted items: `data: []` with a live
+  // `after`. The cap can then never be reached, so only a progress guard ends it.
+  const guard = runawayGuard(6);
+  const responder = (opts: IgRequestOptions) => {
+    guard();
+    const after = opts.params?.after;
+    if (after === undefined) return { data: [{ id: '1' }], paging: { cursors: { after: 'A1' } } };
+    return { data: [], paging: { cursors: { after: `${String(after)}+` } } };
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await listMedia(req, { igAccountId: '999', maxItems: 100, fetchAll: true });
+
+  assert.equal(calls.length, 2); // first page, then the empty one that ends it
+  assert.deepEqual(
+    res.items.map((i) => i.id),
+    ['1'],
+  );
+  assert.equal(res.truncated, true); // more may remain — never reported complete
+  assert.equal(res.after, 'A1+'); // resumable exactly where the walk gave up
+  assert.ok(res.note?.includes('no items'));
+});
+
+test('listMedia fetchAll stops when the edge repeats the same cursor (no forward progress)', async () => {
+  // A repeated `after` means the next request is byte-for-byte the previous one.
+  const guard = runawayGuard(6);
+  const responder = () => {
+    guard();
+    return { data: [{ id: '1' }, { id: '2' }], paging: { cursors: { after: 'STUCK' } } };
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await listMedia(req, { igAccountId: '999', maxItems: 100, fetchAll: true });
+
+  assert.equal(calls.length, 2); // page 1, then the page that repeats its cursor
+  assert.equal(res.items.length, 4);
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'STUCK');
+  assert.ok(res.note?.includes('same cursor'));
+});
+
+test('listMedia fetchAll stops at the per-call page ceiling and stays resumable', async () => {
+  // A huge maxItems with one item per page: only the page ceiling ends this.
+  const guard = runawayGuard(80);
+  const responder = (opts: IgRequestOptions) => {
+    guard();
+    const n = opts.params?.after === undefined ? 0 : Number(String(opts.params.after).slice(1));
+    return { data: [{ id: String(n) }], paging: { cursors: { after: `A${n + 1}` } } };
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await listMedia(req, { igAccountId: '999', maxItems: 10_000, fetchAll: true });
+
+  assert.equal(calls.length, 50);
+  assert.equal(res.items.length, 50);
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'A50');
+  assert.ok(res.note?.includes('50 pages'));
+});
+
 test('listMedia propagates a first-page error instead of hiding it', async () => {
   const { req } = fakeReq(() => {
     throw new InstagramError('boom', { kind: 'upstream', status: 500 });

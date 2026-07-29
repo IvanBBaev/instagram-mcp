@@ -13,11 +13,13 @@
  *   IG_WRITE_MODE       -> writeMode         (default 'preview')
  *   IG_ALLOW_DESTRUCTIVE-> allowDestructive  (default false)
  *   IG_TRANSPORT        -> transport         (default 'stdio')
- *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1')
+ *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1', loopback only)
  *   IG_PORT             -> httpPort          (default 3000)
  *
  * Note: the HTTP port env var is `IG_PORT` (not `IG_HTTP_PORT`) per §12 and
  * `.env.example`; it pairs with `IG_HTTP_HOST` for the HTTP-transport binding.
+ * `IG_HTTP_HOST` is validated like every other knob: only loopback addresses are
+ * accepted, because the HTTP transport binds loopback only (docs/security.md §3).
  */
 import { InstagramError, type LogLevel, type Settings } from './types.js';
 
@@ -86,6 +88,59 @@ function parseBoolEnv(env: NodeJS.ProcessEnv, name: string, def: boolean): boole
   fail(`${name} must be a boolean (true/false), got "${raw}"`);
 }
 
+/**
+ * Loopback host literals accepted for the HTTP-transport bind address, plus the
+ * expanded and bracketed spellings of the IPv6 loopback. Everything in
+ * `127.0.0.0/8` is additionally recognized by {@link isLoopbackHost}.
+ */
+const LOOPBACK_LITERALS = new Set([
+  'localhost',
+  '::1',
+  '[::1]',
+  '0:0:0:0:0:0:0:1',
+  '[0:0:0:0:0:0:0:1]',
+]);
+
+/** True for `a.b.c.d` with every octet in 0–255. */
+function isIpv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+}
+
+/**
+ * Is `host` a loopback bind address? Accepts `localhost`, the whole IPv4
+ * loopback block `127.0.0.0/8`, and the IPv6 loopback `::1` (bracketed or
+ * expanded). Wildcards (`0.0.0.0`, `::`) and every routable address are NOT
+ * loopback — binding one exposes the full tool surface, writes included, to
+ * anyone who can route to it.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  if (LOOPBACK_LITERALS.has(h)) return true;
+  return isIpv4(h) && h.startsWith('127.');
+}
+
+/**
+ * The HTTP transport binds loopback only (docs/security.md §3, SECURITY.md:
+ * "the Streamable HTTP transport stays loopback-bound"), and `IG_HTTP_TOKEN` is
+ * optional — so an unvalidated bind address is the difference between a local
+ * developer transport and an unauthenticated public one. Validate it like every
+ * other knob instead of passing it through verbatim.
+ */
+function parseHostEnv(env: NodeJS.ProcessEnv, name: string, def: string): string {
+  const raw = read(env, name);
+  if (raw === undefined) return def;
+  if (!isLoopbackHost(raw)) {
+    fail(
+      `${name} must be a loopback address (127.0.0.1, localhost or ::1), got "${raw}" — the ` +
+        'HTTP transport binds loopback only; to expose it, put an authenticating reverse proxy ' +
+        'in front of a loopback bind.',
+    );
+  }
+  return raw;
+}
+
 function parseEnumEnv<T extends string>(
   env: NodeJS.ProcessEnv,
   name: string,
@@ -118,7 +173,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     writeMode: parseEnumEnv(env, 'IG_WRITE_MODE', d.writeMode, WRITE_MODES),
     allowDestructive: parseBoolEnv(env, 'IG_ALLOW_DESTRUCTIVE', d.allowDestructive),
     transport: parseEnumEnv(env, 'IG_TRANSPORT', d.transport, TRANSPORTS),
-    httpHost: read(env, 'IG_HTTP_HOST') ?? d.httpHost,
+    httpHost: parseHostEnv(env, 'IG_HTTP_HOST', d.httpHost),
     httpPort: parseIntEnv(env, 'IG_PORT', d.httpPort, { min: 1, max: 65535 }),
   };
 }

@@ -86,7 +86,7 @@ Tier 1 **plus** `IG_APP_ID` / `IG_APP_SECRET`.
 
 ### Tier 3 — Full config (`fb-login`)
 
-`IG_FB_ACCESS_TOKEN` (Page / system-user token), `IG_ACCOUNT_ID`, `IG_APP_ID`,
+`IG_ACCESS_TOKEN` (here a Page / system-user token), `IG_ACCOUNT_ID`, `IG_APP_ID`,
 `IG_APP_SECRET`; the IG account linked to a Facebook Page.
 
 - **Works fully:** everything in Tier 1/2, plus **discovery** (hashtag search,

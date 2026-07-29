@@ -14,6 +14,7 @@
  * no `mcp`/`tools` imports. Every field Meta may omit is optional (CC-DATA-2);
  * open enums (`media_type`, …) pass through as plain strings (CC-DATA-6).
  */
+import { InstagramError } from '../core/types.js';
 import type { GraphListResponse, IgRequestFn } from '../core/types.js';
 
 // --- search_hashtag --------------------------------------------------------
@@ -88,6 +89,12 @@ export interface HashtagMediaParams {
   maxItems: number;
   /** Per-page size hint forwarded to Graph's `limit`. */
   limit?: number;
+  /**
+   * Continuation cursor — the `after` this function returned for the previous
+   * page, forwarded to Graph as `after`. Omit for the first page. A returned
+   * cursor is only useful if the caller can spend it, so it is an input here.
+   */
+  after?: string;
 }
 
 /**
@@ -105,7 +112,9 @@ export interface PagedHashtagMedia {
  * `GET /{hashtag-id}/top_media` or `GET /{hashtag-id}/recent_media` on
  * graph.facebook.com — public media under a hashtag. Reads a single page and
  * caps it at `maxItems` (CC-DATA-4); `truncated` reflects a cap that cut the
- * page mid-way. The continuation cursor, when present, is surfaced as `after`.
+ * page mid-way. The continuation cursor is surfaced as `after` and can be passed
+ * back in as `params.after` to read the following page — but ONLY when the page
+ * was not truncated, because a cursor cannot address a position inside a page.
  */
 export async function getHashtagMedia(
   req: IgRequestFn,
@@ -116,7 +125,12 @@ export async function getHashtagMedia(
   const res = await req<GraphListResponse<HashtagMediaItem>>({
     method: 'GET',
     path: `/${params.hashtagId}/${edgePath}`,
-    params: { user_id: params.igId, fields: HASHTAG_MEDIA_FIELDS, limit: params.limit },
+    params: {
+      user_id: params.igId,
+      fields: HASHTAG_MEDIA_FIELDS,
+      limit: params.limit,
+      after: params.after,
+    },
     host: 'graph.facebook.com',
   });
   const data = res.data ?? [];
@@ -125,7 +139,12 @@ export async function getHashtagMedia(
   const nextAfter = res.paging?.cursors?.after;
 
   const result: PagedHashtagMedia = { items, truncated: overflowed };
-  if (nextAfter !== undefined) result.after = nextAfter;
+  // A Graph cursor addresses a PAGE boundary, not an offset inside a page. When
+  // the item cap cut this page mid-way, `nextAfter` points past every item Graph
+  // sent — including the ones just dropped — so handing it back would silently
+  // skip them. Withhold it: `truncated` without `after` is the honest signal
+  // that the remainder is only reachable by re-reading with a smaller `limit`.
+  if (nextAfter !== undefined && !overflowed) result.after = nextAfter;
   return result;
 }
 
@@ -184,10 +203,39 @@ const BUSINESS_MEDIA_FIELDS = [
   'comments_count',
 ].join(',');
 
+/**
+ * The Instagram handle charset — letters, digits, `.` and `_`, 1–30 chars. This
+ * is a HARD constraint, not cosmetic input polish: `username` is interpolated
+ * into the `business_discovery.username(<handle>)` field expression below, so a
+ * handle carrying `)`, `{`, `}`, `,` or `.limit(` would rewrite the query the
+ * server asks Graph for (extra fields off the operator's own account, an
+ * inflated `media.limit()` burning quota). Graph field expressions have no
+ * escaping mechanism, so the only safe move is to reject rather than quote.
+ *
+ * The tool layer validates with this same pattern; re-checking here is defence
+ * in depth — the api layer must not trust its caller (docs/security.md §7).
+ */
+export const INSTAGRAM_USERNAME_PATTERN = /^[A-Za-z0-9._]{1,30}$/;
+
+/**
+ * Reject a handle that is not a plain Instagram handle. The message never echoes
+ * the offending payload — that string is untrusted third-party/model input and
+ * error text ends up in logs and model context.
+ */
+function assertValidUsername(username: string): void {
+  if (!INSTAGRAM_USERNAME_PATTERN.test(username)) {
+    throw new InstagramError(
+      'Invalid Instagram username: expected 1-30 characters, letters/digits/"."/"_" only ' +
+        '(no leading "@", no spaces, no brackets or parentheses).',
+      { kind: 'validation' },
+    );
+  }
+}
+
 export interface DiscoverBusinessParams {
   /** Operated IG account id — the node the `business_discovery` field hangs off. */
   igId: string;
-  /** Target public handle (without `@`). */
+  /** Target public handle (without `@`), matching {@link INSTAGRAM_USERNAME_PATTERN}. */
   username: string;
   /** Cap on the nested media edge (already bounded by the caller to `IG_MAX_ITEMS`). */
   mediaLimit: number;
@@ -214,11 +262,18 @@ interface BusinessDiscoveryWire {
  * graph.facebook.com — public profile + recent media of another business/creator.
  * The nested `media` edge is bounded with `.limit(<mediaLimit>)`. The inline
  * `business_discovery.media.data` edge is flattened to a plain array.
+ *
+ * `params.username` is interpolated into the field expression, so it is
+ * re-validated here against {@link INSTAGRAM_USERNAME_PATTERN} before the string
+ * is built.
+ *
+ * @throws InstagramError `kind: 'validation'` for a handle outside that charset.
  */
 export async function discoverBusiness(
   req: IgRequestFn,
   params: DiscoverBusinessParams,
 ): Promise<BusinessDiscovery> {
+  assertValidUsername(params.username);
   const cap = Math.max(0, Math.floor(params.mediaLimit));
   const mediaEdge = `media.limit(${cap}){${BUSINESS_MEDIA_FIELDS}}`;
   const field = `business_discovery.username(${params.username}){${BUSINESS_FIELDS},${mediaEdge}}`;

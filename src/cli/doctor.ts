@@ -29,6 +29,7 @@ import { debugToken, getAccount, summarizeTokenExpiry } from '../api/account.js'
 import { createRedactor } from '../core/redact.js';
 import { isInstagramError } from '../core/types.js';
 import type { AuthPath, IgRequestFn, Logger, ResolvedProfile, Settings } from '../core/types.js';
+import { PACKAGE_PROFILES, READONLY_PROFILES } from '../mcp/registry.js';
 
 /** Injected dependencies — everything the command needs, nothing global. */
 export interface DoctorDeps {
@@ -42,6 +43,8 @@ export interface DoctorDeps {
   log?: Logger;
   /** Injectable clock for deterministic expiry math; defaults to `Date.now()`. */
   nowMs?: number;
+  /** Environment read for the package-selection summary; defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface DoctorResult {
@@ -107,12 +110,41 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
-/** Echo the configured package selection (config summary — never secret). */
-function describePackages(): string {
-  const raw = process.env.IG_TOOL_PACKAGES?.trim();
-  const deny = process.env.IG_PACKAGES_DENY?.trim();
-  const base = raw !== undefined && raw !== '' ? raw : 'core (default: account, insights, media)';
-  return deny !== undefined && deny !== '' ? `${base} (deny: ${deny})` : base;
+/** The default profile name used when `IG_TOOL_PACKAGES` is unset. */
+const DEFAULT_PACKAGE_PROFILE = 'core';
+
+/**
+ * Expand a package selection into the packages it actually resolves to. Derived
+ * from {@link PACKAGE_PROFILES} rather than restated here — a hardcoded list
+ * silently goes stale, and this is the diagnostic an operator reads to decide
+ * whether the exposed surface includes write tools. An explicit comma list is
+ * already its own expansion and is echoed unchanged.
+ */
+function expandSelection(selection: string, isDefault: boolean): string {
+  const lower = selection.toLowerCase();
+  const prefix = isDefault ? 'default: ' : '';
+  if (lower === 'all') return `${selection} (${prefix}every package)`;
+  if (!Object.hasOwn(PACKAGE_PROFILES, lower)) return selection;
+  const packages = (PACKAGE_PROFILES[lower] ?? []).join(', ');
+  const readonly = READONLY_PROFILES.has(lower) ? '; forced read-only' : '';
+  return `${selection} (${prefix}${packages}${readonly})`;
+}
+
+/**
+ * Echo the configured package selection (config summary — never secret),
+ * expanded so the report names the packages that are really registered.
+ */
+function describePackages(env: NodeJS.ProcessEnv): string {
+  const raw = env.IG_TOOL_PACKAGES?.trim();
+  const deny = env.IG_PACKAGES_DENY?.trim();
+  const readonly = env.IG_PACKAGES_READONLY?.trim();
+  const isDefault = raw === undefined || raw === '';
+  const selection = isDefault ? DEFAULT_PACKAGE_PROFILE : raw;
+
+  let base = expandSelection(selection, isDefault);
+  if (deny !== undefined && deny !== '') base = `${base} (deny: ${deny})`;
+  if (readonly !== undefined && readonly !== '') base = `${base} (read-only: ${readonly})`;
+  return base;
 }
 
 /** Exact secret values scoped to this run so redaction never depends on global state. */
@@ -131,6 +163,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorResult> {
   const { req, profile, settings } = deps;
   const log = deps.log;
   const nowMs = deps.nowMs ?? Date.now();
+  const env = deps.env ?? process.env;
   const useColor = shouldUseColor();
 
   log?.debug('doctor: starting health check', {
@@ -196,7 +229,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorResult> {
   item('info', `Transport:          ${settings.transport}`);
   item('info', `Write mode:         ${settings.writeMode}`);
   item('info', `Allow destructive:  ${settings.allowDestructive}`);
-  item('info', `Active packages:    ${describePackages()}`);
+  item('info', `Active packages:    ${describePackages(env)}`);
   item('info', `Refresh after:      ${settings.refreshAfterDays} day(s)`);
 
   // --- Token & authentication ----------------------------------------------

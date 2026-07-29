@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing functional is published to npm yet: `instagram-mcp-ai@0.0.1` is a
-name-reservation stub only. This section is the honest running inventory of what
-already exists in the source tree and will constitute the first published release.
+Nothing has been released yet on any channel. `instagram-mcp-ai` is **not present
+on npm at all** — the name has not been reserved, no MCP-registry entry has been
+submitted, no MCPB bundle has been built, and no git tag has been cut. The
+`0.0.1` in the manifests is a pre-release placeholder, not a published version.
+This section is the running inventory of what exists in the source tree and will
+constitute the first published release.
 
 ### Added
 
@@ -42,6 +45,27 @@ already exists in the source tree and will constitute the first published releas
   `refresh` (Path-A token refresh with a configurable threshold).
 - **Transports.** stdio (default, stdout-purity guarded) and an opt-in,
   loopback-bound Streamable HTTP transport with a constant-time bearer check.
+- **Distribution manifests for four channels.** `package.json` (npm) as the single
+  source of truth, `server.json` (MCP registry), `manifest.json` (MCPB bundle for
+  Claude Desktop) and `.claude-plugin/plugin.json` (Claude Code plugin, launching
+  the server through a version-pinned `npx`). A release drift test asserts all
+  four agree on the version, and the plugin manifest is deliberately excluded from
+  the npm tarball.
+- **Quality gate.** `npm run check` now runs `lint → format:check → build →
+  coverage → audit`. Coverage is enforced by c8 `--check-coverage` thresholds
+  rather than merely reported, and `npm run audit` hard-gates high-severity
+  advisories in the runtime dependency tree (`--omit=dev`), with dev-only
+  advisories surfaced informationally by `npm run audit:dev`.
+
+### Known issues
+
+- A **moderate** path-traversal advisory
+  ([GHSA-frvp-7c67-39w9](https://github.com/advisories/GHSA-frvp-7c67-39w9)) in
+  `@hono/node-server`, reached transitively through `@modelcontextprotocol/sdk`,
+  is outstanding in the runtime dependency tree. It is below the `high` audit
+  gate. `@modelcontextprotocol/sdk@1.30.0` requires a patched `@hono/node-server`
+  and is already within the declared `^1.0.0` range, so refreshing the lockfile
+  resolves it. To be cleared before the first publish.
 
 [Unreleased]: https://github.com/IvanBBaev/instagram-mcp/commits/main
 

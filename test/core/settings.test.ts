@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_SETTINGS, loadSettings } from '../../src/core/settings.js';
+import { DEFAULT_SETTINGS, isLoopbackHost, loadSettings } from '../../src/core/settings.js';
 import { InstagramError } from '../../src/core/types.js';
 
 /** A validation `InstagramError` naming `variable` is thrown. */
@@ -84,9 +84,43 @@ test('enum knobs are validated against their allowed sets', () => {
   assert.equal(loadSettings({ IG_TRANSPORT: 'http' }).transport, 'http');
 });
 
-test('httpHost is passed through verbatim (trimmed)', () => {
-  assert.equal(loadSettings({ IG_HTTP_HOST: '0.0.0.0' }).httpHost, '0.0.0.0');
+test('a loopback httpHost is accepted (trimmed, verbatim)', () => {
   assert.equal(loadSettings({ IG_HTTP_HOST: ' localhost ' }).httpHost, 'localhost');
+  assert.equal(loadSettings({ IG_HTTP_HOST: '127.0.0.1' }).httpHost, '127.0.0.1');
+  assert.equal(loadSettings({ IG_HTTP_HOST: '127.0.0.53' }).httpHost, '127.0.0.53');
+  assert.equal(loadSettings({ IG_HTTP_HOST: '::1' }).httpHost, '::1');
+  assert.equal(loadSettings({ IG_HTTP_HOST: '[::1]' }).httpHost, '[::1]');
+});
+
+test('a non-loopback IG_HTTP_HOST is rejected — the HTTP transport must not bind publicly', () => {
+  // The whole write surface (post_image, delete_comment) rides this socket and
+  // IG_HTTP_TOKEN is optional, so a public bind is refused at config load.
+  for (const host of [
+    '0.0.0.0',
+    '::',
+    '192.168.1.10',
+    '10.0.0.7',
+    'example.com',
+    '127.0.0.1.evil.com',
+  ]) {
+    assertValidationError(() => loadSettings({ IG_HTTP_HOST: host }), 'IG_HTTP_HOST');
+  }
+});
+
+test('isLoopbackHost accepts only loopback literals and 127.0.0.0/8', () => {
+  for (const host of ['localhost', 'LOCALHOST', ' 127.0.0.1 ', '127.255.255.254', '::1', '[::1]']) {
+    assert.equal(isLoopbackHost(host), true, `${host} should be loopback`);
+  }
+  for (const host of [
+    '0.0.0.0',
+    '::',
+    '128.0.0.1',
+    '127.0.0',
+    '127.0.0.256',
+    'localhost.evil.com',
+  ]) {
+    assert.equal(isLoopbackHost(host), false, `${host} should NOT be loopback`);
+  }
 });
 
 test('non-numeric numeric input is rejected', () => {

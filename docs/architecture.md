@@ -64,15 +64,18 @@ export interface ToolSpec<S extends z.ZodRawShape> {
   so any change to the tool surface shows up in diffs.
 - Package selection at runtime: `IG_TOOL_PACKAGES` (profiles: `core` default,
   `reader`, `publisher`, `all`), `IG_PACKAGES_DENY`, `IG_PACKAGES_READONLY`.
+  `reader` is a read-only *boundary*, not a package list: every package it selects
+  is forced read-only, so no write tool is registered under it. An explicit list
+  naming the same packages is **not** equivalent — it registers their writes.
 
 ## 4. Planned packages
 
 | Package | Contents | In `core` profile |
 |---|---|---|
 | `account` | profile info, linked-account resolution, token status | yes |
-| `media` | list/get own media, children, toggle comments | yes |
+| `media` | list/get own media, children (read-only) | yes |
 | `publishing` | container create/status/publish, publishing-limit check | yes |
-| `comments` | list/reply/hide/delete comments, mentions | yes |
+| `comments` | list/reply/hide/delete comments, mentions, toggle comments on a media | yes |
 | `insights` | account + media insights, demographics | yes |
 | `discovery` | hashtag search/top/recent, business discovery | no (`all`) |
 | `messaging` | IG DMs via Messenger Platform | no (phase 2, `all`) |
@@ -173,9 +176,8 @@ the MCPB `user_config` are generated from this list and sync-tested against it.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IG_AUTH_MODE` | auto-detect | `ig-login` \| `fb-login`; **required** when both token vars are set |
-| `IG_ACCESS_TOKEN` | — | Path A long-lived IG-login token (**secret**) |
-| `IG_FB_ACCESS_TOKEN` | — | Path B page/system-user token (**secret**) |
+| `IG_AUTH_MODE` | inferred | `ig-login` \| `fb-login`; inferred as `fb-login` when `IG_APP_ID` + `IG_APP_SECRET` are set (alias: `IG_AUTH_PATH`) |
+| `IG_ACCESS_TOKEN` | — | The account's long-lived token for **either** path — IG-login token on Path A, Page / system-user token on Path B (**secret**) |
 | `IG_ACCOUNT_ID` | auto-resolved | IG professional-account ID (skip a lookup / disambiguate) |
 | `IG_APP_ID` / `IG_APP_SECRET` | — | Meta app credentials: token exchange, refresh, `appsecret_proof`, `debug_token` (`IG_APP_SECRET` is a **secret**) |
 | `IG_ENV_FILE` | XDG path | Env-file location override |
@@ -186,6 +188,7 @@ the MCPB `user_config` are generated from this list and sync-tested against it.
 | `IG_PACKAGES_READONLY` | — | Packages forced read-only |
 | `IG_WRITE_MODE` | `preview` | `preview` \| `apply` (standing consent for writes) |
 | `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (`delete_comment`) |
+| `IG_WRITE_JOURNAL` | `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl` | Append-only JSONL audit log of applied writes |
 | `IG_TRANSPORT` | `stdio` | `stdio` \| `http` |
 | `IG_HTTP_HOST` / `IG_PORT` | `127.0.0.1` / `3000` | HTTP transport binding |
 | `IG_HTTP_TOKEN` | — | HTTP bearer token (**secret**; constant-time compare) |
@@ -196,6 +199,6 @@ the MCPB `user_config` are generated from this list and sync-tested against it.
 | `IG_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` (stderr JSON logger) |
 | `IG_PRETTY_JSON` | `false` | Pretty-print JSON results |
 
-Secrets (`IG_ACCESS_TOKEN`, `IG_FB_ACCESS_TOKEN`, `IG_APP_SECRET`, `IG_HTTP_TOKEN`)
+Secrets (`IG_ACCESS_TOKEN`, `IG_APP_SECRET`, `IG_HTTP_TOKEN`)
 are marked `isSecret` in `server.json` and keychain-backed in the MCPB bundle; the
 redaction layer masks their values in every serialization path.

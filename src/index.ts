@@ -17,7 +17,6 @@
  * diagnostics go through the logger (stderr); `no-console` is lint-enforced.
  */
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -30,7 +29,7 @@ import { createLogger } from './core/log.js';
 import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
 import { refreshToken } from './core/refresh.js';
-import { writeCredentials } from './core/config-write.js';
+import { resolveConfigHome, writeCredentials } from './core/config-write.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { registerTools } from './mcp/registry.js';
@@ -56,24 +55,24 @@ function assertNodeVersion(): void {
   }
 }
 
-/** XDG config home, honoring `XDG_CONFIG_HOME` (POSIX) with the `~/.config` default. */
-function xdgConfigHome(): string {
-  const override = process.env.XDG_CONFIG_HOME?.trim();
-  return override && override !== '' ? override : path.join(homedir(), '.config');
-}
-
 /**
  * Load env files with `dotenv` (`override: false`, so env passed by the MCP
  * client always wins). Resolution per §6: an explicit `IG_ENV_FILE`, else the
- * XDG path then the project `.env` (both loaded — XDG is canonical, project is
- * the fallback; already-set vars are never overwritten).
+ * config-home path then the project `.env` (both loaded — the config home is
+ * canonical, project is the fallback; already-set vars are never overwritten).
+ *
+ * The config home comes from `core/config-write.ts` — the same resolver the
+ * write path uses (`$XDG_CONFIG_HOME`/`~/.config` on POSIX, `%APPDATA%` on
+ * Windows). Resolving it here independently is how the read and write sides
+ * drift apart: an XDG-only rule sends a Windows server looking in
+ * `%USERPROFILE%\.config\…` for a file `login` wrote to `%APPDATA%\…`.
  */
 function loadEnvFiles(): void {
   const explicit = process.env.IG_ENV_FILE?.trim();
   const candidates =
     explicit && explicit !== ''
       ? [explicit]
-      : [path.join(xdgConfigHome(), SERVER_NAME, '.env'), path.resolve(process.cwd(), '.env')];
+      : [path.join(resolveConfigHome(), SERVER_NAME, '.env'), path.resolve(process.cwd(), '.env')];
   for (const file of candidates) {
     if (existsSync(file)) dotenvConfig({ path: file, override: false });
   }
@@ -162,7 +161,10 @@ async function main(): Promise<void> {
 
   if (subcommand === 'refresh') {
     const profile = activeProfile(profiles, defaultName);
-    const refreshed = await refreshToken(makeRequest(profile), {
+    // No Graph seam here on purpose: the token-exchange endpoints authenticate
+    // themselves, and the seam would append `access_token`/`appsecret_proof` on
+    // top of that — see the transport note in core/refresh.ts.
+    const refreshed = await refreshToken({
       authPath: profile.authPath,
       accessToken: profile.accessToken,
       appId: profile.appId,

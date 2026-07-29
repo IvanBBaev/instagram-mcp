@@ -17,10 +17,11 @@ a preview that "does nothing" is usually working as designed (see the last rows)
 | Symptom | `kind` · code/subcode | Likely cause | Fix |
 |---|---|---|---|
 | "run `login`/`refresh`" on every call | `auth` · **190** | Token expired, revoked, or password changed | Re-acquire: `refresh` (if refreshable) else `login`. |
-| Startup error naming both token vars | (startup) | `IG_ACCESS_TOKEN` **and** `IG_FB_ACCESS_TOKEN` set, no `IG_AUTH_MODE` | Set `IG_AUTH_MODE=ig-login\|fb-login`, or unset one token. |
+| "No default profile configured; set `IG_ACCESS_TOKEN`" | (startup) | No token in the environment — or the token was put in a variable the server does not read | **Both** auth paths read `IG_ACCESS_TOKEN`; there is no separate Path-B token var. |
+| "uses fb-login but is missing `IG_APP_ID` / `IG_APP_SECRET`" | (startup) | Path B selected (explicitly or inferred) without app credentials | Set both, or select Path A with `IG_AUTH_MODE=ig-login`. |
 | Error names a missing scope | `permission` · **10 / 200–299** | Token minted before the scope was granted (scope drift), or insufficient permission | Re-run `login` to re-consent with the scope from [setup-guide.md](setup-guide.md) §5. |
 | "restricting activity" / spam block | `upstream` · subcode **2207051** | Integrity / spam restriction | **Not retried.** Surface Meta's `error_user_msg` verbatim; slow down; wait it out. |
-| Throttled / HTTP 429 | `rate_limit` · **4 / 17 / 32 / 613 / 80002** | App-, user-, or Instagram-BUC rate limit hit | Auto-retried with backoff (`Retry-After`, capped 60 s); if the reset is hours away it fails fast with the estimate — wait. |
+| Throttled / HTTP 429 | `rate_limit` · **4 / 17 / 32 / 613 / 80002** | App-, user-, or Instagram-BUC rate limit hit | **Reads** are auto-retried with backoff (`Retry-After`, capped 60 s); **writes are never replayed**. If the reset is hours away it fails fast with the estimate — wait. |
 | Publish refused: quota exhausted | `rate_limit` · **9 / 2207042** | 24 h publishing quota spent | Wait for the reset from `instagram_get_publishing_limit`; do not retry. |
 | Container goes `ERROR`, publish never happens | `validation` · **100** | Media URL unreachable by Meta / bad format | Host the media at a **public** URL; re-create the container. |
 | "container expired — re-create" | `validation` · **24 / 2207008** | Container not published within 24 h | Re-create the container and publish promptly. |
@@ -46,12 +47,23 @@ or **earlier** if the user changed their Instagram password or revoked the app
 - If the token was injected via the client `env`, the server cannot rotate it in
   place — see the auto-refresh note in [stability.md](stability.md).
 
-### Both tokens set, no auth mode (startup failure)
+### No token found (startup failure)
 
-Setting both `IG_ACCESS_TOKEN` and `IG_FB_ACCESS_TOKEN` without `IG_AUTH_MODE` is
-a **hard startup error** naming both variables — the server never guesses a path.
-Set `IG_AUTH_MODE=ig-login` or `fb-login`, or remove one token. (With only one
-token set, the path is auto-detected.)
+There is **one** token variable, `IG_ACCESS_TOKEN`, for both auth paths — the
+path only decides which host the token is sent to and whether an
+`appsecret_proof` HMAC is attached. A Path-B (Facebook Login) Page or
+system-user token goes in `IG_ACCESS_TOKEN` too. If it is missing or blank the
+server fails at startup with:
+
+```
+No default profile configured; set IG_ACCESS_TOKEN (the default account token).
+```
+
+The path itself is never guessed from the token: it is `fb-login` when both
+`IG_APP_ID` and `IG_APP_SECRET` are set, otherwise `ig-login`, and
+`IG_AUTH_MODE` (alias `IG_AUTH_PATH`) overrides the inference. Selecting
+`fb-login` without app credentials is a separate hard startup error, because
+`appsecret_proof` cannot be computed without the secret.
 
 ### Missing / insufficient scope — codes 10, 200–299 (`kind: permission`)
 
@@ -67,11 +79,12 @@ scopes (Path B) so you can compare against [setup-guide.md](setup-guide.md) §5.
 Instagram enforces app-, user-, and **Business-Use-Case** limits (BUC uses a
 rolling 24 h window). The server parses `X-App-Usage` / `X-Business-Use-Case-Usage`
 on every response, proactively slows past 90 %, and refuses non-read calls at
-100 % with the reset estimate. Throttle errors are **retryable** with exponential
-backoff `min(500·2^n, 8000) ms + jitter` (max 3), honoring `Retry-After` capped at
-60 s. If the reset is hours away, it **fails fast with the estimate** rather than
-blocking the MCP call — just wait. **`media_publish` is never auto-retried**, even
-on 429 (duplicate-post risk). Check headroom any time via
+100 % with the reset estimate. Throttle errors are **retryable on reads** with
+exponential backoff `min(500·2^n, 8000) ms + jitter` (max 3), honoring `Retry-After`
+capped at 60 s. If the reset is hours away, it **fails fast with the estimate**
+rather than blocking the MCP call — just wait. **No write is auto-retried**, even on
+429: Meta can throttle a request after accepting it, so replaying a `POST`/`DELETE`
+risks a duplicate post or comment. Check headroom any time via
 `instagram_token_status`.
 
 > **Not a throttle:** subcode **2207051** is a spam/integrity restriction

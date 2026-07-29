@@ -6,8 +6,11 @@
  * every record.
  *
  * Redaction is INJECTED: `opts.redact` is a plain function; this module never
- * imports a redactor (the `mcp/redact.ts` owner supplies one). When present it
- * is applied to the merged fields object before the line is written.
+ * imports a redactor (the `core/redact.ts` owner supplies one). When present it
+ * is applied to the merged fields object AND to the message string before the
+ * line is written — the whole record is scrubbed at the sink, so an interpolated
+ * message (`log.error(\`request failed: ${url}\`)`, a Graph error text echoing an
+ * `access_token`) cannot bypass redaction the way a raw `msg` would.
  */
 import type { Clock } from './clock.js';
 import type { Logger, LogLevel } from './types.js';
@@ -46,6 +49,17 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * Redact the message string. Cheap by construction — this runs on every emitted
+ * record, and a redactor handed a string does one string pass. A redactor that
+ * returns a non-string (one written for objects only) leaves `msg` untouched
+ * rather than mangling it.
+ */
+function redactMessage(redact: (value: unknown) => unknown, msg: string): string {
+  const out = redact(msg);
+  return typeof out === 'string' ? out : msg;
+}
+
 function makeLogger(state: LoggerState): Logger {
   const emit = (level: LogLevel, msg: string, fields?: Record<string, unknown>): void => {
     if (LEVEL_WEIGHT[level] < state.threshold) return;
@@ -54,7 +68,10 @@ function makeLogger(state: LoggerState): Logger {
     const merged: Record<string, unknown> = { ...fields, ...state.bindings };
     const processed = state.redact ? state.redact(merged) : merged;
     const extra = isPlainRecord(processed) ? processed : {};
-    const record = { level, msg, time: state.now(), ...extra };
+    // The message goes through the redactor too: every call site passes a
+    // constant today, but the contract is "the sink scrubs the whole record".
+    const safeMsg = state.redact ? redactMessage(state.redact, msg) : msg;
+    const record = { level, msg: safeMsg, time: state.now(), ...extra };
     state.stream.write(JSON.stringify(record) + '\n');
   };
 

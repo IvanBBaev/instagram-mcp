@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# A push that supersedes an earlier one on the same branch/PR cancels the
+# outdated run instead of letting its 6 matrix legs + codeql + audit + coverage
+# finish. Nothing here deploys, so cancelling is always safe.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Read-only default for every job. Job-level `permissions` blocks REPLACE this
+# one wholesale (unlisted scopes become `none`), so a job that needs an extra
+# scope must re-declare `contents: read` too — see `codeql` below.
 permissions:
   contents: read
 
@@ -16,6 +26,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,8 +39,46 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # Coverage is a separate single job rather than a step on every matrix leg:
+  # Codecov must receive exactly one report per commit, and the six `check` legs
+  # would otherwise upload six competing reports for the same source.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The `engines` floor (>=22) and .nvmrc — the primary supported Node.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # `npm test` executes the compiled tests under dist/, so the build has to
+      # run first; tsconfig's `sourceMap: true` is what lets c8 attribute that
+      # coverage back to the original src/**/*.ts files.
+      - run: npm run build
+      # `coverage` carries its own `--check-coverage` thresholds, so this step is
+      # a hard gate on a coverage regression, not just a report upload. Same
+      # invocation `npm run check` uses locally — one definition, no drift.
+      - run: npm run coverage
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          # c8's lcov reporter writes here (default coverage directory).
+          files: ./coverage/lcov.info
+          # The repo is public, so uploads also work tokenless; supplying
+          # CODECOV_TOKEN once the repo is connected at codecov.io is Codecov's
+          # current recommendation and avoids the tokenless rate limits. An
+          # unset secret expands to an empty string, which the action treats as
+          # "no token" — and fork PRs never receive secrets anyway.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Codecov not yet being connected (or being down) must never turn a
+          # green build red. Explicit even though v7 already defaults to false.
+          fail_ci_if_error: false
+
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,12 +86,27 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=high
+      # Hard gate on the tree consumers actually install. A high-severity
+      # advisory in a runtime dependency ships to users, so it blocks the build.
+      # Defined once as the `audit` script so CI and `npm run check` cannot drift.
+      - name: Audit runtime dependencies
+        run: npm run audit
+      # Dev-only advisories (eslint, prettier, tsc, c8, fast-check) never reach
+      # a consumer of the published package. They are surfaced in the log but
+      # must not block every unrelated PR until a linter cuts a patch release.
+      - name: Audit dev dependencies (informational)
+        run: npm run audit:dev
+        continue-on-error: true
 
   codeql:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      security-events: write
+      contents: read # re-declared: a job-level block overrides, not merges
+      security-events: write # upload the SARIF result to code scanning
+      # `actions: read` is intentionally NOT granted — CodeQL only requires it
+      # for workflows in private repositories, and this repo is public. Add it
+      # if the repo is ever made private.
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3

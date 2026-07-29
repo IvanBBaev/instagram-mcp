@@ -17,7 +17,7 @@ import type {
 import type { Clock } from '../../src/core/clock.js';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.js';
 import { ALLOWED_HOSTS, GRAPH_VERSION, assertAllowedHost, buildUrl } from '../../src/core/host.js';
-import { createIgRequest } from '../../src/core/http.js';
+import { createIgRequest, createSemaphoreRegistry } from '../../src/core/http.js';
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -292,7 +292,35 @@ test('429 retries then succeeds; Retry-After is honored and capped at 60s', asyn
   assert.deepEqual(clock.sleeps, [60_000, 2_000]);
 });
 
-test('429 is retried even on POST (rate-limit retries on any method)', async () => {
+test('429 is NOT retried on a non-idempotent write (POST/DELETE) — a replay may duplicate it', async () => {
+  // A throttled write may already have been accepted by Meta before the 429
+  // reached us; replaying `media_publish` costs quota and leaves a duplicate,
+  // publicly visible post (api/publishing.ts, docs/operations.md §2).
+  for (const method of ['POST', 'DELETE'] as const) {
+    const clock = recordingClock();
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 429,
+      headers: { 'retry-after': '1' },
+      body: { error: { code: 80002 } },
+    }));
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method, path: '/123/media_publish', body: { creation_id: 'C1' } }),
+      (e: unknown) => isInstagramError(e) && e.kind === 'rate_limit',
+      method,
+    );
+    assert.equal(calls.length, 1, `${method} must reach Meta exactly once`);
+    assert.deepEqual(clock.sleeps, [], `${method} must not back off for a retry`);
+  }
+});
+
+test('429 IS retried on a write explicitly marked idempotent', async () => {
   const clock = recordingClock();
   const { fetchImpl, calls } = mockFetch((n) =>
     n === 0
@@ -306,7 +334,7 @@ test('429 is retried even on POST (rate-limit retries on any method)', async () 
     log: testLogger(),
     fetchImpl,
   });
-  await req({ method: 'POST', path: '/x', body: { a: '1' } });
+  await req({ method: 'POST', path: '/x', body: { a: '1' }, idempotent: true });
   assert.equal(calls.length, 2);
   assert.deepEqual(clock.sleeps, [1_000]);
 });
@@ -493,6 +521,9 @@ test('the per-host semaphore serializes calls beyond maxConcurrent', async () =>
     clock: recordingClock(),
     log: testLogger(),
     fetchImpl,
+    // Own counters: this test uses a non-default limit and must not disturb (or
+    // be disturbed by) the process-wide registry the other tests exercise.
+    semaphores: createSemaphoreRegistry(),
   });
 
   const p1 = req({ method: 'GET', path: '/a' });
@@ -508,4 +539,54 @@ test('the per-host semaphore serializes calls beyond maxConcurrent', async () =>
   gates[1]!();
   await p2;
   assert.equal(maxActive, 1);
+});
+
+test('maxConcurrent bounds the process, not one seam: separately built seams share the limit', async () => {
+  // The composition root builds a fresh seam per tool call
+  // (`makeRequest(profile)` in src/index.ts, called from mcp/registry.ts), so
+  // counters owned by the factory would multiply the operator's IG_MAX_CONCURRENT
+  // by the number of in-flight tool calls. Neither seam injects a registry here —
+  // that is the production wiring.
+  const max = DEFAULT_SETTINGS.maxConcurrent;
+  let active = 0;
+  let maxActive = 0;
+  const gates: Array<() => void> = [];
+  const { fetchImpl, calls } = mockFetch(
+    () =>
+      new Promise<MockResponseSpec>((resolve) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        gates.push(() => {
+          active--;
+          resolve({ body: {} });
+        });
+      }),
+  );
+  const build = () =>
+    createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock: recordingClock(),
+      log: testLogger(),
+      fetchImpl,
+    });
+
+  const seamA = build();
+  const seamB = build();
+  const pending = [
+    ...Array.from({ length: max }, (_, i) => seamA({ method: 'GET', path: `/a${i}` })),
+    ...Array.from({ length: max }, (_, i) => seamB({ method: 'GET', path: `/b${i}` })),
+  ];
+
+  await flush();
+  assert.equal(calls.length, max, 'both seams must draw from the same per-host budget');
+
+  // Drain: every freed slot admits the next waiter until all 2*max complete.
+  for (let guard = 0; gates.length > 0 && guard < pending.length * 2; guard++) {
+    gates.shift()!();
+    await flush();
+  }
+  await Promise.all(pending);
+  assert.equal(calls.length, pending.length);
+  assert.equal(maxActive, max);
 });

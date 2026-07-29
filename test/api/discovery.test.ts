@@ -9,7 +9,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IgRequestFn, IgRequestOptions } from '../../src/core/types.js';
-import { discoverBusiness, getHashtagMedia, searchHashtag } from '../../src/api/discovery.js';
+import { InstagramError } from '../../src/core/types.js';
+import {
+  INSTAGRAM_USERNAME_PATTERN,
+  discoverBusiness,
+  getHashtagMedia,
+  searchHashtag,
+} from '../../src/api/discovery.js';
 
 function fakeReq(responder: (opts: IgRequestOptions) => unknown): {
   req: IgRequestFn;
@@ -108,7 +114,30 @@ test('getHashtagMedia caps the page at maxItems and marks it truncated', async (
     ['1', '2'],
   );
   assert.equal(res.truncated, true);
-  assert.equal(res.after, 'NEXT');
+  // The cursor is withheld on a truncated page: 'NEXT' points past item 3, which
+  // the cap just dropped, so returning it would let the caller skip it silently.
+  assert.equal(res.after, undefined);
+});
+
+test('getHashtagMedia withholds the cursor when the cap cut the page mid-way', async () => {
+  const { req } = fakeReq(() => ({
+    data: [{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }],
+    paging: { cursors: { after: 'PAST_ITEM_4' } },
+  }));
+
+  const res = await getHashtagMedia(req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'recent',
+    maxItems: 2,
+  });
+
+  // Items 3 and 4 arrived but were cut. A Graph cursor addresses a page
+  // boundary, so 'PAST_ITEM_4' cannot resume from item 3 — handing it back would
+  // lose those two items with no signal. `truncated` alone is the honest answer.
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, undefined);
+  assert.equal(Object.hasOwn(res, 'after'), false);
 });
 
 test('getHashtagMedia within the cap is not truncated', async () => {
@@ -124,6 +153,28 @@ test('getHashtagMedia within the cap is not truncated', async () => {
   assert.equal(res.items.length, 2);
   assert.equal(res.truncated, false);
   assert.equal(res.after, undefined);
+});
+
+test('getHashtagMedia forwards the after cursor so a returned page can be continued', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [{ id: 'm3' }], paging: { cursors: {} } }));
+
+  await getHashtagMedia(req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'recent',
+    maxItems: 200,
+    after: 'CURSOR_FROM_PAGE_1',
+  });
+
+  assert.equal(calls[0]?.params?.after, 'CURSOR_FROM_PAGE_1');
+});
+
+test('getHashtagMedia omits after when no cursor is supplied', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [] }));
+
+  await getHashtagMedia(req, { hashtagId: 'H1', igId: '999', edge: 'top', maxItems: 200 });
+
+  assert.equal(calls[0]?.params?.after, undefined);
 });
 
 // --- discoverBusiness ------------------------------------------------------
@@ -165,4 +216,61 @@ test('discoverBusiness tolerates a missing business_discovery block (CC-DATA-2)'
 
   assert.equal(biz.username, undefined);
   assert.equal(biz.media, undefined);
+});
+
+test('discoverBusiness refuses a username that would rewrite the Graph field expression', async () => {
+  // Each payload closes the `username(` call and appends its own selection —
+  // extra fields off the OPERATOR's node, or an inflated media.limit() burning
+  // quota. Graph field expressions cannot be escaped, so these must be rejected.
+  const payloads = [
+    'x){id,username},followers_count.limit(0){',
+    'target){id},media.limit(9999){id',
+    'a,b',
+    'a)',
+    '@target',
+    'has space',
+    'ünïcode',
+    '',
+    'x'.repeat(31),
+  ];
+
+  for (const username of payloads) {
+    const { req, calls } = fakeReq(() => ({ id: '999' }));
+    await assert.rejects(
+      () => discoverBusiness(req, { igId: '999', username, mediaLimit: 10 }),
+      (err: unknown) => {
+        assert.ok(err instanceof InstagramError, `expected an InstagramError for "${username}"`);
+        assert.equal(err.kind, 'validation');
+        assert.match(err.message, /username/i);
+        // The rejection is actionable but never echoes the untrusted payload —
+        // error text lands in logs and back in model context.
+        if (username.length > 0) {
+          assert.equal(
+            err.message.includes(username),
+            false,
+            'the rejection must not echo the raw payload',
+          );
+        }
+        return true;
+      },
+    );
+    // Rejected before the request — no quota spent on a poisoned query.
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('discoverBusiness accepts ordinary handles (letters, digits, dot, underscore)', async () => {
+  for (const username of ['target', 'a', 'nasa.gov_2024', 'A_B.c9', 'x'.repeat(30)]) {
+    const { req, calls } = fakeReq(() => ({ id: '999' }));
+    await discoverBusiness(req, { igId: '999', username, mediaLimit: 10 });
+    assert.ok(
+      String(calls[0]?.params?.fields).includes(`business_discovery.username(${username})`),
+    );
+  }
+});
+
+test('INSTAGRAM_USERNAME_PATTERN is anchored so a payload cannot hide behind a valid prefix', () => {
+  assert.equal(INSTAGRAM_USERNAME_PATTERN.test('target'), true);
+  assert.equal(INSTAGRAM_USERNAME_PATTERN.test('target){id}'), false);
+  assert.equal(INSTAGRAM_USERNAME_PATTERN.test('target\nevil'), false);
 });

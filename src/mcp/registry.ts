@@ -12,18 +12,27 @@
  * lets the composition root be written in parallel.
  *
  * Resolution order (architecture §3, CC-CFG-7): package profile → deny → forced
- * read-only, then D1 capability filtering by the active profile's auth path,
- * then per-call strict re-validation (unknown args are rejected, never dropped).
+ * read-only (from `IG_PACKAGES_READONLY` *and* from an inherently read-only
+ * profile such as `reader`), then D1 capability filtering by the auth paths of
+ * the configured profiles, then per-call strict re-validation (unknown args are
+ * rejected, never dropped).
  */
 import { z } from 'zod';
-import type { ToolAnnotationSet, ToolContext, ToolResult, ToolSpec } from './define.js';
+import type { ToolAnnotationSet, ToolResult, ToolSpec } from './define.js';
 import { errorResult } from './result.js';
+import {
+  CONFIRM_TIMEOUT_MS,
+  type ConfirmPrompt,
+  type WriteConfirmer,
+  type WriteGateContext,
+} from './write-mode.js';
 import { InstagramError } from '../core/types.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../core/types.js';
 import { resolveProfile, withAccount } from '../core/config.js';
 import { toInstagramError } from '../core/errors.js';
 import type { Clock } from '../core/clock.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 
 // --- PACKAGES manifest ------------------------------------------------------
 
@@ -66,14 +75,36 @@ export function buildManifest(tools: ToolSpec[]): PackageManifest[] {
  * curated package universe for that profile; selection intersects it with the
  * packages actually present in the manifest, so a profile may name a package
  * that has not shipped yet without error. `all` is handled separately (every
- * package in the manifest). For v1 only `account`, `media`, `insights` exist —
- * all three sit in `core`.
+ * package in the manifest). v1 ships six packages: `account`, `media`,
+ * `insights`, `publishing`, `comments` and `discovery` — `core` selects all but
+ * `discovery`, which therefore ships dark until a profile opts into it.
+ *
+ * Note that a profile only picks *packages*, and most packages mix read and
+ * write tools (`comments` and `media` both carry write tools). A profile that
+ * must be read-only is listed in {@link READONLY_PROFILES} as well — the package
+ * list alone is not a read-only boundary.
  */
 export const PACKAGE_PROFILES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   core: ['account', 'media', 'publishing', 'comments', 'insights'],
   reader: ['account', 'media', 'insights', 'comments', 'discovery'],
   publisher: ['account', 'media', 'publishing', 'comments'],
 });
+
+/**
+ * Profiles that are read-only *by definition*, not merely by package choice.
+ * Selecting one forces every package it resolves to into the forced-read-only
+ * set, exactly as if the operator had also passed `IG_PACKAGES_READONLY`, so no
+ * tool lacking `readOnlyHint` is ever registered under it.
+ *
+ * This exists because the package list is not a safety boundary: `reader`
+ * includes `comments` (for `instagram_list_comments` / `instagram_get_comment`)
+ * and `media` (for `instagram_list_media`), and both packages also carry write
+ * tools — comment create/reply/hide/delete and the media comment toggle. Without
+ * this set a deployment configured `IG_TOOL_PACKAGES=reader` would still expose
+ * tools that post and delete comments as the operated account, which is not what
+ * the profile name promises.
+ */
+export const READONLY_PROFILES: ReadonlySet<string> = new Set(['reader']);
 
 /** Split a comma list into trimmed, lowercased, non-empty tokens. */
 function parseList(raw: string | undefined): string[] {
@@ -92,6 +123,10 @@ function parseList(raw: string | undefined): string[] {
  *   → minus `IG_PACKAGES_DENY`
  *   → `IG_PACKAGES_READONLY` marked read-only (applied at registration).
  *
+ * A profile in {@link READONLY_PROFILES} additionally contributes *all* of its
+ * surviving packages to the read-only set, so the profile itself is the
+ * boundary rather than a hint the operator has to reinforce by hand.
+ *
  * An explicit list naming a package absent from the manifest is a hard error.
  * Deny / read-only names are tolerated when absent (removing or masking a
  * package that is not present is harmless and keeps CC-CFG-7 forward-compatible).
@@ -108,7 +143,13 @@ export function selectPackages(
   const lower = selection.toLowerCase();
 
   let active: Set<string>;
-  if (!selection.includes(',') && (lower === 'all' || lower in PACKAGE_PROFILES)) {
+  // `Object.hasOwn`, not `in`: `Object.freeze` keeps the prototype, so `in`
+  // would accept inherited keys like `constructor` / `toString` and hand the
+  // profile branch a non-array value instead of failing with the clear
+  // "unknown package" validation error below.
+  const usesProfile =
+    !selection.includes(',') && (lower === 'all' || Object.hasOwn(PACKAGE_PROFILES, lower));
+  if (usesProfile) {
     if (lower === 'all') {
       active = new Set(available);
     } else {
@@ -134,6 +175,12 @@ export function selectPackages(
   for (const name of parseList(env.IG_PACKAGES_DENY)) active.delete(name);
 
   const readonly = new Set(parseList(env.IG_PACKAGES_READONLY));
+  // A read-only profile forces every package it still selects read-only, so the
+  // profile name is the guarantee (see READONLY_PROFILES). Applied after deny so
+  // the two sets stay consistent.
+  if (usesProfile && READONLY_PROFILES.has(lower)) {
+    for (const name of active) readonly.add(name);
+  }
   return { active, readonly };
 }
 
@@ -151,6 +198,52 @@ export interface RegisterToolsDeps {
    *  registry stays decoupled from core/http + core/auth. */
   makeRequest: (profile: ResolvedProfile) => IgRequestFn;
   env?: NodeJS.ProcessEnv; // defaults to process.env
+  /**
+   * Human-confirmation seam handed to the write gate (D3 option (a)). Defaults
+   * to {@link serverConfirmer} over `server`; tests inject a fake so no real MCP
+   * client is needed.
+   */
+  confirm?: WriteConfirmer;
+}
+
+/**
+ * Adapt the connected MCP server to the write gate's {@link WriteConfirmer}.
+ *
+ * Both halves are evaluated per call, not at registration: client capabilities
+ * only exist after the `initialize` handshake, which happens after
+ * {@link registerTools} has run.
+ *
+ * `isSupported()` is true only for **form** elicitation — the SDK normalizes a
+ * legacy `elicitation: {}` declaration to `{ form: {} }`, while a client that
+ * advertises only `elicitation.url` cannot answer this prompt and so falls back
+ * to env flags rather than having every write refused. The server object is
+ * treated as `Partial` because tests (and the stateless HTTP path) may hand over
+ * a stub that has no underlying `Server` at all.
+ */
+export function serverConfirmer(server: McpServer): WriteConfirmer {
+  const inner: Partial<Server> | undefined = server.server;
+  return {
+    isSupported(): boolean {
+      if (typeof inner?.elicitInput !== 'function') return false;
+      const caps = inner.getClientCapabilities?.();
+      return caps?.elicitation?.form !== undefined;
+    },
+    async ask(prompt: ConfirmPrompt) {
+      if (typeof inner?.elicitInput !== 'function') {
+        // Unreachable through the gate (isSupported() guards it); throwing keeps
+        // the seam total and fails closed if that ever changes.
+        throw new InstagramError('The connected client cannot be asked to confirm this write.', {
+          kind: 'permission',
+        });
+      }
+      return inner.elicitInput(
+        { mode: 'form', message: prompt.message, requestedSchema: prompt.requestedSchema },
+        // Bound both budgets: `timeout` alone can be extended indefinitely by a
+        // client that keeps sending progress notifications.
+        { timeout: CONFIRM_TIMEOUT_MS, maxTotalTimeout: CONFIRM_TIMEOUT_MS },
+      );
+    },
+  };
 }
 
 /**
@@ -203,7 +296,12 @@ function validationMessage(spec: ToolSpec, error: z.ZodError, validKeys: string[
 }
 
 /** Register one surviving tool on the server with its strict per-call wrapper. */
-function registerOne(registrar: ToolRegistrar, deps: RegisterToolsDeps, spec: ToolSpec): void {
+function registerOne(
+  registrar: ToolRegistrar,
+  deps: RegisterToolsDeps,
+  spec: ToolSpec,
+  confirm: WriteConfirmer,
+): void {
   const inputSchema: z.ZodRawShape = { ...spec.input, account: accountField };
   const strictSchema = z.object(inputSchema).strict();
   const validKeys = Object.keys(inputSchema);
@@ -254,13 +352,16 @@ function registerOne(registrar: ToolRegistrar, deps: RegisterToolsDeps, spec: To
           );
         }
 
-        // 4. Build the per-call context (the request seam is injected).
-        const ctx: ToolContext = {
+        // 4. Build the per-call context (the request and confirmation seams are
+        //    injected). `confirm` is only read by the write gate; read tools
+        //    never see it.
+        const ctx: WriteGateContext = {
           req: deps.makeRequest(profile),
           settings: deps.settings,
           clock: deps.clock,
           profile,
           log: deps.log.child({ tool: spec.name, account: name }),
+          confirm,
         };
 
         // 5. Run the handler; it returns a ready ToolResult.
@@ -277,9 +378,18 @@ function registerOne(registrar: ToolRegistrar, deps: RegisterToolsDeps, spec: To
 
 /**
  * Register every surviving tool on the server: build the manifest, resolve the
- * active packages / forced-read-only set, filter by the active profile's auth
- * path (D1) and by forced read-only, and register the rest. Returns the names
- * actually registered (for logging + tests) and the manifest.
+ * active packages / forced-read-only set, filter by auth path (D1) and by forced
+ * read-only, and register the rest. Returns the names actually registered (for
+ * logging + tests) and the manifest.
+ *
+ * D1 filtering uses the **union** of the auth paths of every configured profile,
+ * not just the default one: a tool is reachable as long as *some* profile can
+ * run it, because callers select the profile per call via the `account`
+ * argument. Filtering on the default profile alone would hide, say, the
+ * Path-B-only `discovery` tools from a client whose default profile is Path A
+ * even when a Path B profile is configured alongside it. A call that pairs a
+ * tool with a profile that cannot run it is still rejected by the call-time
+ * capability guard in {@link registerOne} with an explicit message.
  */
 export function registerTools(deps: RegisterToolsDeps): {
   registered: string[];
@@ -288,19 +398,24 @@ export function registerTools(deps: RegisterToolsDeps): {
   const env = deps.env ?? process.env;
   const manifest = buildManifest(deps.tools);
   const { active, readonly } = selectPackages(manifest, env);
-  const activeProfile = resolveProfile(deps.profiles, deps.defaultProfileName);
+  // Fail fast on a default profile that does not exist (a configuration error),
+  // then filter against every path any configured profile can reach.
+  resolveProfile(deps.profiles, deps.defaultProfileName);
+  const authPaths = new Set(deps.profiles.map((p) => p.authPath));
   const registrar = deps.server as unknown as ToolRegistrar;
+  const confirm = deps.confirm ?? serverConfirmer(deps.server);
 
   const registered: string[] = [];
   for (const pkg of manifest) {
     if (!active.has(pkg.name)) continue;
     const forceReadonly = readonly.has(pkg.name);
     for (const spec of pkg.tools) {
-      // D1 capability filtering: `paths === undefined` means both auth paths.
-      if (spec.paths !== undefined && !spec.paths.includes(activeProfile.authPath)) continue;
+      // D1 capability filtering: `paths === undefined` means both auth paths;
+      // otherwise keep the tool when any configured profile is on one of them.
+      if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      registerOne(registrar, deps, spec);
+      registerOne(registrar, deps, spec, confirm);
       registered.push(spec.name);
     }
   }

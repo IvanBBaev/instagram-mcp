@@ -543,7 +543,7 @@ instagram_post_image {
           <tbody>
             <tr><td>Instagram professional account</td><td>Business or Creator — personal accounts aren't exposed by the Graph API</td><td><code>IG_ACCOUNT_ID</code> (optional; auto-resolved when possible)</td></tr>
             <tr><td>A Meta app (id + secret)</td><td>Required to run OAuth and, on Path B, to sign requests</td><td><code>IG_APP_ID</code>, <code>IG_APP_SECRET</code></td></tr>
-            <tr><td>An access token</td><td>Authorizes every Graph API call</td><td><code>IG_ACCESS_TOKEN</code> (Path A) or <code>IG_FB_ACCESS_TOKEN</code> (Path B)</td></tr>
+            <tr><td>An access token</td><td>Authorizes every Graph API call — one variable for both paths</td><td><code>IG_ACCESS_TOKEN</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -637,9 +637,8 @@ npx instagram-mcp-ai refresh</code></pre>
             <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
           </thead>
           <tbody>
-            <tr><td><code>IG_AUTH_MODE</code></td><td><em>auto</em></td><td>Pin the auth path: <code>ig-login</code> or <code>fb-login</code>. Auto-detected from which token is present.</td></tr>
-            <tr><td><code>IG_ACCESS_TOKEN</code> <span class="req">*</span></td><td>—</td><td>Path A (Instagram Login) access token.</td></tr>
-            <tr><td><code>IG_FB_ACCESS_TOKEN</code></td><td>—</td><td>Path B (Facebook Login) access token.</td></tr>
+            <tr><td><code>IG_AUTH_MODE</code></td><td><em>inferred</em></td><td>Pin the auth path: <code>ig-login</code> or <code>fb-login</code>. Inferred as <code>fb-login</code> when <code>IG_APP_ID</code> + <code>IG_APP_SECRET</code> are set.</td></tr>
+            <tr><td><code>IG_ACCESS_TOKEN</code> <span class="req">*</span></td><td>—</td><td>The account's long-lived token, on either path — an Instagram-Login token (Path A) or a Page / system-user token (Path B).</td></tr>
             <tr><td><code>IG_ACCOUNT_ID</code></td><td><em>resolved</em></td><td>The Instagram professional-account id to operate.</td></tr>
             <tr><td><code>IG_APP_ID</code> / <code>IG_APP_SECRET</code></td><td>—</td><td>Meta app credentials — required for <code>login</code> and for Path B request signing.</td></tr>
             <tr><td><code>IG_ENV_FILE</code></td><td>—</td><td>Path to an env file to load before resolving settings.</td></tr>
@@ -686,7 +685,7 @@ IG_ALLOW_DESTRUCTIVE=false</code></pre>
         The default is <code>core</code>, which deliberately leaves <code>discovery</code> dark.
       </p>
       <ul>
-        <li><strong>Profiles</strong> — <code>core</code> (default): account, media, publishing, comments, insights (25 tools). <code>reader</code>: account, media, insights, comments, discovery. <code>publisher</code>: account, media, publishing, comments. <code>all</code>: every package (28 tools).</li>
+        <li><strong>Profiles</strong> — <code>core</code> (default): account, media, publishing, comments, insights (25 tools). <code>reader</code>: account, media, insights, comments, discovery — <strong>forced read-only</strong>, so the write tools those packages also carry (comment create/reply/hide/delete, comments toggle) are not registered at all (15 tools). <code>publisher</code>: account, media, publishing, comments. <code>all</code>: every package (28 tools).</li>
         <li><strong>Packages</strong> — <code>account</code>, <code>media</code>, <code>publishing</code>, <code>comments</code>, <code>insights</code>, <code>discovery</code>.</li>
       </ul>
       <div class="codeblock" data-lang="dotenv">

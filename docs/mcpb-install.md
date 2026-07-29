@@ -23,8 +23,10 @@ and passes your GUI answers in as `IG_*` environment variables. The bundle is
 **Path A (Instagram Login)** oriented: the one required field, `IG_ACCESS_TOKEN`, is a
 **long-lived `graph.instagram.com` token** for an Instagram professional (Business or
 Creator) account — no Facebook Page required. Path B (Facebook-Login / system-user
-tokens, `IG_FB_ACCESS_TOKEN`) is **not exposed as a GUI field** in this bundle; Path-B
-operators should install via JSON config / the CLI instead (see `setup-guide.md`).
+tokens) puts its token in the **same** `IG_ACCESS_TOKEN` field, but its two extra
+requirements, `IG_APP_ID` and `IG_APP_SECRET`, are **not exposed as GUI fields** in this
+bundle; Path-B operators should install via JSON config / the CLI instead (see
+`setup-guide.md`).
 
 Prerequisites (one-time, detailed in `setup-guide.md`):
 
@@ -55,7 +57,7 @@ process: mint a short-lived token, then exchange it for the long-lived one.
 > **Graph API Explorer note.** The classic **Graph API Explorer**
 > (`developers.facebook.com/tools/explorer`) issues **`graph.facebook.com` (Path B)**
 > user tokens, **not** the `graph.instagram.com` (Path A) token that `IG_ACCESS_TOKEN`
-> expects — so use it for Path B setups (`IG_FB_ACCESS_TOKEN`, JSON/CLI install) and as
+> expects — so use it for Path B setups (JSON/CLI install) and as
 > a convenient console for running the raw Graph calls in Steps 1b and 2. For the
 > Path-A bundle, the **App Dashboard token generator above is the correct source.**
 
@@ -108,7 +110,7 @@ entry in the manifest. Fill them as follows:
 | **Meta app ID** | `IG_APP_ID` | Your app's ID. Needed only for token refresh / `debug_token` / discovery. | No |
 | **Meta app secret** | `IG_APP_SECRET` | Your app secret. Needed only for token exchange/refresh + `appsecret_proof`. Stored in the keychain (`sensitive`). | No |
 | **Write mode** | `IG_WRITE_MODE` | `preview` (default — plan only) or `apply` (execute writes). | No |
-| **Tool packages** | `IG_TOOL_PACKAGES` | `core` (default), `reader`, `publisher`, `all`, or an explicit comma-separated list. | No |
+| **Tool packages** | `IG_TOOL_PACKAGES` | `core` (default), `reader` (forced read-only — no write tool is registered), `publisher`, `all`, or an explicit comma-separated list. | No |
 
 `sensitive: true` fields (**access token**, **app secret**) are written to the OS keychain
 by Claude Desktop, never to a plaintext config file. Leaving an optional field blank means

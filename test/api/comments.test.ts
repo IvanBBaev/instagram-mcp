@@ -122,6 +122,60 @@ test('listComments fetchAll keeps a partial result when a cursor goes stale mid-
   assert.equal(calls.length, 2);
 });
 
+// --- fetchAll termination guards (shared walk — see test/api/media.test.ts) --
+//
+// `listComments` and `listMedia` go through the SAME paginator, so these two
+// cases exist on both sides: a guard removed from the shared helper must not be
+// able to pass one suite and fail the other. The fake edge throws a plain
+// `Error` (not an InstagramError, which CC-DATA-1 would swallow) once the call
+// count is past a bounded walk, so a runaway loop fails instead of hanging.
+function runawayGuard(limit: number): () => void {
+  let n = 0;
+  return () => {
+    n += 1;
+    if (n > limit) throw new Error(`runaway pagination: ${n} requests for a bounded walk`);
+  };
+}
+
+test('listComments fetchAll stops when a page returns no items but still advertises a cursor', async () => {
+  const guard = runawayGuard(6);
+  const responder = (opts: IgRequestOptions) => {
+    guard();
+    const after = opts.params?.after;
+    if (after === undefined) return { data: [{ id: 'c1' }], paging: { cursors: { after: 'A1' } } };
+    return { data: [], paging: { cursors: { after: `${String(after)}+` } } };
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 100, fetchAll: true });
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(
+    res.items.map((c) => c.id),
+    ['c1'],
+  );
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'A1+');
+  assert.ok(res.note?.includes('no items'));
+});
+
+test('listComments fetchAll stops when the edge repeats the same cursor (no forward progress)', async () => {
+  const guard = runawayGuard(6);
+  const responder = () => {
+    guard();
+    return { data: [{ id: 'c1' }, { id: 'c2' }], paging: { cursors: { after: 'STUCK' } } };
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 100, fetchAll: true });
+
+  assert.equal(calls.length, 2);
+  assert.equal(res.items.length, 4);
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'STUCK');
+  assert.ok(res.note?.includes('same cursor'));
+});
+
 test('listComments propagates a first-page error instead of hiding it', async () => {
   const { req } = fakeReq(() => {
     throw new InstagramError('boom', { kind: 'upstream', status: 500 });

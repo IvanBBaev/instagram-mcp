@@ -23,16 +23,18 @@ derivable. **Not a throttle:** subcode `2207051` is a spam/integrity restriction
 
 | Condition | GET | POST/DELETE |
 |---|---|---|
-| 429 / rate-limit codes (4, 17, 32, 613, 80002) | retry | retry (Graph rejects pre-processing → safe to replay) — **except `media_publish`, never auto-retried** |
+| 429 / rate-limit codes (4, 17, 32, 613, 80002) | retry | **no retry** (a throttled write may already have landed upstream) |
 | 5xx / network error / timeout | retry | **no retry** (non-idempotent; a publish may have landed) |
 | 190 (invalid/expired token) | no retry → actionable error ("run `login`/`refresh`") | same |
 | 10 / 200-series (permission) | no retry → names the missing scope | same |
 
 Backoff: `min(500·2^n, 8000) ms + jitter`, max 3 retries; `Retry-After` honored,
 capped 60 s. Per-host concurrency semaphore (default 4).
-**`media_publish` is excluded from automatic retry entirely** (even on 429) until
-live evidence proves replay safety — a duplicate post costs quota and is publicly
-visible, worse than asking the operator to retry. A failed
+**No non-idempotent write is auto-retried — not even on 429**, and not only
+`media_publish`. Meta can throttle a request *after* accepting it, so replaying a
+`POST`/`DELETE` risks a duplicate post or comment: publicly visible and costly in
+quota, worse than asking the operator to retry. Retry on 429 requires the caller to
+mark the request `idempotent` explicitly; `GET` is idempotent by default. A failed
 `media_publish` after a created container **does not** re-create the container —
 the error carries the container ID so the operator/model can resume with
 `instagram_publish_media`.

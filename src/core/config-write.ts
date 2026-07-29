@@ -90,18 +90,28 @@ function envKey(profileName: string, suffix: string): string {
     : `IG_PROFILE_${profileName.toUpperCase()}_${suffix}`;
 }
 
-/** Resolve the config-home base directory (POSIX XDG / Windows APPDATA). */
-function configHome(opts: WriteCredentialsOptions): string {
-  const override = clean(opts.configDir);
-  if (override !== undefined) return override;
-
-  const env = opts.env ?? process.env;
+/**
+ * Resolve the config-home base directory for the running platform:
+ * `%APPDATA%` (default `<home>\AppData\Roaming`) on Windows, `$XDG_CONFIG_HOME`
+ * (default `~/.config`) everywhere else — docs/architecture.md §6, CC-CFG-8.
+ *
+ * Exported so every consumer resolves the SAME directory: the entry point reads
+ * the env file from here (`src/index.ts`) and this module writes it, so a
+ * consumer that hard-coded the XDG rule would, on Windows, read from a different
+ * place than `login`/`refresh` write to.
+ */
+export function resolveConfigHome(env: NodeJS.ProcessEnv = process.env): string {
   if (process.platform === 'win32') {
     const appData = clean(env.APPDATA);
     return appData ?? path.join(homedir(), 'AppData', 'Roaming');
   }
   const xdg = clean(env.XDG_CONFIG_HOME);
   return xdg ?? path.join(homedir(), '.config');
+}
+
+/** Config-home base for one write: the explicit override, else the platform's. */
+function configHome(opts: WriteCredentialsOptions): string {
+  return clean(opts.configDir) ?? resolveConfigHome(opts.env ?? process.env);
 }
 
 /** Absolute path of the env file for the given options. */

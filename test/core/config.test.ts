@@ -121,6 +121,45 @@ test('CC-CFG-2: auth path is resolved per profile (default Path A, named Path B)
   assert.equal(profiles.find((p) => p.name === 'biz')?.authPath, 'fb-login');
 });
 
+test('a named profile accepts IG_PROFILE_<NAME>_AUTH_MODE as well as _AUTH_PATH', () => {
+  const { profiles } = loadProfiles({
+    IG_ACCESS_TOKEN: 'tok-default',
+    IG_PROFILE_BIZ_ACCESS_TOKEN: 'tok-biz',
+    IG_PROFILE_BIZ_AUTH_MODE: 'fb-login',
+    IG_PROFILE_BIZ_APP_ID: 'app',
+    IG_PROFILE_BIZ_APP_SECRET: 'sec',
+  });
+  assert.equal(profiles.find((p) => p.name === 'biz')?.authPath, 'fb-login');
+});
+
+test('a named profile setting both spellings: _AUTH_PATH wins over _AUTH_MODE', () => {
+  // Both orderings, because `readNamedRaw` walks `Object.entries` insertion order.
+  for (const env of [
+    { IG_PROFILE_BIZ_AUTH_PATH: 'ig-login', IG_PROFILE_BIZ_AUTH_MODE: 'fb-login' },
+    { IG_PROFILE_BIZ_AUTH_MODE: 'fb-login', IG_PROFILE_BIZ_AUTH_PATH: 'ig-login' },
+  ]) {
+    const { profiles } = loadProfiles({
+      IG_ACCESS_TOKEN: 'tok-default',
+      IG_PROFILE_BIZ_ACCESS_TOKEN: 'tok-biz',
+      ...env,
+    });
+    assert.equal(profiles.find((p) => p.name === 'biz')?.authPath, 'ig-login');
+  }
+});
+
+test('a profile named "auth" is not swallowed by the AUTH_MODE alias', () => {
+  // `IG_PROFILE_AUTH_MODE` ends with `_MODE`, not `_AUTH_MODE`, so it must not
+  // parse as an auth-path assignment for an empty profile name.
+  const { profiles } = loadProfiles({
+    IG_ACCESS_TOKEN: 'tok-default',
+    IG_PROFILE_AUTH_ACCESS_TOKEN: 'tok-auth',
+    IG_PROFILE_AUTH_AUTH_MODE: 'fb-login',
+    IG_PROFILE_AUTH_APP_ID: 'app',
+    IG_PROFILE_AUTH_APP_SECRET: 'sec',
+  });
+  assert.equal(profiles.find((p) => p.name === 'auth')?.authPath, 'fb-login');
+});
+
 test('a named profile colliding with "default" is ignored (bare vars own it)', () => {
   const { profiles } = loadProfiles({
     IG_ACCESS_TOKEN: 'bare',
@@ -158,6 +197,18 @@ test('validation: fb-login default missing app secret is rejected', () => {
 
 test('validation: an unknown IG_AUTH_PATH value is rejected', () => {
   assertValidation(() => loadProfiles({ IG_ACCESS_TOKEN: 'tok', IG_AUTH_PATH: 'oauth2' }));
+});
+
+test('validation: the unknown-auth-path error names both accepted spellings', () => {
+  // Whichever spelling the operator used, the message must mention it — naming
+  // only the variable they did not set reads like a bug in the server.
+  assert.throws(
+    () => loadProfiles({ IG_ACCESS_TOKEN: 'tok', IG_AUTH_MODE: 'oauth2' }),
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.message.includes('IG_AUTH_MODE') &&
+      err.message.includes('IG_AUTH_PATH'),
+  );
 });
 
 test('validation: a named profile without a token is rejected', () => {

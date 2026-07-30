@@ -1,8 +1,11 @@
 # Authentication & Authorization
 
 > Design document. Facts below reflect Meta docs as of 2026-07 (Graph API v25.0
-> current since 2026-02-18). Items marked **[verify]** must be re-checked against
-> official docs during implementation.
+> current since 2026-02-18). Every factual claim below carries a *[verified
+> &lt;date&gt; — source]* stamp; the last bare **[verify]** in this file was cleared in
+> the 2026-07-30 documentation-verification pass. What is genuinely still unknown
+> lives in §5 as a named open question with the probe that would answer it — never
+> as an unexplained marker.
 
 ## 0. Hard platform constraint
 

@@ -2,10 +2,13 @@
 
 > Gated design review required by [roadmap.md](roadmap.md) M6 before any DM code
 > is written. This document produces a **recommendation and a verdict**, not an
-> implementation. Facts reflect Meta docs as understood 2026-07; anything not
-> confirmed against an official source or a live probe is marked **`[verify]`**
-> in the style of [corner-cases.md](corner-cases.md) — an unverified policy
-> detail is never stated here as fact.
+> implementation. Facts reflect Meta docs as of 2026-07 (Graph API v25.0).
+> **Documentation-verification pass 2026-07-30:** every endpoint/scope/shape
+> question in §2 was resolved from official Meta documentation and now carries a
+> *[verified &lt;date&gt; — source]* stamp; what remains is marked
+> `[verify — needs a live call: …]` in the style of
+> [corner-cases.md](corner-cases.md), always naming the call that would settle
+> it. An unverified policy detail is never stated here as fact.
 >
 > **Verdict: DEFER (NO-GO for v1).** See §7 for the conditions that flip it.
 
@@ -34,12 +37,12 @@ implementations.
 | | **Path A — `ig-login`** | **Path B — `fb-login`** |
 |---|---|---|
 | Host | `graph.instagram.com` | `graph.facebook.com/v25.0` |
-| Scope | `instagram_business_manage_messages` | `instagram_manage_messages` (+ Page messaging plumbing `[verify]` — likely `pages_messaging`) |
+| Scope | `instagram_business_basic` + `instagram_business_manage_messages` *[verified 2026-07-30 — [send](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/) / [conversations](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/conversations-api/) guides]* | **Corrected:** the guess "likely `pages_messaging`" was wrong. Documented set is `instagram_basic`, `instagram_manage_messages`, **`pages_manage_metadata`**, with a **Page access token from someone holding the `MESSAGING` task** on the linked Page *[verified 2026-07-30 — [Messenger Conversations API](https://developers.facebook.com/docs/messenger-platform/conversations/), [IG send-message](https://developers.facebook.com/docs/messenger-platform/instagram/features/send-message/)]* |
 | Linked Facebook Page | **not required** | **required** — the IG account must be linked to a Page, and sends address the Page |
 | `appsecret_proof` | **not supported** on `graph.instagram.com` (auth.md §1 Path A, `src/core/auth.ts`) | supported and mandatory here (`src/core/auth.ts`) |
-| Send endpoint shape | `POST /{ig-id}/messages` `[verify exact path + body]` | Messenger-Platform send API via the Page `[verify exact path + body]` |
-| Conversation read | `GET /{ig-id}/conversations` `[verify availability and fields]` | Messenger-Platform conversations via the Page `[verify]` |
-| App Review | Standard Access should cover an own-app admin operating their own account (auth.md §2 point 3) — **`[verify]` specifically for messaging scopes**; Meta has historically treated messaging as a higher-review surface than reads | same question, plus the Human Agent feature (§3) which is separately gated `[verify]` |
+| Send endpoint shape | `POST https://graph.instagram.com/v25.0/{ig-id}/messages`, body `{"recipient":{"id":"<IGSID>"},"message":{"text":"<TEXT>"}}` (attachments via `message.attachment`) *[verified 2026-07-30 — [Send Messages, IG Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/)]* | `POST /{page-id}/messages` (or `/me/messages`) with the same recipient/message body; **text capped at 1,000 characters**, image attachments ≤ 8 MB, video/audio ≤ 25 MB *[verified 2026-07-30 — [IG send-message](https://developers.facebook.com/docs/messenger-platform/instagram/features/send-message/)]* |
+| Conversation read | `GET /{ig-id}/conversations` (or `/me/conversations`); `GET /{conversation-id}?fields=messages`, then `GET /{message-id}` for `from`/`to`/`message`. **Hard limit: only the 20 most recent messages per conversation are retrievable** *[verified 2026-07-30 — [Conversations API, IG Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/conversations-api/)]* | `GET /{page-id}/conversations?platform=instagram`, Page access token *[verified 2026-07-30 — [Messenger Conversations API](https://developers.facebook.com/docs/messenger-platform/conversations/)]* |
+| App Review | Standard Access is documented as covering app roles operating their own assets, and Advanced Access as the third-party case *[verified 2026-07-30 — [Access Levels](https://developers.facebook.com/docs/graph-api/overview/access-levels/)]*. But the Instagram Platform overview warns that for an app not published publicly, reviewers can only approve `instagram_basic` and `instagram_manage_comments` — messaging is **not** on that list. `[verify — needs a live call: with the app at Standard Access and the operator as app admin, request instagram_business_manage_messages and attempt one POST /{ig-id}/messages; record whether it succeeds or returns 10/200-series]` | same question, **plus** the Human Agent feature, which is confirmed App-Review- **and** Business-Verification-gated (§3) |
 
 ### What is structurally impossible on which path
 
@@ -79,20 +82,34 @@ paths" promise.
 
 ## 3. Messaging windows and policy
 
-Meta constrains *when* a business may message a person. The general shape, as
-understood, is:
+Meta constrains *when* a business may message a person. The shape, after the
+2026-07-30 documentation pass:
 
-- A **24-hour window** opens when the user messages the business; outside it,
-  standard messages are rejected. `[verify current duration and the exact error
-  code/subcode Meta returns — it must land in the taxonomy in
-  operations.md §"error subcodes" before any send tool ships]`
-- A **human-agent-style exception** extends the window (historically to 7 days)
-  for messages sent by a human agent handling the conversation, via a message
-  tag. `[verify: tag name, exact extended duration, whether it applies to
-  Instagram messaging at all on Path A, and whether the feature requires App
-  Review]`
-- Message tags in general are restricted to enumerated, narrowly-defined use
-  cases. `[verify which tags, if any, are available on the Instagram surface]`
+- The **24-hour window is confirmed**: "Your app has 24 hours to respond to any
+  message sent from an Instagram user to your app user" *[verified 2026-07-30 —
+  [Send Messages, IG Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/)]*.
+  A related documented prerequisite: the conversation must be user-initiated —
+  the business cannot open one. The **error code for sending outside the window
+  is still unknown**: the official Instagram error-code reference carries no
+  messaging entries, and the code seen quoted around (10 / subcode 2534022)
+  appears only in non-official sources, so it is not stamped here.
+  `[verify — needs a live call: let a test conversation go quiet for > 24 h,
+  then POST /{ig-id}/messages and record code / error_subcode / error_user_msg;
+  it must land in the taxonomy in operations.md §3 before any send tool ships]`
+- The **human-agent exception is confirmed**, and its gating is the important
+  part: tag name `human_agent`, usable "within 7 days of a user's message", and
+  the feature "requires both successful completion of the App Review process and
+  business verification before accessing live data" *[verified 2026-07-30 —
+  [Human Agent feature reference](https://developers.facebook.com/docs/features-reference/human-agent)]*.
+  Note what the name and the docs jointly say: the exception is for a **human**
+  agent handling the conversation.
+- Which tags exist **on the Instagram surface** is still not settled: the
+  Instagram send-message guides enumerate no message tags at all, and the
+  Messenger message-tag page could not be retrieved from an official source in
+  this pass (Meta doc-tree migration, operations.md §5 watch item).
+  `[verify — needs a live call: POST /{ig-id}/messages with
+  messaging_type=MESSAGE_TAG&tag=<candidate> and record which tags are accepted;
+  or re-fetch the message-tags reference once the docs tree settles]`
 
 ### What this means for an LLM-driven tool surface
 
@@ -115,8 +132,12 @@ Two concrete consequences for any future design:
   the correct behavior; a model that gets "window expired, cannot send" will stop,
   a model that gets a tag knob will use it.
 
-Neither of these is expressible with confidence until the `[verify]` items above
-are answered against live Meta docs and a live account.
+The documentation pass strengthens the first consequence rather than weakening
+it: `human_agent` is explicitly the *human* agent's exception, and it is gated
+behind App Review **and** Business Verification — a bar this project has already
+declared permanently out of scope (auth.md §2 point 3). The second consequence
+still needs the outside-window error code above before a send tool could refuse
+accurately rather than by guesswork.
 
 ## 4. The webhook question
 
@@ -129,8 +150,12 @@ as needing a public endpoint. Nothing in this review asks to reopen that.
 
 **Achievable without a webhook (pull-only):**
 
-- Polling a conversations list and reading message history, if the read
-  endpoints exist and are usable on the chosen path `[verify]`.
+- Polling a conversations list and reading message history. **The read endpoints
+  are confirmed to exist on both paths** (§2, Conversations API) — with one
+  documented ceiling that matters for polling: only the **20 most recent
+  messages** of a conversation are retrievable *[verified 2026-07-30 —
+  [Conversations API, IG Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/conversations-api/)]*,
+  so a busy conversation can outrun a slow poll and lose history permanently.
 - Operator-initiated flows: "show me unread conversations", "draft a reply to
   this one" — the operator is already present in the loop, which is exactly the
   posture the write-safety argument in §5 wants.
@@ -143,12 +168,21 @@ as needing a public endpoint. Nothing in this review asks to reopen that.
   compute the window *at read time* and be wrong by the polling interval. It must
   therefore treat its own window calculation as advisory and let Meta be the
   authority — i.e. attempt-and-report, never "the window is open, go ahead".
-- **Possibly nothing at all.** `[verify — this is the decisive one]` whether Meta
-  requires the app to hold an active `messages` webhook subscription before the
-  **send** endpoint will work. If it does, the entire package is structurally
-  impossible for a loopback-only server and M6 becomes a permanent NO-GO rather
-  than a DEFER. This question should be answered first, because a negative answer
-  makes every other question in this document moot.
+- **Possibly nothing at all** — whether Meta requires the app to hold an active
+  `messages` webhook subscription before the **send** endpoint will work. If it
+  does, the entire package is structurally impossible for a loopback-only server
+  and M6 becomes a permanent NO-GO rather than a DEFER.
+  **Still the decisive question after the 2026-07-30 documentation pass, and
+  deliberately not stamped either way.** What the docs do say: neither path's
+  requirement list names a webhook subscription as a prerequisite for sending —
+  the documented prerequisite is that the *user* must message the business first
+  — yet the Path-A messaging guide states it "assumes … a webhooks server", so
+  the absence is suggestive, not decisive.
+  `[verify — needs a live call: with zero webhook subscriptions configured on
+  the app, have a test user DM the account, then POST /{ig-id}/messages within
+  the 24 h window and record success or the exact error]`
+  This must be answered first: a negative answer makes every other question in
+  this document moot.
 
 ## 5. Write safety for DMs
 
@@ -189,7 +223,7 @@ not a reuse of the second.**
 | | Public comment | DM |
 |---|---|---|
 | Visible to the operator afterwards | yes, on their own media | only inside the conversation, easily missed |
-| Reversible | `delete_comment` exists for own comments `[verify for replies]` | no unsend via the API `[verify]` — assume none |
+| Reversible | `delete_comment` covers replies too — a reply is itself an IG Comment node, so `DELETE /{ig-comment-id}` applies, bounded by "a comment can only be deleted by the owner of the object upon which the comment was made, even if the user attempting to delete the comment is the comment's author" *[verified 2026-07-30 — [comment moderation](https://developers.facebook.com/docs/instagram-platform/comment-moderation)]* | no unsend/delete-message endpoint is documented on **either** path *[checked 2026-07-30 — [IG Login messaging](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/), [Messenger IG send-message](https://developers.facebook.com/docs/messenger-platform/instagram/features/send-message/)]* — a documented absence, so "assume none" stands |
 | Audience | public, discoverable, socially self-correcting | one named person, private, silent |
 | Recipient chosen by | the media being commented on | **an ID the model supplies** |
 | Failure mode | embarrassment, deletable | harassment, impersonation, data leak to a specific party |
@@ -270,8 +304,10 @@ currently missing:
 
 - The decisive webhook-dependency question (§4) is unanswered and could make the
   package impossible rather than merely deferred.
-- The policy constraints (§3) rest on `[verify]` items that cannot be resolved
-  without live Meta docs review *and* a live account — and Lane E is blocked
+- The policy constraints (§3) survived the 2026-07-30 documentation pass only
+  partly: the 24 h window and the `human_agent` tag are now confirmed from
+  official docs, but the outside-window error code and the Instagram-surface tag
+  list still need a live account — and Lane E is blocked
   outright: T-E1..T-E4 have never run, so even `discovery`, a far simpler
   package, shipped without its gating probe (T-E3). Adding a *harder*
   probe-dependent package while the existing probe debt is unpaid is the wrong
@@ -296,9 +332,14 @@ All of these, in order — any one unmet keeps the package closed:
    loopback-only server; record it and close M6 rather than leaving it open.
 2. **Lane E unblocked.** Live Meta credentials exist in a working environment and
    T-E2/T-E3 have actually run. The existing probe backlog is paid down first.
-3. **Every `[verify]` in §2 and §3 resolved** against official docs and a live
-   probe, and folded into `docs/corner-cases.md` as `CC-MSG-*` rows with the
-   error subcodes added to `operations.md`.
+3. **Every remaining `[verify — needs a live call: …]` in §2, §3 and §4
+   resolved.** The documentation half is done (2026-07-30): endpoints, scopes,
+   request shapes, the 24 h window, the `human_agent` tag and its App-Review +
+   Business-Verification gate are all cited above. What is left is strictly
+   live-probe work — Standard-Access messaging approval (§2), the outside-window
+   error code and the Instagram tag list (§3), and the webhook dependency (§4) —
+   folded into `docs/corner-cases.md` as `CC-MSG-*` rows with the error subcodes
+   added to `operations.md`.
 4. **D3 elicitation shipped and proven**, with messaging exempt from standing
    `IG_WRITE_MODE=apply` consent.
 5. **Path decided as A-only** (§2) and the weaker-credential-binding consequence

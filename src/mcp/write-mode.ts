@@ -12,11 +12,12 @@
  * can never permit one they blocked.
  */
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
 import type { ToolContext, ToolResult } from './define.js';
 import { fence, json } from './result.js';
+import { createRedactor } from '../core/redact.js';
+import { resolveWriteJournal } from '../core/settings.js';
 import type { ResolvedProfile } from '../core/types.js';
 
 /** Describes the mutation a write tool intends to perform. */
@@ -61,23 +62,28 @@ const JOURNAL_DIR_MODE = 0o700;
 const JOURNAL_FILE_MODE = 0o600;
 
 /**
- * Default journal location: `<XDG_STATE_HOME|~/.local/state>/instagram-mcp-ai/writes.jsonl`.
+ * The journal is a serialization sink like the log stream, so it sits **inside**
+ * the redaction boundary (QA finding F6). Every entry is passed through this
+ * redactor before it is written: the fields are built from tool-supplied text
+ * (`intent.action`, `intent.summary`) and from ids that ultimately came off the
+ * wire, and "those never carry a token" is a convention, not a control.
  *
- * NOTE: the caller passes `process.env` directly rather than reading a resolved
- * setting, because `IG_WRITE_JOURNAL` has no home in `core/settings.ts` yet.
- * Moving it there (and threading it through `Settings` onto `ToolContext`) is
- * the right end state; it is deliberately not done here to keep this frozen
- * seam's signature unchanged.
+ * Built once at module load — `createRedactor` reads the global secret registry
+ * live on every call, so this still masks tokens registered later by
+ * `login`/`refresh`.
  */
-function journalPath(env: NodeJS.ProcessEnv): string {
-  const explicit = env.IG_WRITE_JOURNAL?.trim();
-  if (explicit) return explicit;
-  const base = env.XDG_STATE_HOME?.trim() || join(homedir(), '.local', 'state');
-  return join(base, 'instagram-mcp-ai', 'writes.jsonl');
-}
+const redactJournalEntry = createRedactor();
 
 /**
  * Append one applied-write record to the journal.
+ *
+ * The journal location (`IG_WRITE_JOURNAL`, default
+ * `<XDG_STATE_HOME|~/.local/state>/instagram-mcp-ai/writes.jsonl`) is owned by
+ * `core/settings.ts` like every other configuration knob — this gate asks
+ * {@link resolveWriteJournal} for the resolved path instead of parsing the
+ * environment itself. It is resolved per append rather than once at module load
+ * so a late `.env` load or an in-process override still takes effect, matching
+ * how `loadSettings` is called on demand.
  *
  * Best-effort audit: any I/O failure is caught so a broken journal never fails a
  * write the operator already authorized — but it is logged at **warn**, not
@@ -90,10 +96,13 @@ function journalPath(env: NodeJS.ProcessEnv): string {
  * it deserves the same confidentiality as the credentials file. `mode` only
  * applies at creation time — a journal created by an older version keeps its
  * original permissions.
+ *
+ * The entry is redacted before it is serialized (see {@link redactJournalEntry}),
+ * so the journal is inside the same secret boundary as the log stream (F6).
  */
 function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | undefined): void {
   try {
-    const path = journalPath(process.env);
+    const path = resolveWriteJournal(process.env);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: JOURNAL_DIR_MODE });
     const entry = {
@@ -105,7 +114,8 @@ function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | u
       ...(targetId !== undefined ? { targetId } : {}),
       destructive: intent.destructive === true,
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', { flag: 'a', mode: JOURNAL_FILE_MODE });
+    const safe = redactJournalEntry(entry);
+    appendFileSync(path, JSON.stringify(safe) + '\n', { flag: 'a', mode: JOURNAL_FILE_MODE });
   } catch (err) {
     ctx.log.warn('write journal append failed — the applied write was NOT audited', {
       action: intent.action,

@@ -313,6 +313,46 @@ test('post_image resume publishes the given container without creating a new one
   assert.equal(res.structuredContent?.media_id, 'MRES');
 });
 
+test('resuming a container that is already PUBLISHED does not post it a second time', async () => {
+  // The duplicate-post guard: a caller retrying after a lost response resumes a
+  // container Instagram has already published. The flow must report it and stop,
+  // never issue media_publish again (which would create a second post).
+  const { req, calls } = fakeReq((opts) => {
+    if (opts.path === '/DONE' && opts.method === 'GET')
+      return { id: 'DONE', status_code: 'PUBLISHED' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+
+  const res = await runPostImage({ resumeContainerId: 'DONE', apply: true }, makeCtx(req));
+
+  assert.equal(res.isError, undefined, 'an already-published container is not an error');
+  assert.equal(res.structuredContent?.status, 'already_published');
+  assert.equal(res.structuredContent?.container_id, 'DONE');
+  assert.equal(res.structuredContent?.media_id, undefined, 'no new media id is invented');
+  assert.match(String(res.structuredContent?.note), /NOT published again/);
+  assert.deepEqual(
+    calls.map((c) => c.path),
+    ['/DONE'],
+    'only the status read happens — no create, no media_publish',
+  );
+});
+
+test('post_image apply with an empty imageUrls list refuses before any network call', async () => {
+  // Not reachable through the registry (zod enforces a non-empty array), but the
+  // exported flow is also called directly, so the client-side guard must hold on
+  // its own rather than letting a container be created from nothing.
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+
+  await assert.rejects(
+    () => runPostImage({ imageUrls: [], apply: true }, makeCtx(req)),
+    (e: unknown) =>
+      e instanceof InstagramError &&
+      e.kind === 'validation' &&
+      /at least one imageUrl/.test(e.message),
+  );
+  assert.equal(calls.length, 0);
+});
+
 // --- instagram_post_reel (composite) ---------------------------------------
 
 test('post_reel apply creates a REELS container, polls, and publishes', async () => {

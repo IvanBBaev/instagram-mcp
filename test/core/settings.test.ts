@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
-import { DEFAULT_SETTINGS, isLoopbackHost, loadSettings } from '../../src/core/settings.js';
+import {
+  DEFAULT_SETTINGS,
+  isLoopbackHost,
+  loadSettings,
+  resolveWriteJournal,
+} from '../../src/core/settings.js';
 import { InstagramError } from '../../src/core/types.js';
 
 /** A validation `InstagramError` naming `variable` is thrown. */
@@ -154,4 +161,63 @@ test('invalid boolean input is rejected', () => {
 
 test('DEFAULT_SETTINGS is frozen', () => {
   assert.ok(Object.isFrozen(DEFAULT_SETTINGS));
+});
+
+// --- IG_WRITE_JOURNAL ------------------------------------------------------
+
+test('the write journal defaults to $XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl', () => {
+  assert.equal(
+    resolveWriteJournal({ XDG_STATE_HOME: '/var/state' }),
+    join('/var/state', 'instagram-mcp-ai', 'writes.jsonl'),
+  );
+});
+
+test('without XDG_STATE_HOME the journal falls back to ~/.local/state (XDG default)', () => {
+  const expected = join(homedir(), '.local', 'state', 'instagram-mcp-ai', 'writes.jsonl');
+  assert.equal(resolveWriteJournal({}), expected);
+  // A blank XDG_STATE_HOME means "unset", exactly like every other knob.
+  assert.equal(resolveWriteJournal({ XDG_STATE_HOME: '   ' }), expected);
+});
+
+test('an explicit IG_WRITE_JOURNAL wins over XDG_STATE_HOME and is trimmed', () => {
+  assert.equal(
+    resolveWriteJournal({
+      IG_WRITE_JOURNAL: '  /audit/writes.jsonl  ',
+      XDG_STATE_HOME: '/ignored',
+    }),
+    '/audit/writes.jsonl',
+  );
+});
+
+test('a blank IG_WRITE_JOURNAL means "use the default", it is not an empty path', () => {
+  // Trailing `IG_WRITE_JOURNAL=` in a .env file must not send the audit trail to
+  // the current working directory (or throw) — it means the knob is unset.
+  for (const blank of ['', '   ', '\t\n']) {
+    assert.equal(
+      resolveWriteJournal({ IG_WRITE_JOURNAL: blank, XDG_STATE_HOME: '/var/state' }),
+      join('/var/state', 'instagram-mcp-ai', 'writes.jsonl'),
+      `${JSON.stringify(blank)} should fall back to the default`,
+    );
+  }
+});
+
+test('a path knob is not validated — any non-blank value passes through verbatim', () => {
+  // Deliberate: the journal is a best-effort audit sink, so an unusable path is
+  // reported at warn on the first applied write, never as a refusal to start.
+  assert.equal(resolveWriteJournal({ IG_WRITE_JOURNAL: 'writes.jsonl' }), 'writes.jsonl');
+  assert.equal(
+    resolveWriteJournal({ IG_WRITE_JOURNAL: '/no/such/mount/writes.jsonl' }),
+    '/no/such/mount/writes.jsonl',
+  );
+});
+
+test('resolveWriteJournal reads process.env when no env map is passed', () => {
+  const prev = process.env.IG_WRITE_JOURNAL;
+  process.env.IG_WRITE_JOURNAL = '/from/process-env/writes.jsonl';
+  try {
+    assert.equal(resolveWriteJournal(), '/from/process-env/writes.jsonl');
+  } finally {
+    if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
+    else process.env.IG_WRITE_JOURNAL = prev;
+  }
 });

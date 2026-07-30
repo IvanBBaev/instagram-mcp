@@ -31,8 +31,11 @@ import {
 import type { ToolAnnotationSet, ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js';
 import { text } from '../../src/mcp/result.js';
 import { InstagramError, isInstagramError } from '../../src/core/types.js';
+import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { allTools } from '../../src/tools/index.js';
 
@@ -74,7 +77,12 @@ const fbProfile: ResolvedProfile = {
 interface RegisterConfig {
   title?: string;
   description?: string;
-  inputSchema?: z.ZodRawShape;
+  /**
+   * A **built** `ZodObject`, not a raw shape: the registry hands the SDK the
+   * closed `.strict()` object so the SDK's own pre-callback validation rejects
+   * unknown arguments instead of stripping them (CC-CFG-6).
+   */
+  inputSchema?: z.AnyZodObject;
   outputSchema?: z.ZodRawShape;
   annotations?: ToolAnnotationSet;
 }
@@ -442,18 +450,32 @@ test('D1: a fb-login-only tool stays hidden when NO configured profile is on fb-
 
 // --- account auto-injection & strict re-validation -------------------------
 
-test('account selector is injected and the strict schema accepts { account }', () => {
-  const t = spec({ name: 'instagram_get_account', input: {} });
+test('account selector is injected and the registered schema is CLOSED, not a raw shape', () => {
+  const t = spec({ name: 'instagram_get_account', input: { fields: z.string().optional() } });
   const { deps, calls } = makeDeps({ tools: [t] });
   registerTools(deps);
 
-  const cfg = calls[0]?.config;
-  assert.ok(cfg?.inputSchema, 'inputSchema present');
-  assert.ok('account' in cfg.inputSchema, 'account field injected');
+  const schema = calls[0]?.config.inputSchema;
+  assert.ok(schema, 'inputSchema present');
+  assert.ok('account' in schema.shape, 'account field injected');
 
-  const strict = z.object(cfg.inputSchema).strict();
-  assert.equal(strict.safeParse({ account: 'brand' }).success, true);
-  assert.equal(strict.safeParse({}).success, true);
+  // Asserted on the very object the SDK receives. Before the CC-CFG-6 fix this
+  // was a raw `z.ZodRawShape`, which the SDK re-wrapped as a NON-strict
+  // `z.object(shape)` and used to strip unknown keys before our callback ran —
+  // so the wrapper's own `.strict()` re-parse could never fire.
+  assert.equal(schema.safeParse({ account: 'brand' }).success, true);
+  assert.equal(schema.safeParse({}).success, true);
+  assert.equal(schema.safeParse({ bogus: 1 }).success, false, 'the schema itself is strict');
+
+  // The curated message rides on the schema's error map, so it survives being
+  // raised inside the SDK rather than inside our wrapper.
+  const failure = schema.safeParse({ bogus: 1, alsoBogus: 2 });
+  assert.equal(failure.success, false);
+  const message = failure.success ? '' : (failure.error.issues[0]?.message ?? '');
+  assert.ok(message.includes('bogus'), 'names the unknown keys');
+  assert.ok(message.includes('alsoBogus'), 'names every unknown key');
+  assert.ok(message.includes('fields'), 'lists the valid keys');
+  assert.ok(message.includes('account'), 'lists the injected account selector');
 });
 
 test('strict re-validation rejects an unknown argument at call time (CC-CFG-6)', async () => {
@@ -464,6 +486,276 @@ test('strict re-validation rejects an unknown argument at call time (CC-CFG-6)',
   const res = await calls[0]!.cb({ bogus: 1 });
   assert.equal(res.isError, true);
   assert.ok(res.content[0]?.text.includes('bogus'), 'names the unknown key');
+});
+
+// --- CC-CFG-6 end to end, against a REAL McpServer -------------------------
+
+/**
+ * Everything above registers against a *fake* registrar, which is exactly why
+ * CC-CFG-6 could be false for so long: the fake hands `cb` the raw arguments,
+ * so the wrapper's `.strict()` re-parse always saw the unknown key. A real
+ * `McpServer` does not. It validates `request.params.arguments` itself in
+ * `validateToolInput()` and passes the *parsed* value to the callback — and
+ * when it is handed a raw `ZodRawShape` it rebuilds it as a non-strict
+ * `z.object(shape)` (`server/zod-compat.js` `normalizeObjectSchema` ->
+ * `objectFromShape`), which silently strips unknown keys. The tests below are
+ * the ones that can actually observe that, so they drive a real server through
+ * a real `Client` over `InMemoryTransport`.
+ */
+async function liveServer(
+  tools: ToolSpec[],
+  over: Partial<RegisterToolsDeps> = {},
+): Promise<{ client: Client; registered: string[]; close: () => Promise<void> }> {
+  const server = new McpServer({ name: 'instagram-mcp-ai-test', version: '0.0.0' });
+  const { makeRequest } = makeReqFactory();
+  const { registered } = registerTools({
+    server,
+    tools,
+    profiles: [igProfile],
+    defaultProfileName: 'default',
+    settings: baseSettings,
+    clock: fakeClock(0),
+    log: noopLog,
+    makeRequest,
+    env: {},
+    ...over,
+  });
+
+  const client = new Client({ name: 'registry-test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  return {
+    client,
+    registered,
+    close: async () => {
+      await client.close();
+      await server.close();
+    },
+  };
+}
+
+/**
+ * Flatten a `tools/call` result's text content. Typed `unknown` because the
+ * SDK client returns a union with the legacy `{ toolResult }` shape.
+ */
+function resultText(res: unknown): string {
+  const raw = (res as { content?: unknown }).content;
+  const content = Array.isArray(raw) ? (raw as { text?: unknown }[]) : [];
+  return content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('\n');
+}
+
+test('real McpServer: an unknown argument is REJECTED, never dropped (CC-CFG-6)', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    input: { fields: z.string().optional() },
+    handler: () => text('HANDLER-RAN'),
+  });
+  const live = await liveServer([t]);
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_get_account',
+      arguments: { bogus: 42 },
+    });
+
+    assert.equal(res.isError, true, 'unknown args must be rejected, not silently dropped');
+    const body = resultText(res);
+    assert.equal(body.includes('HANDLER-RAN'), false, 'the handler must never have run');
+    // The curated message survives the SDK raising the error instead of us.
+    assert.ok(body.includes('bogus'), `names the unknown key: ${body}`);
+    assert.ok(body.includes('fields'), `lists the valid keys: ${body}`);
+    assert.ok(body.includes('account'), `lists the injected selector: ${body}`);
+    assert.ok(body.includes('instagram_get_account'), `names the tool: ${body}`);
+  } finally {
+    await live.close();
+  }
+});
+
+test('real McpServer: valid arguments still reach the handler untouched', async () => {
+  const brand: ResolvedProfile = { name: 'brand', authPath: 'ig-login', accessToken: 'tok2' };
+  let seen: Record<string, unknown> | undefined;
+  const t = spec({
+    name: 'instagram_get_account',
+    input: { fields: z.string().optional() },
+    handler: (args) => {
+      seen = args;
+      return text('ok');
+    },
+  });
+  const live = await liveServer([t], { profiles: [igProfile, brand] });
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_get_account',
+      arguments: { fields: 'id,username', account: 'brand' },
+    });
+    assert.equal(res.isError, undefined);
+    assert.equal(resultText(res), 'ok');
+    assert.deepEqual(seen, { fields: 'id,username', account: 'brand' });
+  } finally {
+    await live.close();
+  }
+});
+
+test('real McpServer: tools/list publishes a closed schema with the account selector', async () => {
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { mediaId: z.string().describe('The media id.') },
+    output: { id: z.string() },
+  });
+  const live = await liveServer([t]);
+  try {
+    const { tools } = await live.client.listTools();
+    assert.equal(tools.length, 1);
+    const listed = tools[0]!;
+    assert.deepEqual(listed.inputSchema, {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: {
+        mediaId: { type: 'string', description: 'The media id.' },
+        account: {
+          type: 'string',
+          minLength: 1,
+          description:
+            'Name of the configured account profile to operate as (multi-account). Omit to use ' +
+            'the default profile (IG_ACTIVE_PROFILE).',
+        },
+      },
+      required: ['mediaId'],
+      // The published contract has always said this; before the fix the runtime
+      // did not honour it. Now the schema and the behaviour agree.
+      additionalProperties: false,
+    });
+    // outputSchema still goes over as a raw shape and is unaffected.
+    assert.deepEqual(listed.outputSchema, {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    });
+  } finally {
+    await live.close();
+  }
+});
+
+test('real McpServer: outputSchema handling is unaffected by the strict input schema', async () => {
+  const good = spec({
+    name: 'instagram_get_account',
+    output: { id: z.string() },
+    handler: () => ({
+      content: [{ type: 'text' as const, text: '{"id":"1"}' }],
+      structuredContent: { id: '1' },
+    }),
+  });
+  const bad = spec({
+    name: 'instagram_get_media',
+    output: { id: z.string() },
+    // Violates its own declared output schema: the SDK must still catch it.
+    handler: () => ({
+      content: [{ type: 'text' as const, text: '{}' }],
+      structuredContent: { id: 7 },
+    }),
+  });
+  const live = await liveServer([good, bad]);
+  try {
+    const ok = await live.client.callTool({ name: 'instagram_get_account', arguments: {} });
+    assert.equal(ok.isError, undefined);
+    assert.deepEqual(ok.structuredContent, { id: '1' });
+
+    const nope = await live.client.callTool({ name: 'instagram_get_media', arguments: {} });
+    assert.equal(nope.isError, true);
+    assert.ok(resultText(nope).includes('Output validation error'));
+  } finally {
+    await live.close();
+  }
+});
+
+test('real McpServer: a type error on a declared field still reports the field path', async () => {
+  const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
+  const live = await liveServer([t]);
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_get_media',
+      arguments: { mediaId: 42 },
+    });
+    assert.equal(res.isError, true);
+    const body = resultText(res);
+    assert.ok(body.includes('mediaId'), `names the offending field: ${body}`);
+    assert.ok(body.includes('Expected string'), `keeps zod's own wording: ${body}`);
+  } finally {
+    await live.close();
+  }
+});
+
+test('real McpServer: omitting arguments entirely keeps zod default wording', async () => {
+  // The schema-bound error map only rewrites `unrecognized_keys`; every other
+  // root-level issue falls through to zod's default text, so a client that
+  // sends no `arguments` at all reads exactly what it did before the fix.
+  const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
+  const live = await liveServer([t]);
+  try {
+    const res = await live.client.callTool({ name: 'instagram_get_media' });
+    assert.equal(res.isError, true);
+    const body = resultText(res);
+    assert.ok(body.includes('Required'), `zod's default wording is preserved: ${body}`);
+    assert.equal(body.includes('unknown argument'), false, 'not reported as an unknown key');
+  } finally {
+    await live.close();
+  }
+});
+
+test('the wrapper fallback renders a non-unknown-key validation failure with its path', async () => {
+  // Reachable through the `ToolRegistrar` seam (a stub registrar or a direct
+  // callback caller), where the SDK's own validation never ran.
+  const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 42 });
+  assert.equal(res.isError, true);
+  const body = res.content[0]?.text ?? '';
+  assert.ok(body.includes('instagram_get_media'), `names the tool: ${body}`);
+  assert.ok(body.includes('mediaId'), `names the field path: ${body}`);
+  assert.equal(res.structuredContent?.error !== undefined, true, 'keeps the error envelope');
+});
+
+test('real McpServer: the whole v1 surface registers, lists and stays closed', async () => {
+  // `all` + a Path-B profile keeps every tool past D1 filtering, so this is the
+  // full 28-tool surface end to end on a real server.
+  const live = await liveServer(allTools, {
+    profiles: [fbProfile],
+    env: { IG_TOOL_PACKAGES: 'all' },
+  });
+  try {
+    assert.equal(live.registered.length, allTools.length, 'every v1 tool registers');
+    assert.equal(allTools.length, 28, 'the v1 surface is 28 tools');
+
+    const { tools } = await live.client.listTools();
+    assert.deepEqual([...tools.map((t) => t.name)].sort(), [...live.registered].sort());
+
+    for (const listed of tools) {
+      const schema = listed.inputSchema as {
+        additionalProperties?: unknown;
+        properties?: Record<string, unknown>;
+      };
+      assert.equal(
+        schema.additionalProperties,
+        false,
+        `${listed.name} must publish a closed input schema`,
+      );
+      assert.ok(schema.properties?.account, `${listed.name} must expose the account selector`);
+    }
+
+    // And the enforcement is real for a tool picked out of the live surface.
+    const res = await live.client.callTool({
+      name: 'instagram_get_account',
+      arguments: { bogus: 1 },
+    });
+    assert.equal(res.isError, true);
+    assert.ok(resultText(res).includes('bogus'));
+  } finally {
+    await live.close();
+  }
 });
 
 // --- handler wrapper -------------------------------------------------------
@@ -666,4 +958,283 @@ test('registry: without an injected seam the default is built from the server', 
   // The fake server advertises nothing, so it reports unsupported and the write
   // gate keeps its pre-elicitation, env-flag-only behaviour.
   assert.equal(seam.isSupported(), false);
+});
+
+// --- per-call logFields wiring (QA F6) -------------------------------------
+
+/**
+ * A logger that records every emitted record, including the child bindings the
+ * registry attaches, so the tests can assert on the exact line that reaches the
+ * sink. Bindings are merged the way `core/log.ts` merges them.
+ */
+interface LogRecord {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  msg: string;
+  fields: Record<string, unknown>;
+}
+function recordingLog(bindings: Record<string, unknown> = {}): {
+  log: Logger;
+  records: LogRecord[];
+} {
+  const records: LogRecord[] = [];
+  const make = (bound: Record<string, unknown>): Logger => ({
+    debug: (msg, fields) => records.push({ level: 'debug', msg, fields: { ...fields, ...bound } }),
+    info: (msg, fields) => records.push({ level: 'info', msg, fields: { ...fields, ...bound } }),
+    warn: (msg, fields) => records.push({ level: 'warn', msg, fields: { ...fields, ...bound } }),
+    error: (msg, fields) => records.push({ level: 'error', msg, fields: { ...fields, ...bound } }),
+    child: (extra) => make({ ...bound, ...extra }),
+  });
+  return { log: make(bindings), records };
+}
+
+const invoked = (records: LogRecord[]): LogRecord[] =>
+  records.filter((r) => r.msg === 'tool invoked');
+
+test('logFields: the declared payload is emitted as one debug line per invocation', async () => {
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { mediaId: z.string(), caption: z.string().optional() },
+    logFields: (args) => ({ mediaId: args.mediaId as string }),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 'M1', caption: 'never log me' });
+  assert.equal(res.isError, undefined);
+
+  const lines = invoked(records);
+  assert.equal(lines.length, 1, 'exactly one invocation line');
+  assert.equal(lines[0]!.level, 'debug', 'per-call detail is debug, like core/http.ts');
+  // The spec's payload plus the child bindings the registry always attaches.
+  assert.deepEqual(lines[0]!.fields, {
+    mediaId: 'M1',
+    tool: 'instagram_get_media',
+    account: 'default',
+  });
+  // Only what the spec declared: the caption it did not declare never leaks.
+  assert.equal(JSON.stringify(lines[0]!.fields).includes('never log me'), false);
+});
+
+test('logFields: it receives the VALIDATED args, including the injected account selector', async () => {
+  const brand: ResolvedProfile = { name: 'brand', authPath: 'ig-login', accessToken: 'tok2' };
+  let seenArgs: Record<string, unknown> | undefined;
+  const t = spec({
+    name: 'instagram_get_account',
+    input: { limit: z.coerce.number().optional() },
+    logFields: (args) => {
+      seenArgs = args;
+      return { limit: (args as { limit?: number }).limit, account: args.account };
+    },
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], profiles: [igProfile, brand], log });
+  registerTools(deps);
+
+  await calls[0]!.cb({ account: 'brand', limit: '7' });
+  // Coerced by the schema before logFields saw it — not the raw wire value.
+  assert.equal(seenArgs?.limit, 7);
+  assert.equal(invoked(records)[0]!.fields.limit, 7);
+  assert.equal(invoked(records)[0]!.fields.account, 'brand');
+});
+
+test('logFields: a rejected call logs nothing — invalid args are never echoed', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ({ reached: true }),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ bogus: 'CANARY-UNKNOWN-ARG' });
+  assert.equal(res.isError, true);
+  assert.equal(invoked(records).length, 0, 'strict-parse rejections never reach the log path');
+});
+
+test('logFields: the invocation is logged even when the call is later refused', async () => {
+  // Profile resolution fails after the line is emitted; the attempt is still
+  // recorded, which is the point of an invocation trace.
+  const t = spec({ name: 'instagram_get_account', logFields: () => ({ ok: true }) });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ account: 'does-not-exist' });
+  assert.equal(res.isError, true);
+  assert.equal(invoked(records).length, 1);
+  assert.equal(invoked(records)[0]!.fields.account, 'does-not-exist');
+});
+
+test('logFields: the line is emitted BEFORE the handler runs', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ({ ok: true }),
+    handler: (_args, ctx) => {
+      ctx.log.info('handler reached');
+      return text('ok');
+    },
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+  await calls[0]!.cb({});
+
+  assert.deepEqual(
+    records.map((r) => r.msg),
+    ['tool invoked', 'handler reached'],
+  );
+});
+
+test('logFields: a tool that declares none still logs the invocation, with no extra fields', async () => {
+  const t = spec({ name: 'instagram_get_publishing_limit' });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+  await calls[0]!.cb({});
+
+  const lines = invoked(records);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0]!.fields, {
+    tool: 'instagram_get_publishing_limit',
+    account: 'default',
+  });
+});
+
+test('logFields: a non-record return value is ignored, the invocation line survives', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    // A misbehaving spec: the contract says Record, this returns a string.
+    logFields: () => 'not-a-record' as unknown as Record<string, unknown>,
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(invoked(records)[0]!.fields, {
+    tool: 'instagram_get_account',
+    account: 'default',
+  });
+});
+
+// --- throw safety: logging can never fail a tool call ----------------------
+
+test('logFields: a throwing logFields does NOT fail the tool call; it degrades to a warning', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => {
+      throw new Error('logFields exploded');
+    },
+    handler: () => text('handler still ran'),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+  assert.equal(res.isError, undefined, 'a logging failure never fails the request');
+  assert.equal(res.content[0]?.text, 'handler still ran');
+
+  assert.equal(invoked(records).length, 0);
+  const warns = records.filter((r) => r.level === 'warn');
+  assert.equal(warns.length, 1);
+  assert.ok(warns[0]!.msg.includes('log fields could not be built'));
+  assert.ok(String(warns[0]!.fields.error).includes('logFields exploded'));
+  assert.equal(warns[0]!.fields.tool, 'instagram_get_account');
+});
+
+test('logFields: a getter that throws during redaction is contained the same way', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () =>
+      Object.defineProperty({}, 'boom', {
+        enumerable: true,
+        get() {
+          throw new Error('getter exploded');
+        },
+      }),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+  assert.equal(res.isError, undefined);
+  assert.equal(records.filter((r) => r.level === 'warn').length, 1);
+});
+
+test('logFields: a log sink that throws does NOT fail the tool call either', async () => {
+  const brokenLog: Logger = {
+    debug() {
+      throw new Error('stream closed');
+    },
+    info() {},
+    warn() {
+      throw new Error('stream closed');
+    },
+    error() {},
+    child() {
+      return brokenLog;
+    },
+  };
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ({ ok: true }),
+    handler: () => text('handler still ran'),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: brokenLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+  assert.equal(res.isError, undefined, 'a broken sink never fails the request');
+  assert.equal(res.content[0]?.text, 'handler still ran');
+});
+
+// --- redaction of the log payload (F6) -------------------------------------
+
+test('logFields: the payload goes through the redactor by DEFAULT, with no dep injected', async () => {
+  // No `redact` dep: this proves the registry defaults to a real redactor
+  // rather than trusting the injected logger to scrub. F6: "documented to never
+  // carry secrets" is a convention; this is the control.
+  const secret = 'REGISTRY-F6-SECRET-VALUE-0123456789';
+  registerSecret(secret);
+  const t = spec({
+    name: 'instagram_get_account',
+    input: { note: z.string() },
+    logFields: (args) => ({ note: args.note as string, access_token: 'EAAtoken' }),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  await calls[0]!.cb({ note: `leaked ${secret} here` });
+  const fields = invoked(records)[0]!.fields;
+  assert.equal(JSON.stringify(fields).includes(secret), false, 'the registered secret is masked');
+  assert.equal(fields.note, `leaked ${REDACTED} here`);
+  // A secret-named key is masked wholesale regardless of its content.
+  assert.equal(fields.access_token, REDACTED);
+});
+
+test('logFields: an injected redactor is used and the sink only ever sees its output', async () => {
+  const seen: unknown[] = [];
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ({ raw: 'original' }),
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log,
+    redact: (value) => {
+      seen.push(value);
+      return { raw: 'scrubbed' };
+    },
+  });
+  registerTools(deps);
+  await calls[0]!.cb({});
+
+  assert.deepEqual(seen, [{ raw: 'original' }], 'the raw payload reaches the redactor');
+  assert.equal(invoked(records)[0]!.fields.raw, 'scrubbed', 'the sink sees only the output');
 });

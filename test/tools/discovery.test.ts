@@ -20,7 +20,8 @@ import type {
   Settings,
 } from '../../src/core/types.js';
 import { InstagramError } from '../../src/core/types.js';
-import type { ToolContext, ToolSpec } from '../../src/mcp/define.js';
+import type { Clock } from '../../src/core/clock.js';
+import type { ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js';
 import { fence } from '../../src/mcp/result.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { discoveryTools } from '../../src/tools/discovery.js';
@@ -66,13 +67,17 @@ function makeProfile(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile 
 
 function makeCtx(
   req: IgRequestFn,
-  overrides: { settings?: Partial<Settings>; profile?: Partial<ResolvedProfile> } = {},
+  overrides: {
+    settings?: Partial<Settings>;
+    profile?: Partial<ResolvedProfile>;
+    clock?: Clock;
+  } = {},
 ): ToolContext {
   return {
     req,
     settings: makeSettings(overrides.settings),
     profile: makeProfile(overrides.profile),
-    clock: fakeClock(0),
+    clock: overrides.clock ?? fakeClock(0),
     log: noopLog,
   };
 }
@@ -321,4 +326,112 @@ test('the hashtag budget is reported as advisory and never blocks a search', asy
   assert.equal(last?.budget.remaining, 0);
   assert.match(last?.budget.note ?? '', /NOT an enforced limit/);
   assert.match(last?.budget.note ?? '', /resets on process restart/);
+});
+
+const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface Budget {
+  uniqueHashtagsUsed: number;
+  remaining: number;
+  overBudget: boolean;
+}
+
+/** Read the advisory budget block off a search result, asserting it is there. */
+function budgetOf(res: ToolResult): Budget {
+  assert.ok(res.structuredContent, 'structuredContent is present');
+  return (res.structuredContent as { budget: Budget }).budget;
+}
+
+test('a hashtag still inside the 7-day window keeps counting against the budget', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }] }));
+  const clock = fakeClock(0);
+  const ctx = makeCtx(req, { profile: { accountId: 'budget-window-inside' }, clock });
+  const search = tool('instagram_search_hashtag');
+
+  const first = await search.handler({ hashtag: 'alpha' }, ctx);
+  assert.equal(budgetOf(first).uniqueHashtagsUsed, 1);
+
+  // One millisecond short of the window: nothing may be evicted yet.
+  clock.advance(WINDOW_MS - 1);
+  const second = await search.handler({ hashtag: 'beta' }, ctx);
+  assert.equal(budgetOf(second).uniqueHashtagsUsed, 2);
+  assert.equal(budgetOf(second).remaining, 28);
+});
+
+test('the hashtag budget evicts a hashtag once the 7-day window has fully elapsed', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }] }));
+  const clock = fakeClock(0);
+  const ctx = makeCtx(req, { profile: { accountId: 'budget-window-elapsed' }, clock });
+  const search = tool('instagram_search_hashtag');
+
+  await search.handler({ hashtag: 'alpha' }, ctx);
+
+  // Exactly one window later `alpha` leaves the rolling window, so `beta` is the
+  // only hashtag left in it — the counter must go back to 1, not climb to 2.
+  clock.advance(WINDOW_MS);
+  const second = await search.handler({ hashtag: 'beta' }, ctx);
+  const budget = budgetOf(second);
+  assert.equal(budget.uniqueHashtagsUsed, 1);
+  assert.equal(budget.remaining, 29);
+  assert.equal(budget.overBudget, false);
+});
+
+// --- no resolved account id -------------------------------------------------
+// Every discovery endpoint needs the operated account as `user_id` / as the node
+// the field hangs off. When the profile carries no account id the tools fall
+// back to the `me` alias rather than sending `user_id=undefined`.
+
+test('search_hashtag falls back to user_id=me when the profile has no account id', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [{ id: 'H1' }] }));
+  const ctx = makeCtx(req, { profile: { accountId: undefined } });
+
+  await tool('instagram_search_hashtag').handler({ hashtag: '#NoFilter' }, ctx);
+
+  assert.equal(calls[0]?.params?.user_id, 'me');
+  assert.equal(calls[0]?.params?.q, 'nofilter', 'the "#" is stripped and the tag lower-cased');
+});
+
+test('get_hashtag_media falls back to user_id=me when the profile has no account id', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [] }));
+  const ctx = makeCtx(req, { profile: { accountId: undefined } });
+
+  await tool('instagram_get_hashtag_media').handler({ hashtagId: 'H1', edge: 'top' }, ctx);
+
+  assert.equal(calls[0]?.params?.user_id, 'me');
+  assert.equal(calls[0]?.path, '/H1/top_media');
+});
+
+test('discover_business hangs the field off /me when the profile has no account id', async () => {
+  const { req, calls } = fakeReq(() => ({ business_discovery: { username: 'x' } }));
+  const ctx = makeCtx(req, { profile: { accountId: undefined } });
+
+  await tool('instagram_discover_business').handler({ username: 'x' }, ctx);
+
+  assert.equal(calls[0]?.path, '/me');
+});
+
+// --- paging -----------------------------------------------------------------
+
+test('get_hashtag_media hands back the cursor of a page that was NOT truncated', async () => {
+  // The mirror of the truncated case: when the cap did not cut the page, the
+  // cursor addresses a real page boundary and must be returned so the caller can
+  // spend it (the truncated case deliberately withholds it).
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'm1' }, { id: 'm2' }],
+    paging: { cursors: { after: 'NEXT' } },
+  }));
+  const ctx = makeCtx(req, { settings: { maxItems: 50 } });
+
+  const res = await tool('instagram_get_hashtag_media').handler(
+    { hashtagId: 'H1', edge: 'top' },
+    ctx,
+  );
+
+  const sc = res.structuredContent as {
+    items: Array<{ id: string }>;
+    paging: { after?: string; truncated: boolean };
+  };
+  assert.equal(sc.items.length, 2);
+  assert.equal(sc.paging.truncated, false);
+  assert.equal(sc.paging.after, 'NEXT');
 });

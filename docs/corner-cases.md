@@ -4,8 +4,11 @@
 > expected server behavior, and a **When** column tying it to the roadmap phase
 > whose exit gate must cover it (test, design decision, or live probe).
 > [roadmap.md](roadmap.md) references these IDs; a phase does not exit while one
-> of its cases is unhandled. `[verify]` marks behavior that needs an empirical
-> probe against the live API — Meta's docs do not answer it.
+> of its cases is unhandled. A `[verify — needs a live call: …]` marker means Meta's
+> public docs were checked and do **not** answer it; the marker must always name the
+> exact call that would settle it, so it can be discharged mechanically. A marker
+> that does not say how to discharge it is a bug in this document. Facts settled
+> from official docs carry *[verified &lt;date&gt; — source, url]* instead.
 
 Legend for **How covered**: `unit` = deterministic test with mocked fetch/clock ·
 `design` = must be decided in the design, then unit-tested · `live` = live-API
@@ -28,7 +31,7 @@ probe protocol (junk account) · `docs` = documented behavior/limitation.
 | CC-AUTH-11 | Path-B system-user token whose Business assets don't include the target Page/IG account | Permission error names the asset-assignment step, not just the scope | M1 · docs + unit |
 | CC-AUTH-12 | Path B: `data_access_expires_at` (90-day data-access window) expires independently of token validity | `doctor`/`token_status` surface it separately; nearing expiry produces its own warning | M1 · unit |
 | CC-AUTH-13 | Local clock wrong / DST shift → "days left" and refresh-threshold math skewed | All time math goes through the injectable clock; warnings state the absolute expiry timestamp, not only "N days left" | M1 · unit |
-| CC-AUTH-14 | Two server instances (e.g. two Claude windows) both trigger Path-A auto-refresh concurrently | Refresh is guarded: re-read the env file before refreshing (another instance may have already rotated it); atomic write prevents interleaved corruption. Whether Meta invalidates the old token on refresh: `[verify]` | M2 · design + live |
+| CC-AUTH-14 | Two server instances (e.g. two Claude windows) both trigger Path-A auto-refresh concurrently | Refresh is guarded: re-read the env file before refreshing (another instance may have already rotated it); atomic write prevents interleaved corruption. Whether Meta invalidates the old token on refresh: `[verify — needs a live call: refresh once via GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token, then replay a cheap read (GET /me?fields=user_id) with the OLD token and record whether it still succeeds or maps to 190]`. Meta's `refresh_access_token` reference documents the preconditions and the new token but is **silent on the old token's fate** *[checked 2026-07-30 — https://developers.facebook.com/docs/instagram-platform/reference/refresh_access_token]* | M2 · design + live |
 
 ## 2. Publishing & container state machine (CC-PUB)
 
@@ -37,14 +40,14 @@ probe protocol (junk account) · `docs` = documented behavior/limitation.
 | CC-PUB-1 | Container reaches `FINISHED`, but `media_publish` fails (quota, 5xx, integrity) | Error carries the container ID; composite returns a **resumable** result; `media_publish` is never auto-retried | M2 · unit |
 | CC-PUB-2 | Composite hits the 60 s poll cap while the container is still `IN_PROGRESS` | Returns in-progress result + container ID + instruction to resume; composites accept `resume_container_id` to continue without re-creating | M2 · design + unit |
 | CC-PUB-3 | Container expired (code 24 / subcode 2207008 — 24 h passed unpublished) | Actionable error: re-create; the write journal shows the original creation for reference | M2 · unit |
-| CC-PUB-4 | `media_publish` called twice for the same container (model retry) | Second call fails Meta-side; server detects the already-`PUBLISHED` status and reports success-idempotently with the existing media ID rather than a raw error `[verify exact error shape]` | M2 · unit + live |
+| CC-PUB-4 | `media_publish` called twice for the same container (model retry) | Second call fails Meta-side; server detects the already-`PUBLISHED` status and reports success-idempotently with the existing media ID rather than a raw error `[verify — needs a live call: POST /{ig-id}/media_publish twice with the same creation_id and capture code / error_subcode / error_user_msg]`. The official Instagram error-code reference lists **no already-published subcode** *[checked 2026-07-30 — https://developers.facebook.com/docs/instagram-api/reference/error-codes/]*, so the shape cannot be derived from docs | M2 · unit + live |
 | CC-PUB-5 | Carousel: one child container fails / times out while siblings finish | Composite reports which child failed and returns all sibling container IDs; no parent container is created on partial failure | M2 · unit |
-| CC-PUB-6 | Carousel bounds: < 2 or > 10 children; mixing image and video children | zod rejects bounds client-side; mixed media is allowed by Meta — do not over-restrict `[verify current rules]` | M2 · unit + live |
+| CC-PUB-6 | Carousel bounds: < 2 or > 10 children; mixing image and video children | **Mixing is confirmed allowed — do not over-restrict.** "Carousels can have up to 10 total images, videos, or a mix of the two"; `children` is "an array of up to 10 container IDs" *[verified 2026-07-30 — IG User `/media` reference, https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/ ; content-publishing guide, https://developers.facebook.com/docs/instagram-platform/content-publishing/]*. zod enforces the **max of 10** from the docs; the **minimum of 2** is an Instagram product rule that Meta's API docs never state, so it is enforced client-side as our own bound and Meta's rejection (if any) is mapped rather than predicted | M2 · unit |
 | CC-PUB-7 | `image_url` unreachable by Meta (404, auth-walled, redirects, slow origin) | Container goes `ERROR`; server enriches with the container `status` detail and reminds that the URL must be publicly fetchable by Meta's crawlers | M2 · unit |
 | CC-PUB-8 | Pre-signed URL (S3-style) expires between container creation and Meta's fetch/retry | Documented pitfall: recommend ≥ 1 h validity; error path same as CC-PUB-7 | M2 · docs |
 | CC-PUB-9 | PNG/WebP/HEIC supplied (Meta accepts JPEG only for feed images) | zod/extension+content-type heuristic warns in preview; Meta's rejection mapped to `kind: validation` naming the JPEG-only rule | M2 · unit |
 | CC-PUB-10 | Aspect ratio outside 0.8–1.91, image > 8 MB, reel > 300 MB, story video > 60 s | Client-side validation refuses **before** any container is created (no quota burn); message states the exact limit violated | M2 · unit |
-| CC-PUB-11 | Caption edge: exactly 2,200 chars with emoji (UTF-16 surrogates), > 30 hashtags, > 20 @tags | Count in **code points**, not UTF-16 units `[verify Meta's counting unit]`; limits validated client-side with precise counts in the error | M2 · unit + live |
+| CC-PUB-11 | Caption edge: exactly 2,200 chars with emoji (UTF-16 surrogates), > 30 hashtags, > 20 @tags | Meta documents the caps — "Maximum 2200 characters, 30 hashtags, and 20 @ tags" — but **never defines the counting unit** *[checked 2026-07-30 — IG User `/media` reference, https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/]*. We count in **code points**, not UTF-16 units, and validate client-side with precise counts in the error. `[verify — needs a live call: POST /{ig-id}/media with a caption of exactly 2,200 code points that includes non-BMP emoji (each 2 UTF-16 units); acceptance ⇒ code points, rejection ⇒ UTF-16 units or bytes]` | M2 · unit + live |
 | CC-PUB-12 | Publishing-quota race: `quota_usage` shows 1 slot left, two posts run concurrently | Second gets code 9 / subcode 2207042 → refuse with reset info; composites re-check quota at apply time, not only at preview time | M2 · unit |
 | CC-PUB-13 | Story specifics: no like/comment counts, self-expires in 24 h | `get_media` on an expired story returns a Graph error → mapped with "stories expire after 24 h" context; insights on expired stories degrade gracefully | M2/M4 · docs + unit |
 | CC-PUB-14 | Integrity restriction (subcode 2207051) on publish or comment | Never auto-retried; Meta's `error_user_msg` surfaced verbatim; journal records the refusal | M2 · unit |
@@ -58,7 +61,7 @@ probe protocol (junk account) · `docs` = documented behavior/limitation.
 | CC-RATE-1 | Usage headers absent on a response (Meta sends them inconsistently) | Budget snapshot keeps the last-seen value with its timestamp; `token_status` marks it "as of \<time\>", never crashes | M1 · unit |
 | CC-RATE-2 | Malformed / unparseable usage-header JSON | Swallowed with a debug log; never breaks the actual response path | M1 · unit |
 | CC-RATE-3 | `Retry-After` absurdly large (or absent) on 429 | Cap wait at 60 s; if the reset is hours away (BUC 24 h window), **fail fast with the estimate** instead of blocking the MCP call | M1 · unit |
-| CC-RATE-4 | Hashtag 30-unique/7-days local counter: file corrupted, or same account used from two machines | Counter is advisory only — self-heals on parse failure (reset + warn); docs state it cannot see other machines' queries; Meta's own rejection remains the hard signal | M4 · unit + docs |
+| CC-RATE-4 | Hashtag 30-unique/7-days local counter: file corrupted, or same account used from two machines | Counter is advisory only — self-heals on parse failure (reset + warn); Meta's own rejection remains the hard signal. **The multi-machine blind spot is fixable**: `GET /{ig-user-id}/recently_searched_hashtags` returns the account's real 7-day window server-side *[verified 2026-07-30 — https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/recently_searched_hashtags]*, so the counter should be reconciled against it rather than documented as unfixable (see [operations.md](operations.md) §1) | M4 · unit + docs |
 | CC-RATE-5 | Proactive throttle (> 90 % usage) triggering during a composite mid-flow | Composite completes its current step but refuses to start new quota-consuming steps; partial-progress result explains why | M2 · unit |
 | CC-RATE-6 | Semaphore saturation: > `IG_MAX_CONCURRENT` parallel tool calls | Queued fairly (FIFO); a queue-wait timeout produces a clear "server busy" error rather than hanging the MCP call indefinitely | M1 · unit |
 
@@ -82,8 +85,8 @@ probe protocol (junk account) · `docs` = documented behavior/limitation.
 | CC-COM-2 | Reply to a reply (Instagram supports only one threading level) | Client-side check where detectable; otherwise map Meta's rejection with the one-level rule stated | M3 · docs + unit |
 | CC-COM-3 | Commenting on media with comments disabled | Graph rejection mapped; `create_comment` preview warns if `comments_enabled=false` is already known from a prior read | M3 · unit |
 | CC-COM-4 | Comment-spam heuristic block (e.g. code 368 temporarily blocked, or 2207051-class) | `kind: upstream`-with-policy-context, never auto-retried; message tells the operator to slow down | M3 · unit |
-| CC-COM-5 | Hide/unhide on a comment type that cannot be hidden (e.g. own comment) `[verify rules]` | Live probe in M3; behavior documented from evidence | M3 · live |
-| CC-COM-6 | Empty message, whitespace-only, or > max length reply | zod rejects client-side; length limit `[verify exact comment length cap]` | M3 · unit + live |
+| CC-COM-5 | Hide/unhide on a comment type that cannot be hidden (e.g. own comment) | **Rules confirmed from docs, no probe needed.** (a) "Comments made by media object owners on their own media objects will always be displayed, even if the comments have been set to `hide=true`" — the call *succeeds* but is a no-op, so the tool must say so rather than report a hidden comment; (b) "Comments on live video IG Media are not supported" — hide/unhide is unavailable there entirely *[verified 2026-07-30 — IG Comment reference, https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/]* | M3 · unit + docs |
+| CC-COM-6 | Empty message, whitespace-only, or > max length reply | zod rejects empty/whitespace client-side. The comment length cap is **undocumented**: neither the IG Comment reference nor the comment-moderation guide states a maximum, and the only official Instagram length caps are for captions (2,200) and DM text (1,000) — different surfaces, do not borrow either *[checked 2026-07-30 — https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/ , https://developers.facebook.com/docs/instagram-platform/comment-moderation/]*. `[verify — needs a live call: POST /{comment-id}/replies with 2,199 / 2,200 / 2,201-character messages and bisect the first rejected length; record code + error_subcode]`. Until then the client-side bound is our own, and Meta's rejection is mapped, not predicted | M3 · unit + live |
 | CC-COM-7 | `delete_comment` without `IG_ALLOW_DESTRUCTIVE` | Refused even with `apply: true` — double gate holds; error names both required flags | M3 · unit |
 
 ## 6. Insights (CC-INS)
@@ -93,7 +96,7 @@ probe protocol (junk account) · `docs` = documented behavior/limitation.
 | CC-INS-1 | Account < 100 followers requesting demographics | Meta errors; mapped with the ≥ 100-followers rule named — not a generic permission error | M4 · unit |
 | CC-INS-2 | Metric not valid for the media type (story metric on feed post, `navigation` on a reel) | Per-`media_product_type` metric matrix in `api/insights.ts`; invalid combos refused client-side with the valid set listed | M4 · design + unit |
 | CC-INS-3 | `since`/`until` older than the 90-day retention | Refused client-side with the retention rule; partially-in-window ranges clamped + flagged in the result | M4 · unit |
-| CC-INS-4 | Timezone semantics of `since`/`until` (UTC vs account timezone) `[verify]` | Live probe; whichever it is gets documented in the tool description so the model formats correctly | M4 · live + docs |
+| CC-INS-4 | Timezone semantics of `since`/`until` (UTC vs account timezone) | Meta documents only that `since`/`until` take **UNIX timestamps** ("The API will only include data created within this range (inclusive). If you do not include these parameters, the API will look back 24 hours") and that **response** timestamps "use UTC with zero offset … ISO-8601". The timezone the **daily buckets** are cut in is stated nowhere *[checked 2026-07-30 — https://developers.facebook.com/docs/instagram-platform/insights/ , https://developers.facebook.com/docs/instagram-platform/api-reference/instagram-user/insights/]*. `[verify — needs a live call: GET /{ig-id}/insights?metric=reach&period=day&metric_type=time_series with since/until pinned to an exact UTC midnight boundary; compare the returned bucket end_time values against UTC midnight and against the account's local midnight]`. Whichever it is gets documented in the tool description so the model formats correctly | M4 · live + docs |
 | CC-INS-5 | Insights on media created before the account became professional | Meta returns empty/error; mapped with that explanation | M4 · docs |
 | CC-INS-6 | `online_followers` disappears (it is on the deprecation watch-list) | Tool degrades to an explicit "metric no longer available" error; watch item in the version-upgrade checklist | M4 · docs |
 | CC-INS-7 | Legacy metric names (`impressions`, `profile_views`) requested by the model out of habit | Input enum only contains the post-2025 set; the error for unknown metrics lists valid ones — the model self-corrects | M4 · unit |
@@ -131,8 +134,28 @@ that owns them, following the QA review's protocol: stories-first smoke tests
 can be toggled), findings recorded back into this file replacing the `[verify]`
 markers with `[verified <date>]` + observed behavior.
 
-Open `[verify]` register: CC-AUTH-14 (refresh invalidates old token?),
-CC-PUB-4 (double-publish error shape), CC-PUB-6 (mixed carousel rules),
-CC-PUB-11 (caption counting unit), CC-COM-5 (hide rules), CC-COM-6 (comment
-length cap), CC-INS-4 (insights timezone), plus the M1 hashtag/PCA probe from
-[auth.md](auth.md) §5.
+### Open `[verify]` register — triaged 2026-07-30 against official Meta docs
+
+**Closed from public documentation** (no live call needed; see the rows above for
+the citations):
+
+- **CC-PUB-6** — mixed image/video carousels are explicitly allowed, max 10
+  children. Only the minimum-of-2 is undocumented and is ours to enforce.
+- **CC-COM-5** — hide rules are documented: an owner's own comments on their own
+  media always display despite `hide=true`, and live-video comments are
+  unsupported.
+
+**Still open — each now names the call that discharges it:**
+
+| Case | The call that settles it |
+|---|---|
+| CC-AUTH-14 | Refresh, then replay `GET /me?fields=user_id` with the **old** token |
+| CC-PUB-4 | `POST /{ig-id}/media_publish` twice with one `creation_id` |
+| CC-PUB-11 | `POST /{ig-id}/media` with a 2,200-code-point caption containing non-BMP emoji |
+| CC-COM-6 | `POST /{comment-id}/replies` bisecting the message length |
+| CC-INS-4 | `GET /{ig-id}/insights?metric=reach&period=day&metric_type=time_series` across a UTC midnight boundary |
+
+Plus the M1 hashtag/PCA probe from [auth.md](auth.md) §5. Note that the hashtag
+**budget** side of that probe no longer needs guessing:
+`GET /{ig-user-id}/recently_searched_hashtags` reports the real 7-day usage
+server-side (see [operations.md](operations.md) §1).

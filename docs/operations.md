@@ -1,7 +1,9 @@
 # Operations: Rate Limits, Errors, Pagination, Versioning
 
-> Design document. Numbers reflect Meta docs as of 2026-07; **[verify]** items get
-> re-checked during implementation.
+> Design document. Numbers reflect Meta docs as of 2026-07. Every claim carries
+> either a *[verified &lt;date&gt; — source]* stamp or a `[verify — needs a live call: …]`
+> marker naming the call that would settle it. No bare `[verify]` remains in this
+> file after the 2026-07-30 documentation-verification pass.
 
 ## 1. Rate limits — the layered reality
 
@@ -9,7 +11,7 @@
 |---|---|---|---|
 | Platform / BUC rate limit | per app+account; Instagram BUC uses a **rolling 24 h window** *[verified 2026-07-21]* | Instagram BUC: `4800 × impressions` calls/24 h; reported in `X-App-Usage` / `X-Business-Use-Case-Usage` headers | Parse on **every** response; cache last snapshot; expose in `instagram_token_status`; proactively slow down > 90 %, refuse non-read calls at 100 % with the reset estimate (`estimated_time_to_regain_access` when present) |
 | Content publishing | per IG account, rolling 24 h | `config.quota_total` read at **runtime** — Meta's own docs conflict (100 in the guide vs 50 in the reference), so never hardcode *[verified 2026-07-21]*; carousel counts as 1 | Checked via `GET /{ig-id}/content_publishing_limit` before composite posts; quota impact shown in every publish preview |
-| Hashtag search | per IG account, rolling 7 days | **30 unique hashtags** | Local persistent counter of queried hashtags (the API gives no usage endpoint **[verify]**); surfaced in every `search_hashtag` result |
+| Hashtag search | per IG account, rolling 7 days | **30 unique hashtags** | **Corrected 2026-07-30 — a usage endpoint does exist.** `GET /{ig-user-id}/recently_searched_hashtags` returns the hashtag IDs the account queried inside the rolling 7-day window ("IG Users can query a maximum of 30 unique hashtags within a rolling, 7 day period"), Facebook-Login only, `instagram_basic` *[verified 2026-07-30 — IG User `recently_searched_hashtags` reference, https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/recently_searched_hashtags]*. The local counter stays as a free pre-check, but it is **advisory**: the endpoint is authoritative and reconciles it (CC-RATE-4). Budget surfaced in every `search_hashtag` result |
 | `/tags`, business_discovery etc. | folded into BUC | — | Nothing special beyond BUC handling |
 
 Error codes signaling throttling: **4** (app-level), **17** (user-level), **32**

@@ -10,7 +10,8 @@
  *     interface only (enforced here, not merely documented), checks a
  *     constant-time bearer when `IG_HTTP_TOKEN` is set, and enables the SDK's
  *     DNS-rebinding protection. Runs in stateless JSON mode (the 2026-07-28 spec
- *     drops the session handshake).
+ *     drops the session handshake), which the SDK defines as **one server and
+ *     one transport per request** — see {@link startHttp}.
  *
  * This module owns no business logic — it only wires a fully-built server to a
  * transport. It must not import `core/http`, `core/auth`, or `tools/*`.
@@ -52,6 +53,26 @@ export interface HttpTransportOptions {
 export interface RunningHttpTransport {
   close(): Promise<void>;
 }
+
+/**
+ * Builds a fully-registered {@link McpServer} for ONE HTTP exchange.
+ *
+ * {@link startHttp} takes a factory rather than a server instance because the
+ * SDK forbids both halves of the alternative:
+ *
+ *   - a stateless `StreamableHTTPServerTransport` may serve exactly one request
+ *     (`webStandardStreamableHttp.js`: `if (!this.sessionIdGenerator &&
+ *     this._hasHandledRequest) throw new Error('Stateless transport cannot be
+ *     reused across requests. Create a new transport per request.')`), and
+ *   - one server cannot be re-`connect`ed to the replacement transport
+ *     (`shared/protocol.js`: `if (this._transport) throw new Error('Already
+ *     connected to a transport. … use a separate Protocol instance per
+ *     connection.')`) — a `Protocol` owns its transport for its lifetime.
+ *
+ * So a fresh transport implies a fresh server, and the factory is what makes
+ * that possible without this module knowing how a server is built.
+ */
+export type McpServerFactory = () => McpServer;
 
 /** Constant-time bearer comparison that never short-circuits on length. */
 function bearerMatches(provided: string, expected: string): boolean {
@@ -132,41 +153,64 @@ function assertBindIsSafe(opts: HttpTransportOptions, log: Logger): void {
   }
 }
 
+/** Message of an unknown throwable, for logging (never the stack). */
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
- * Connect `server` to a Streamable HTTP transport bound to the loopback
- * interface and start an HTTP listener. The transport is stateless (no session
- * handshake); one transport instance is reused for the process lifetime.
+ * Start an HTTP listener that serves MCP over a Streamable HTTP transport bound
+ * to the loopback interface. Each request gets its OWN `McpServer` (from
+ * `createMcpServer`) and its own stateless transport, both closed when the
+ * response closes — the contract the SDK enforces, see {@link McpServerFactory}.
  *
  * Security: the bind is checked BEFORE any socket is created — a non-loopback
  * address without a bearer is refused outright (`InstagramError`, kind
  * `validation`), and a token-less loopback bind is logged at `error` level. A
  * bearer is required on every request when `opts.token` is set (constant-time
- * compare), and the SDK's DNS-rebinding protection restricts the accepted
+ * compare) and is verified BEFORE a server, a transport or the request body ever
+ * exist, and the SDK's DNS-rebinding protection restricts the accepted
  * `Host`/`Origin` to the bound address. This is a local developer transport, not
  * an internet-facing server.
  *
  * @throws InstagramError `kind: 'validation'` for a non-loopback bind with no token.
  */
 export async function startHttp(
-  server: McpServer,
+  createMcpServer: McpServerFactory,
   opts: HttpTransportOptions,
   log: Logger,
 ): Promise<RunningHttpTransport> {
   assertBindIsSafe(opts, log);
 
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless JSON mode
-    enableJsonResponse: true,
-    enableDnsRebindingProtection: true,
-    allowedHosts: allowedHostHeaders(opts.host, opts.port),
-  });
-  await server.connect(transport);
+  const allowedHosts = allowedHostHeaders(opts.host, opts.port);
+  // Transports still attached to an in-flight exchange. Shutdown closes them
+  // first: an open SSE stream is a live connection, and `httpServer.close()`
+  // waits for connections to end, so a stream nothing terminated would hang it.
+  const inFlight = new Set<StreamableHTTPServerTransport>();
 
   const httpServer: Server = createServer((req, res) => {
     void handle(req, res);
   });
 
+  /** Release one exchange's server + transport. Both `close()`es are idempotent. */
+  async function dispose(
+    server: McpServer,
+    transport: StreamableHTTPServerTransport,
+  ): Promise<void> {
+    inFlight.delete(transport);
+    try {
+      await transport.close();
+      await server.close();
+    } catch (err) {
+      // The exchange is already over; a teardown failure must not become an
+      // unhandled rejection, and there is no response left to report it on.
+      log.debug('http request teardown failed', { err: errorMessage(err) });
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Authenticate first: an unauthorized caller must not reach the MCP layer,
+    // cost a server registration, or get its body parsed.
     if (opts.token !== undefined) {
       const provided = readBearer(req);
       if (provided === undefined || !bearerMatches(provided, opts.token)) {
@@ -175,9 +219,25 @@ export async function startHttp(
       }
     }
     try {
+      const server = createMcpServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless JSON mode
+        enableJsonResponse: true,
+        enableDnsRebindingProtection: true,
+        allowedHosts,
+      });
+      inFlight.add(transport);
+      // Registered before the first `await`, so a failure to connect still tears
+      // the pair down once the error response has been written.
+      res.once('close', () => void dispose(server, transport));
+      await server.connect(transport);
       await transport.handleRequest(req, res);
     } catch (err) {
-      log.error('http request failed', { err: err instanceof Error ? err.message : String(err) });
+      // Reached when building or connecting this request's server fails — a
+      // registration error, or an SDK contract violation. Errors raised INSIDE
+      // `handleRequest` do not land here: the SDK routes it through
+      // `@hono/node-server`, which turns a rejection into a bodyless 500 itself.
+      log.error('http request failed', { err: errorMessage(err) });
       if (!res.headersSent) refuse(res, 500, 'Internal error');
     }
   }
@@ -195,7 +255,8 @@ export async function startHttp(
 
   return {
     close: async () => {
-      await transport.close();
+      for (const transport of [...inFlight]) await transport.close();
+      inFlight.clear();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });

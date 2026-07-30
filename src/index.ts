@@ -23,14 +23,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { systemClock } from './core/clock.js';
 import { loadSettings } from './core/settings.js';
-import { loadProfiles } from './core/config.js';
+import { loadProfiles, resolveProfile } from './core/config.js';
 import { createAuthProvider } from './core/auth.js';
 import { createLogger } from './core/log.js';
 import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
 import { refreshToken } from './core/refresh.js';
 import { resolveConfigHome, writeCredentials } from './core/config-write.js';
-import { InstagramError, isInstagramError } from './core/types.js';
+import { isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { registerTools } from './mcp/registry.js';
 import { startHttp, startStdio } from './mcp/transport.js';
@@ -88,18 +88,20 @@ function registerProfileSecrets(profiles: ResolvedProfile[]): void {
   if (httpToken !== undefined && httpToken !== '') registerSecret(httpToken);
 }
 
-/** Resolve the active (default) profile, or throw a clear auth error. */
+/**
+ * Resolve the profile named by `IG_ACTIVE_PROFILE` (or the default profile when
+ * it is unset or blank).
+ *
+ * Deliberately the SAME resolver the tool path uses, so an explicitly named but
+ * unknown profile fails here exactly as it fails on a tool call — naming the bad
+ * value and listing the configured profiles. Falling back to the first profile
+ * instead is what let a typo in `IG_ACTIVE_PROFILE` make `doctor` report a
+ * healthy `default` account while every tool call rejected the typo'd name.
+ *
+ * @throws InstagramError `kind: 'validation'` — unknown profile name.
+ */
 function activeProfile(profiles: ResolvedProfile[], defaultName: string): ResolvedProfile {
-  const found = profiles.find((p) => p.name === defaultName) ?? profiles[0];
-  if (found === undefined) {
-    throw new InstagramError(
-      'No account profile is configured — run the `login` subcommand first.',
-      {
-        kind: 'auth',
-      },
-    );
-  }
-  return found;
+  return resolveProfile(profiles, defaultName);
 }
 
 /** Human-readable, token-free expiry line for the `refresh` success message. */
@@ -186,24 +188,35 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  // Build one fully-registered server instance. stdio keeps this single instance
+  // for the process lifetime; the HTTP transport is stateless and the SDK
+  // requires a fresh server + transport PER REQUEST (see mcp/transport.ts), so
+  // it gets this as a factory instead.
+  const buildServer = (): { server: McpServer; registered: string[] } => {
+    const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+    const { registered } = registerTools({
+      server,
+      tools: allTools,
+      profiles,
+      defaultProfileName: defaultName,
+      settings,
+      clock,
+      log,
+      makeRequest,
+    });
+    return { server, registered };
+  };
 
-  const { registered } = registerTools({
-    server,
-    tools: allTools,
-    profiles,
-    defaultProfileName: defaultName,
-    settings,
-    clock,
-    log,
-    makeRequest,
-  });
-  log.info('tools registered', { count: registered.length, transport: settings.transport });
+  // Built once up front on BOTH transports: registration is where a bad package
+  // selection or an unknown `IG_ACTIVE_PROFILE` is rejected, and that must fail
+  // the start — not the first request that happens to arrive.
+  const built = buildServer();
+  log.info('tools registered', { count: built.registered.length, transport: settings.transport });
 
   if (settings.transport === 'http') {
     const httpToken = process.env.IG_HTTP_TOKEN?.trim();
     await startHttp(
-      server,
+      () => buildServer().server,
       {
         host: settings.httpHost,
         port: settings.httpPort,
@@ -212,7 +225,7 @@ async function main(): Promise<void> {
       log,
     );
   } else {
-    await startStdio(server, log);
+    await startStdio(built.server, log);
   }
 }
 

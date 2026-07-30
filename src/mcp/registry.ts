@@ -14,11 +14,18 @@
  * Resolution order (architecture §3, CC-CFG-7): package profile → deny → forced
  * read-only (from `IG_PACKAGES_READONLY` *and* from an inherently read-only
  * profile such as `reader`), then D1 capability filtering by the auth paths of
- * the configured profiles, then per-call strict re-validation (unknown args are
- * rejected, never dropped).
+ * the configured profiles, then strict argument validation (unknown args are
+ * rejected, never dropped — CC-CFG-6; see {@link strictInputSchema}).
+ *
+ * This is also where per-call observability happens: the wrapper emits one
+ * structured `debug` line per invocation, built from the spec's own `logFields`
+ * declaration and passed through the secret redactor first (see
+ * {@link logInvocation} and QA finding F6). `core/redact.ts` is the only
+ * infrastructure import that buys — it is pure and dependency-free, so the
+ * "no `core/http`, no `core/auth`, no `tools/*`" rule above still holds.
  */
 import { z } from 'zod';
-import type { ToolAnnotationSet, ToolResult, ToolSpec } from './define.js';
+import type { ToolAnnotationSet, ToolInputArgs, ToolResult, ToolSpec } from './define.js';
 import { errorResult } from './result.js';
 import {
   CONFIRM_TIMEOUT_MS,
@@ -30,6 +37,7 @@ import { InstagramError } from '../core/types.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../core/types.js';
 import { resolveProfile, withAccount } from '../core/config.js';
 import { toInstagramError } from '../core/errors.js';
+import { createRedactor } from '../core/redact.js';
 import type { Clock } from '../core/clock.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -204,6 +212,19 @@ export interface RegisterToolsDeps {
    * client is needed.
    */
   confirm?: WriteConfirmer;
+  /**
+   * Secret redactor applied to the per-call `logFields` payload before it is
+   * handed to the log sink (QA finding F6). Defaults to a real
+   * {@link createRedactor}, so redaction is on unless a caller deliberately
+   * replaces it — a missing dependency can never silently disable it.
+   *
+   * This is belt-and-braces on purpose: the composition root already builds the
+   * logger with a redactor, but `deps.log` is injected and a test double (or a
+   * future embedder) may not redact. `logFields` is author-supplied code whose
+   * "never carries secrets" property is a convention, and F6's point is that a
+   * convention is not a control.
+   */
+  redact?: (value: unknown) => unknown;
 }
 
 /**
@@ -251,6 +272,12 @@ export function serverConfirmer(server: McpServer): WriteConfirmer {
  * callback is re-validated internally, so its args are `unknown` here and the
  * result is our {@link ToolResult} (a subset of the SDK `CallToolResult`).
  * `deps.server` is reached through this shape so tests can pass a small stub.
+ *
+ * `inputSchema` is deliberately a built **`ZodObject`**, not a `z.ZodRawShape` —
+ * see {@link strictInputSchema} for why that distinction is the whole of
+ * CC-CFG-6. The SDK's own signature accepts either (`inputSchema?:
+ * ZodRawShapeCompat | AnySchema`), and only the object form preserves
+ * `.strict()`.
  */
 interface ToolRegistrar {
   registerTool(
@@ -258,7 +285,7 @@ interface ToolRegistrar {
     config: {
       title?: string;
       description?: string;
-      inputSchema?: z.ZodRawShape;
+      inputSchema?: z.AnyZodObject;
       outputSchema?: z.ZodRawShape;
       annotations?: ToolAnnotationSet;
     },
@@ -279,6 +306,60 @@ const accountField = z
       'default profile (IG_ACTIVE_PROFILE).',
   );
 
+/**
+ * Build the closed input schema handed to the MCP server for one tool: the
+ * spec's shape plus the injected `account` selector, sealed with `.strict()`.
+ *
+ * **This function is CC-CFG-6.** The MCP SDK validates tool arguments *itself*,
+ * before our callback ever runs, and what it validates against is whatever
+ * `registerTool` was given:
+ *
+ *   - `server/mcp.js` `validateToolInput()` calls
+ *     `normalizeObjectSchema(tool.inputSchema)` and parses with the result,
+ *     handing our callback `parseResult.data`.
+ *   - `server/zod-compat.js` `normalizeObjectSchema()` detects a **raw shape**
+ *     (no `_def`/`_zod`) and wraps it with `objectFromShape()`, a plain
+ *     `z.object(shape)` — *non-strict*, so zod **strips** unknown keys.
+ *   - The same function returns an already-built `ZodObject` **unchanged**.
+ *
+ * So passing a raw shape means our callback can never see an unknown key: the
+ * SDK has already deleted it, and any `.strict()` re-parse inside the callback
+ * is guaranteed to pass. Passing the built strict object instead makes the SDK
+ * enforce the closed schema, which is what the invariant actually promises.
+ *
+ * The cost is that the rejection is then raised by the SDK
+ * (`McpError(InvalidParams, "Input validation error: Invalid arguments for tool
+ * <name>: <zod message>")`) rather than by our wrapper, so the result no longer
+ * carries our `errorResult()` envelope. The `errorMap` below buys the *message*
+ * back: zod consults a schema-bound error map when it raises the
+ * `unrecognized_keys` issue, and the SDK renders that message verbatim after
+ * its own "for tool <name>" prefix. A client therefore still reads
+ *
+ *   Input validation error: Invalid arguments for tool instagram_get_media:
+ *   unknown argument(s) [bogus]; valid arguments: mediaId, fields, account.
+ *
+ * i.e. it still names the offending keys *and* the valid ones. The map only
+ * covers root-level object issues — nested field issues carry their own
+ * schemas' (default) messages, which the SDK already renders with a path.
+ */
+function strictInputSchema(shape: z.ZodRawShape): z.AnyZodObject {
+  const validKeys = Object.keys(shape);
+  return z
+    .object(shape, {
+      errorMap: (issue, ctx) => {
+        if (issue.code === z.ZodIssueCode.unrecognized_keys) {
+          return {
+            message:
+              `unknown argument(s) [${issue.keys.join(', ')}]; ` +
+              `valid arguments: ${validKeys.join(', ') || '(none)'}.`,
+          };
+        }
+        return { message: ctx.defaultError };
+      },
+    })
+    .strict();
+}
+
 /** Build the human message for a strict-schema rejection (CC-CFG-6). */
 function validationMessage(spec: ToolSpec, error: z.ZodError, validKeys: string[]): string {
   const unknownKeys: string[] = [];
@@ -295,33 +376,99 @@ function validationMessage(spec: ToolSpec, error: z.ZodError, validKeys: string[
   return `Invalid arguments for tool '${spec.name}': ${detail}.`;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Emit the one structured log line per tool invocation.
+ *
+ * `ToolSpec.logFields` is the tools-as-data declaration of "what is safe to log
+ * about this call"; until this function existed nothing ever called it, so the
+ * server produced no per-tool trace at all. The line is emitted as soon as the
+ * arguments have been validated — before the handler runs — so an invocation is
+ * recorded even if the handler then hangs, throws, or is refused by the
+ * capability guard. Every tool gets a line (`tool` and `account` ride on the
+ * child bindings); a spec that declares no `logFields` simply contributes no
+ * extra fields.
+ *
+ * Level is **debug**, matching the house convention for per-call operational
+ * detail (`core/http.ts` logs `'graph request'` at debug); `info` is reserved
+ * for lifecycle events such as `'tools registered'` and `'mcp server ready'`.
+ *
+ * Two safety properties:
+ *
+ * 1. **Redacted.** The payload goes through `redact` before it reaches the sink
+ *    (F6). `logFields` is documented never to carry secrets, but this makes it
+ *    an enforced property rather than a review promise.
+ * 2. **Cannot fail the call.** `logFields` is author-supplied code and the sink
+ *    is injected; either may throw. A logging failure must never fail a user's
+ *    request, so everything here is contained — a throw degrades to a warning,
+ *    and a sink that throws too is swallowed because there is nowhere left to
+ *    report it.
+ */
+function logInvocation(
+  spec: ToolSpec,
+  args: ToolInputArgs<z.ZodRawShape>,
+  log: Logger,
+  redact: (value: unknown) => unknown,
+): void {
+  try {
+    const produced = spec.logFields?.(args);
+    // A spec may return a non-record (or nothing); the line is still emitted so
+    // the invocation itself is never lost.
+    const safe = redact(isPlainRecord(produced) ? produced : {});
+    log.debug('tool invoked', isPlainRecord(safe) ? safe : {});
+  } catch (err) {
+    try {
+      log.warn('tool log fields could not be built; the tool call is unaffected', {
+        error: String(redact(err instanceof Error ? err.message : String(err))),
+      });
+    } catch {
+      // The log sink itself is broken. Swallowing is the only option that keeps
+      // the promise above: a logging failure never fails the tool call.
+    }
+  }
+}
+
 /** Register one surviving tool on the server with its strict per-call wrapper. */
 function registerOne(
   registrar: ToolRegistrar,
   deps: RegisterToolsDeps,
   spec: ToolSpec,
   confirm: WriteConfirmer,
+  redact: (value: unknown) => unknown,
 ): void {
-  const inputSchema: z.ZodRawShape = { ...spec.input, account: accountField };
-  const strictSchema = z.object(inputSchema).strict();
-  const validKeys = Object.keys(inputSchema);
+  const shape: z.ZodRawShape = { ...spec.input, account: accountField };
+  const strictSchema = strictInputSchema(shape);
+  const validKeys = Object.keys(shape);
 
   const config: {
     title?: string;
     description?: string;
-    inputSchema?: z.ZodRawShape;
+    inputSchema?: z.AnyZodObject;
     outputSchema?: z.ZodRawShape;
     annotations?: ToolAnnotationSet;
   } = {
     title: spec.title,
     description: spec.description,
-    inputSchema,
+    // The *built strict object*, never the raw shape — see strictInputSchema.
+    inputSchema: strictSchema,
     annotations: spec.annotations,
   };
+  // `outputSchema` stays a raw shape: the SDK wraps it the same way for both
+  // the published JSON Schema and the structuredContent check, and a closed
+  // *output* schema would only make our own results harder to evolve.
   if (spec.output !== undefined) config.outputSchema = spec.output;
 
   const cb = async (rawArgs: Record<string, unknown>): Promise<ToolResult> => {
-    // 1. Strict parse — unknown args are a validation error, never dropped.
+    // 1. Strict parse. Against a real McpServer this is a second line of
+    //    defense — the SDK has already parsed with this exact schema and
+    //    rejected unknown keys (strictInputSchema). It stays because
+    //    `ToolRegistrar` is a seam: a stub registrar, an embedder calling the
+    //    callback directly, or a future SDK that stops validating would
+    //    otherwise leave the invariant unenforced. It also keeps the richer
+    //    `errorResult()` envelope on the paths where it *can* fire.
     const parsed = strictSchema.safeParse(rawArgs);
     if (!parsed.success) {
       return errorResult(
@@ -337,6 +484,10 @@ function registerOne(
     //    (currentAccount()) sees the right account.
     const name = args.account ?? deps.defaultProfileName;
     return withAccount(name, async () => {
+      const log = deps.log.child({ tool: spec.name, account: name });
+      // 2a. One structured line per invocation, from the spec's own `logFields`
+      //     declaration. Never throws; see logInvocation.
+      logInvocation(spec, args, log, redact);
       try {
         const profile = resolveProfile(deps.profiles, name);
 
@@ -360,7 +511,7 @@ function registerOne(
           settings: deps.settings,
           clock: deps.clock,
           profile,
-          log: deps.log.child({ tool: spec.name, account: name }),
+          log,
           confirm,
         };
 
@@ -404,6 +555,10 @@ export function registerTools(deps: RegisterToolsDeps): {
   const authPaths = new Set(deps.profiles.map((p) => p.authPath));
   const registrar = deps.server as unknown as ToolRegistrar;
   const confirm = deps.confirm ?? serverConfirmer(deps.server);
+  // Built once and shared by every registration: `createRedactor` reads the
+  // global secret registry live on each call, so a redactor made here still
+  // masks tokens minted (and registered) later at runtime.
+  const redact = deps.redact ?? createRedactor();
 
   const registered: string[] = [];
   for (const pkg of manifest) {
@@ -415,7 +570,7 @@ export function registerTools(deps: RegisterToolsDeps): {
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      registerOne(registrar, deps, spec, confirm);
+      registerOne(registrar, deps, spec, confirm, redact);
       registered.push(spec.name);
     }
   }

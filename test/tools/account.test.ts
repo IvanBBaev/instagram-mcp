@@ -246,6 +246,38 @@ test('token_status (Path B) introspects via debug_token and computes expiry on t
   });
 });
 
+test('token_status (Path B) omits dataAccessExpiresAt when Meta does not disclose it', async () => {
+  // CC-DATA-2: Meta omits rather than nulls. `debug_token` leaves
+  // `data_access_expires_at` out for tokens with no data-access window, and the
+  // tool must not invent one (or emit an explicit null) for it.
+  const nowMs = 10 * DAY;
+  const { req } = stubReq(() => ({
+    data: {
+      is_valid: true,
+      app_id: '55500',
+      type: 'USER',
+      scopes: ['instagram_basic'],
+      expires_at: (nowMs + 80 * DAY) / 1000,
+    },
+  }));
+  const ctx = makeCtx({
+    req,
+    clock: fakeClock(nowMs),
+    profile: { authPath: 'fb-login', accessToken: 'EAAsecret', appId: '55500' },
+  });
+
+  const res = await tool('instagram_token_status').handler({}, ctx);
+
+  const body = sc(res);
+  assert.equal(body.dataAccessExpiresAt, undefined);
+  assert.equal(body.isValid, true);
+  assert.equal(body.expiryState, 'valid');
+  // The serialized payload the client actually receives carries no such key.
+  const wire = JSON.parse(String(res.content[0]?.text)) as Record<string, unknown>;
+  assert.equal('dataAccessExpiresAt' in wire, false);
+  assert.equal(wire.expiresAt, new Date(nowMs + 80 * DAY).toISOString());
+});
+
 test('token_status (Path A) reports expiry unknown and makes no network call (CC-AUTH-7)', async () => {
   const { req, calls } = stubReq(() => {
     throw new Error('Path A must not call debug_token');

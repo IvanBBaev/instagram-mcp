@@ -194,6 +194,58 @@ test('media insights handler propagates the media-type matrix error (CC-INS-2)',
   assert.equal(calls.length, 0);
 });
 
+test('media insights handler reads the MEDIA node and defaults to the post-2025 metric set', async () => {
+  const wire = {
+    data: [
+      { name: 'views', period: 'lifetime', values: [{ value: 120 }] },
+      { name: 'reach', period: 'lifetime', values: [{ value: 90 }] },
+    ],
+  };
+  const { ctx, calls } = makeCtx({ response: wire, accountId: '999' });
+
+  const res = await toolByName('instagram_get_media_insights').handler({ media_id: 'm1' }, ctx);
+
+  // Media insights hang off the media object, never off the operated account.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, 'GET');
+  assert.equal(calls[0]?.path, '/m1/insights');
+  assert.equal(
+    calls[0]?.params?.metric,
+    'views,reach,likes,comments,saved,shares,total_interactions',
+  );
+
+  const sc = res.structuredContent as { mediaId: string; metrics: unknown[] };
+  assert.equal(sc.mediaId, 'm1');
+  assert.deepEqual(sc.metrics, wire.data);
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(JSON.parse(String(res.content[0]?.text)), sc);
+});
+
+test('media insights forwards an explicit metric selection and passes its own output schema', async () => {
+  const wire = { data: [{ name: 'saved', total_value: { value: 3 }, unknown_future_field: 1 }] };
+  const { ctx, calls } = makeCtx({ response: wire });
+  const spec = toolByName('instagram_get_media_insights');
+
+  const res = await spec.handler({ media_id: 'm2', metrics: ['saved', 'shares'] }, ctx);
+
+  assert.equal(calls[0]?.params?.metric, 'saved,shares');
+  // The declared output schema must accept what the handler actually returns,
+  // including fields Meta may add later (CC-DATA-7).
+  const parsed = z.object(spec.output ?? {}).parse(res.structuredContent);
+  assert.equal((parsed as { mediaId: string }).mediaId, 'm2');
+});
+
+test('media insights with no rows is an empty result, not an error', async () => {
+  // Insights on media created before the account went professional, or on an
+  // expired story, come back without a `data` array at all.
+  const { ctx } = makeCtx({ response: {} });
+
+  const res = await toolByName('instagram_get_media_insights').handler({ media_id: 'm3' }, ctx);
+
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(res.structuredContent, { mediaId: 'm3', metrics: [] });
+});
+
 test('demographics handler forwards breakdown, timeframe and metric_type=total_value', async () => {
   const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '5' });
   await toolByName('instagram_get_audience_demographics').handler(

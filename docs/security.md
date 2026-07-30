@@ -20,10 +20,13 @@
 - Tokens + app secret only in: process env (from MCP client config), the XDG env
   file (**`0600`**, atomic comment-preserving writes), or OS keychain (MCPB
   `user_config`). Never in the repo; `.env*` git-ignored in the scaffold from day one.
-- **Redaction layer (`mcp/redact.ts`)** runs before any serialization to the model:
+- **Redaction layer (`core/redact.ts`)** runs before any serialization to the model:
   masks the configured token/secret values and anything matching token shapes
-  (`EAA…`, `IGQ…`-style prefixes) in results, errors, and logs. `logFields` is
-  documented and reviewed to never carry secrets.
+  (`EAA…`, `IGQ…`-style prefixes) in results, errors, and logs. Every serialization
+  sink is inside that boundary as an enforced control, not a convention: the log
+  stream, the per-call `logFields` payload (routed through the redactor by the
+  registry), and the applied-writes journal (redacted in `mcp/write-mode.ts` before
+  the entry is appended).
 - Logs are structured JSON on **stderr only**; URLs are logged with query strings
   stripped (`safeUrl`) — Graph puts `access_token` in the query, so raw URLs are
   never logged.
@@ -49,7 +52,7 @@
 
 - **Plan-and-apply** on every write (see [tools.md](tools.md)): preview by default,
   `apply: true` to execute, `IG_WRITE_MODE=apply` for standing consent; journal of
-  applied writes for audit.
+  applied writes for audit (redacted before it is written — see §2).
 - **Honest annotations**: `destructiveHint` on irreversible ops (`delete_comment`),
   `readOnlyHint` on all reads — clients surface these in their permission UX.
 - Irreversible deletion double-gated behind `IG_ALLOW_DESTRUCTIVE=true`.

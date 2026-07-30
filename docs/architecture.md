@@ -56,8 +56,19 @@ export interface ToolSpec<S extends z.ZodRawShape> {
 }
 ```
 
-- Registered with **`.strict()`** zod objects — unknown arguments are validation
-  errors, never silently dropped.
+- Registered as **built `.strict()` zod objects**, not raw shapes — unknown
+  arguments are validation errors, never silently dropped (CC-CFG-6). The
+  distinction is load-bearing: the MCP SDK validates arguments itself before the
+  tool callback runs, and a raw `ZodRawShape` is re-wrapped as a *non-strict*
+  `z.object(shape)` (`server/zod-compat.js` `normalizeObjectSchema` →
+  `objectFromShape`), which strips unknown keys instead of rejecting them. An
+  already-built `ZodObject` is passed through untouched, so `.strict()` survives
+  and the SDK enforces it. `registerOne` therefore hands the server the closed
+  object and keeps its own `.strict()` re-parse only as a second line of defense
+  for callers that drive the callback directly. Rejections are raised by the SDK
+  as `Input validation error: Invalid arguments for tool <name>: …`; a
+  schema-bound zod `errorMap` supplies the tail of that message so it still names
+  the offending keys *and* the valid ones.
 - A central **PACKAGES manifest** in `mcp/registry.ts` is the single source of truth:
   `{ name, tools }` per package; an invariant loop asserts every spec's `package` tag
   matches. The manifest feeds registration, README generation, and a snapshot test,
@@ -114,8 +125,14 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
 - **Profiles** for multiple IG accounts: default profile from bare `IG_*` vars;
   additional under `IG_PROFILE_<NAME>_*`; a per-request `account` argument
   (auto-injected into every tool schema) selects the profile via `AsyncLocalStorage`.
-- All numeric knobs (timeouts, retries, caps, truncation budgets) in
-  `core/settings.ts`, each a small documented env-reading function.
+- Every runtime knob in §12 that is not a credential is read in `core/settings.ts`,
+  each a small documented env-reading function: the numeric/enum/boolean ones
+  (timeouts, retries, caps, truncation budgets, `IG_WRITE_MODE`, `IG_TRANSPORT`, …)
+  resolve into the `Settings` contract via `loadSettings`, and the write-journal
+  path (`IG_WRITE_JOURNAL`) resolves via `resolveWriteJournal` — a function rather
+  than a `Settings` field because `Settings` is frozen at Gate G1 and the path has
+  a single consumer (`mcp/write-mode.ts`). Consumers never read `process.env`
+  themselves; blank means "use the default" uniformly.
 
 ## 7. Results, pagination, truncation
 

@@ -4,13 +4,19 @@
  * (set via IG_WRITE_JOURNAL) and its best-effort I/O tolerance is checked by
  * pointing the journal at an unwritable path.
  *
+ * The journal *path* itself is no longer parsed here — it comes from
+ * `core/settings.ts` (`resolveWriteJournal`), whose own parsing/defaulting rules
+ * are covered in test/core/settings.test.ts. What this file proves is the seam:
+ * the gate writes wherever the settings layer says, including the
+ * `XDG_STATE_HOME` default it never reads itself.
+ *
  * The human-confirmation gate (D3 option (a), MCP elicitation) is driven through
  * a fake {@link WriteConfirmer} — no MCP client, no transport — covering every
  * branch (accept / decline / cancel / transport error / capability absent) plus
  * the two invariants that make it safe: it never runs before the env gates and
  * it can never widen what they allow.
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,8 +33,21 @@ import {
 } from '../../src/mcp/write-mode.js';
 import type { ToolResult } from '../../src/mcp/define.js';
 import { json } from '../../src/mcp/result.js';
+import { resolveWriteJournal } from '../../src/core/settings.js';
+import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+
+// Isolate the best-effort write journal to a temp dir for the WHOLE file, not
+// just the tests that assert on it: every `apply: true` case below reaches
+// `recordWrite`, which resolves `IG_WRITE_JOURNAL` from `process.env` on each
+// append. Without this file-level default those cases appended to the
+// operator's real audit log at ~/.local/state/instagram-mcp-ai/writes.jsonl.
+// Individual tests still override and restore the variable; they now restore to
+// this temp path rather than to "unset".
+const journalDir = mkdtempSync(join(tmpdir(), 'ig-write-mode-journal-'));
+process.env.IG_WRITE_JOURNAL = join(journalDir, 'writes.jsonl');
+after(() => rmSync(journalDir, { recursive: true, force: true }));
 
 const noopLog: Logger = {
   debug() {},
@@ -204,6 +223,52 @@ test('an applied write appends a journal line; a preview does not', async () => 
     if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
     else process.env.IG_WRITE_JOURNAL = prev;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the journal path comes from the settings layer, including the XDG default', async () => {
+  // The gate does not parse IG_WRITE_JOURNAL itself: with the variable unset it
+  // must still land on the path `core/settings.ts` derives from XDG_STATE_HOME.
+  const root = mkdtempSync(join(tmpdir(), 'ig-journal-'));
+  const prevJournal = process.env.IG_WRITE_JOURNAL;
+  const prevState = process.env.XDG_STATE_HOME;
+  delete process.env.IG_WRITE_JOURNAL;
+  process.env.XDG_STATE_HOME = root;
+  try {
+    const expected = join(root, 'instagram-mcp-ai', 'writes.jsonl');
+    assert.equal(resolveWriteJournal(process.env), expected, 'settings owns the resolution');
+
+    await withWriteGate(intent, { apply: true }, ctxWith(), performOk('pub-xdg'));
+
+    assert.equal(existsSync(expected), true, 'the gate journaled where settings pointed');
+    const rec = JSON.parse(readFileSync(expected, 'utf8').trim()) as Record<string, unknown>;
+    assert.equal(rec.targetId, 'pub-xdg');
+  } finally {
+    if (prevJournal === undefined) delete process.env.IG_WRITE_JOURNAL;
+    else process.env.IG_WRITE_JOURNAL = prevJournal;
+    if (prevState === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prevState;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a blank IG_WRITE_JOURNAL falls back to the default instead of an empty path', async () => {
+  // `IG_WRITE_JOURNAL=` in a .env file must not redirect the audit trail to the
+  // process CWD — the settings layer treats blank as unset for every knob.
+  const root = mkdtempSync(join(tmpdir(), 'ig-journal-'));
+  const prevJournal = process.env.IG_WRITE_JOURNAL;
+  const prevState = process.env.XDG_STATE_HOME;
+  process.env.IG_WRITE_JOURNAL = '   ';
+  process.env.XDG_STATE_HOME = root;
+  try {
+    await withWriteGate(intent, { apply: true }, ctxWith(), performOk('pub-blank'));
+    assert.equal(existsSync(join(root, 'instagram-mcp-ai', 'writes.jsonl')), true);
+  } finally {
+    if (prevJournal === undefined) delete process.env.IG_WRITE_JOURNAL;
+    else process.env.IG_WRITE_JOURNAL = prevJournal;
+    if (prevState === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = prevState;
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -737,5 +802,67 @@ test('the journal directory and file are created owner-only (no group/other acce
     if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
     else process.env.IG_WRITE_JOURNAL = prev;
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- the journal is inside the redaction boundary (QA F6) ------------------
+
+test('the journal is redacted: a registered secret in an intent never lands on disk', async () => {
+  // F6: the journal is a serialization sink like any other. "Intent summaries
+  // never carry a token" is a convention held by every present and future write
+  // tool; this makes it a control instead.
+  const secret = 'JOURNAL-F6-SECRET-VALUE-0123456789';
+  registerSecret(secret);
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-redact-'));
+  const path = join(dir, 'writes.jsonl');
+  const prev = process.env.IG_WRITE_JOURNAL;
+  process.env.IG_WRITE_JOURNAL = path;
+  try {
+    const leaky: WriteIntent = {
+      action: 'publish_media',
+      summary: `Publish container 42 with token ${secret}`,
+      details: { id: '42' },
+    };
+    await withWriteGate(leaky, { apply: true }, ctxWith(), performOk(`id-${secret}`));
+
+    const raw = readFileSync(path, 'utf8');
+    assert.equal(raw.includes(secret), false, 'the registered secret never reaches the journal');
+    const rec = JSON.parse(raw.trim()) as Record<string, unknown>;
+    assert.equal(rec.summary, `Publish container 42 with token ${REDACTED}`);
+    assert.equal(rec.targetId, `id-${REDACTED}`);
+    // Everything else survives redaction unchanged — the audit trail stays useful.
+    assert.equal(rec.action, 'publish_media');
+    assert.equal(rec.account, 'default');
+    assert.equal(rec.destructive, false);
+    assert.equal(typeof rec.ts, 'string');
+  } finally {
+    if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
+    else process.env.IG_WRITE_JOURNAL = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the journal masks token-shaped text even for a secret that was never registered', async () => {
+  // The mint→register window: a token that exists but has not been registered
+  // yet is still caught by the token-shape backstop.
+  const unregistered = `EAA${'x'.repeat(40)}`;
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-shape-'));
+  const path = join(dir, 'writes.jsonl');
+  const prev = process.env.IG_WRITE_JOURNAL;
+  process.env.IG_WRITE_JOURNAL = path;
+  try {
+    await withWriteGate(
+      { action: 'publish_media', summary: `Publish with ${unregistered}` },
+      { apply: true },
+      ctxWith(),
+      performOk('pub-shape'),
+    );
+    const raw = readFileSync(path, 'utf8');
+    assert.equal(raw.includes(unregistered), false, 'token-shaped text is masked');
+    assert.ok(raw.includes(REDACTED));
+  } finally {
+    if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
+    else process.env.IG_WRITE_JOURNAL = prev;
+    rmSync(dir, { recursive: true, force: true });
   }
 });

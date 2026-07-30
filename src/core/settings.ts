@@ -15,12 +15,16 @@
  *   IG_TRANSPORT        -> transport         (default 'stdio')
  *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1', loopback only)
  *   IG_PORT             -> httpPort          (default 3000)
+ *   IG_WRITE_JOURNAL    -> {@link resolveWriteJournal} (see below)
  *
  * Note: the HTTP port env var is `IG_PORT` (not `IG_HTTP_PORT`) per §12 and
  * `.env.example`; it pairs with `IG_HTTP_HOST` for the HTTP-transport binding.
  * `IG_HTTP_HOST` is validated like every other knob: only loopback addresses are
  * accepted, because the HTTP transport binds loopback only (docs/security.md §3).
  */
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { InstagramError, type LogLevel, type Settings } from './types.js';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
@@ -139,6 +143,43 @@ function parseHostEnv(env: NodeJS.ProcessEnv, name: string, def: string): string
     );
   }
   return raw;
+}
+
+// --- write journal ---------------------------------------------------------
+
+/** Directory the server owns under the state home (mirrors the config-home layout). */
+const SERVER_DIR = 'instagram-mcp-ai';
+/** File name of the applied-write journal inside {@link SERVER_DIR}. */
+const JOURNAL_FILE = 'writes.jsonl';
+/** State base used when `XDG_STATE_HOME` is unset or blank (XDG default). */
+const STATE_HOME_FALLBACK = ['.local', 'state'] as const;
+
+/**
+ * Resolve the applied-write journal path — the home of `IG_WRITE_JOURNAL`
+ * (docs/architecture.md §12, default
+ * `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl`, falling back to
+ * `~/.local/state/...` when `XDG_STATE_HOME` is unset).
+ *
+ * It is a function rather than a {@link Settings} field because `Settings` is
+ * part of the FROZEN Gate-G1 contract in `core/types.ts` (a change there is a
+ * dedicated contract-bump PR, see docs/workplan.md §1) and exactly one call site
+ * — the write gate in `mcp/write-mode.ts` — consumes the value. What matters is
+ * that the parsing lives here, with every other knob: reading, trimming and
+ * defaulting follow the same {@link read} convention, so a blank or
+ * whitespace-only value means "use the default" exactly like `IG_LOG_LEVEL` or
+ * `IG_HTTP_HOST`, and no consumer touches `process.env` for it.
+ *
+ * Unlike the enum/numeric/host knobs this one has no allowed-value check: every
+ * string is a syntactically legal path, and the journal is a best-effort audit
+ * sink (`mcp/write-mode.ts` warns instead of throwing when an append fails), so
+ * an unusable path surfaces as a warning on the first applied write rather than
+ * as a load-time refusal to start the server.
+ */
+export function resolveWriteJournal(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = read(env, 'IG_WRITE_JOURNAL');
+  if (explicit !== undefined) return explicit;
+  const base = read(env, 'XDG_STATE_HOME') ?? join(homedir(), ...STATE_HOME_FALLBACK);
+  return join(base, SERVER_DIR, JOURNAL_FILE);
 }
 
 function parseEnumEnv<T extends string>(

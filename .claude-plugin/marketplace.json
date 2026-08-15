@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "instagram-mcp",
+  "owner": {
+    "name": "Ivan Baev",
+    "email": "ivanbbaev@gmail.com",
+    "url": "https://github.com/IvanBBaev"
+  },
+  "description": "Single-plugin marketplace for the Instagram MCP server, served straight from its own repository.",
+  "plugins": [
+    {
+      "name": "instagram-mcp-ai",
+      "source": "./",
+      "version": "0.0.1",
+      "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
+      "author": {
+        "name": "Ivan Baev",
+        "email": "ivanbbaev@gmail.com",
+        "url": "https://github.com/IvanBBaev"
+      },
+      "homepage": "https://ivanbbaev.github.io/instagram-mcp/",
+      "repository": "https://github.com/IvanBBaev/instagram-mcp",
+      "license": "MIT",
+      "keywords": ["instagram", "mcp", "meta", "graph-api", "social"],
+      "category": "productivity",
+      "strict": true
+    }
+  ]
+}

@@ -52,7 +52,14 @@ every "publish" step below as never-yet-exercised.
    `lint → format:check → build → coverage → audit`.
    - `coverage` runs the whole suite under c8 with `--check-coverage` and the
      thresholds pinned in the `coverage` script; a coverage regression fails the
-     gate rather than merely reporting one.
+     gate rather than merely reporting one. All four thresholds are **100**
+     (statements, branches, functions, lines) and the tree currently meets them
+     — `src/`, `bin/` and the `test/helpers/` seams alike. The handful of arms
+     that provably cannot execute (a `noUncheckedIndexedAccess` fallback behind a
+     regex that always captures, a `DROP` sentinel the root walk cannot return,
+     the preload's non-string-URL arms) carry `/* c8 ignore start … stop */` with
+     the reason written out, so "100" means *examined*, not *skipped*. Raising
+     new code past this gate means writing the test, not lowering the number.
    - `audit` is `npm audit --audit-level=high --omit=dev` — a hard gate on the
      dependency tree consumers actually install. Dev-only advisories are surfaced
      by `npm run audit:dev` (informational; CI runs it with `continue-on-error`)
@@ -77,12 +84,16 @@ every "publish" step below as never-yet-exercised.
 
 4. **Bump the version in `package.json`.** Choose the semver increment from the
    nature of the changes (tool rename = breaking; see the stability policy).
-5. **Propagate the version** to all three derived manifests:
+5. **Propagate the version.** There are **six** places it is written, not four —
+   the plugin channel alone holds three of them:
    - `server.json` — top-level `version` **and** `packages[].version`
    - `manifest.json` (MCPB) — `version`
    - `.claude-plugin/plugin.json` — `version` **and** the pinned
      `instagram-mcp-ai@<version>` in `mcpServers.instagram.args`
-   The drift test asserts all four agree — do not skip it.
+   - `.claude-plugin/marketplace.json` — `plugins[0].version`, the version shown
+     in the install listing before anything is fetched
+   The drift test asserts the four *channels* agree and separately checks the two
+   extra copies (the `npx` pin and the marketplace entry) — do not skip it.
 6. **Update the changelog.** In [`CHANGELOG.md`](../CHANGELOG.md), move the
    `## [Unreleased]` entries into a new `## [x.y.z] - YYYY-MM-DD` section, reset
    `Unreleased` to empty, and fix up the link references (add the tag-compare link
@@ -109,10 +120,23 @@ every "publish" step below as never-yet-exercised.
       depends on live OAuth and a published app; validate it on a clean machine
       before promoting the bundle.
 11. **List the Claude Code plugin. [human]** The plugin is served from the git
-    repo, so the tag itself makes it installable; publishing it means adding the
-    repo to a plugin marketplace. Before doing so, confirm step 8 has landed —
-    the plugin's `npx instagram-mcp-ai@<version>` pin resolves nothing until the
-    matching npm version exists.
+    repo rather than the npm tarball (`.claude-plugin/` is outside the `files`
+    allowlist, asserted by `test/release/packaging.test.ts`). One blocker is now
+    closed and one remains:
+    - **The repo IS a marketplace.** `.claude-plugin/marketplace.json` exists and
+      lists this repo's single plugin with `"source": "./"` (the marketplace root
+      is the directory containing `.claude-plugin/`, i.e. the repo root), so
+      `/plugin marketplace add IvanBBaev/instagram-mcp` resolves. Both manifests
+      validate against the published JSON schemas. An earlier version of this step
+      said tagging alone made the plugin installable; it did not, and the missing
+      marketplace file was why.
+    - **The `npx` pin resolves nothing until step 8 lands.**
+      `.claude-plugin/plugin.json` launches `npx -y instagram-mcp-ai@<version>`,
+      so the matching npm version must exist first. This is the whole remaining
+      blocker for the channel.
+
+    See [plugin-install.md](plugin-install.md) for the operator-facing page,
+    including how a credential reaches a server whose manifest declares none.
 
 ## Post-publish verification
 

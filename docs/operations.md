@@ -95,10 +95,34 @@ documented prior-art complaint.
 
 - Structured JSON logs on stderr: tool start/done/error with duration, Graph call
   count, usage-header snapshot — never tokens, never full URLs.
-- `doctor` CLI: token validity + expiry, account resolution, scope inventory,
-  publishing quota, one cheap read per enabled package, rate-limit headroom.
-- Per-host telemetry counters (calls, retries, throttles) exposed via a debug tool
-  in the `account` package.
+- `doctor` CLI — five sections, matching `src/cli/doctor.ts` (which cites this
+  section as its spec, so the two must not drift):
+  1. **Configuration** — profile, auth path, transport, write mode, destructive
+     flag, applied-write journal, active packages, refresh window. No secrets.
+  2. **Token & authentication** — Path B introspects via `debug_token` (validity,
+     scopes, expiry). Path A has no `debug_token`, so on that path validity is
+     established only by the reachability check (CC-AUTH-7).
+  3. **Reachability** — one cheap `GET /{ig-id}` proving the token actually works.
+  4. **Meta app Development-vs-Live mode** — not exposed by introspection, so the
+     line points the operator at the App Dashboard; dev-mode apps face lower rate
+     limits and can act only on app roles/testers.
+  5. **Summary** — `exitCode` 0 when healthy, non-zero when the token is
+     invalid/expired or the reachability GET fails. Near-expiry warns, never fails.
+
+  The journal line reports mode context and writability, because an unwritable
+  journal is the one failure `mcp/write-mode.ts` deliberately swallows (it warns
+  and lets the write succeed un-audited) — `doctor` is where an operator can find
+  that out before trusting the trail.
+
+> **Not implemented (v1).** Earlier drafts of this section promised `doctor` would
+> also report publishing quota, one cheap read per enabled package, and rate-limit
+> headroom, and that a debug tool in the `account` package would expose per-host
+> telemetry counters (calls, retries, throttles). None of that shipped: `account`
+> has exactly three tools, and the per-host counters in `core/http.ts` are the
+> concurrency semaphore's, not telemetry, and are exposed nowhere. The claims are
+> recorded here as unbuilt rather than deleted, so the idea survives the
+> correction — a diagnostic that quietly overstates its own coverage is worse than
+> one that admits a gap.
 
 ## 7. Webhooks — explicit non-goal (v1)
 

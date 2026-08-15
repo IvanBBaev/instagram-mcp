@@ -15,7 +15,7 @@
  *   IG_TRANSPORT        -> transport         (default 'stdio')
  *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1', loopback only)
  *   IG_PORT             -> httpPort          (default 3000)
- *   IG_WRITE_JOURNAL    -> {@link resolveWriteJournal} (see below)
+ *   IG_WRITE_JOURNAL    -> writeJournal      (default `<state home>/instagram-mcp-ai/writes.jsonl`)
  *
  * Note: the HTTP port env var is `IG_PORT` (not `IG_HTTP_PORT`) per §12 and
  * `.env.example`; it pairs with `IG_HTTP_HOST` for the HTTP-transport binding.
@@ -31,7 +31,56 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 const WRITE_MODES = ['preview', 'apply'] as const;
 const TRANSPORTS = ['stdio', 'http'] as const;
 
-/** Canonical defaults from docs/architecture.md §12. */
+// --- write journal ---------------------------------------------------------
+
+/** Directory the server owns under the state home (mirrors the config-home layout). */
+const SERVER_DIR = 'instagram-mcp-ai';
+/** File name of the applied-write journal inside {@link SERVER_DIR}. */
+const JOURNAL_FILE = 'writes.jsonl';
+/** State base used when `XDG_STATE_HOME` is unset or blank (XDG default). */
+const STATE_HOME_FALLBACK = ['.local', 'state'] as const;
+
+/**
+ * Resolve the applied-write journal path — the home of `IG_WRITE_JOURNAL`
+ * (docs/architecture.md §12, default
+ * `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl`, falling back to
+ * `~/.local/state/...` when `XDG_STATE_HOME` is unset).
+ *
+ * Reading, trimming and defaulting follow the same {@link read} convention as
+ * every other knob, so a blank or whitespace-only value means "use the default"
+ * exactly like `IG_LOG_LEVEL` or `IG_HTTP_HOST`.
+ *
+ * Module-private on purpose: {@link Settings.writeJournal} is the only surface
+ * anyone needs. `mcp/write-mode.ts` reads the resolved field off its context
+ * like every other knob, so no second entry point into this resolution exists
+ * for a caller to drift away from.
+ *
+ * Unlike the enum/numeric/host knobs this one has no allowed-value check: every
+ * string is a syntactically legal path, and the journal is a best-effort audit
+ * sink (`mcp/write-mode.ts` warns instead of throwing when an append fails), so
+ * an unusable path surfaces as a warning on the first applied write rather than
+ * as a load-time refusal to start the server.
+ *
+ * Declared above {@link DEFAULT_SETTINGS} because that frozen literal calls it:
+ * the module-level `const`s it closes over would still be in their temporal
+ * dead zone if this section sat further down the file.
+ */
+function resolveWriteJournal(env: NodeJS.ProcessEnv): string {
+  const explicit = read(env, 'IG_WRITE_JOURNAL');
+  if (explicit !== undefined) return explicit;
+  const base = read(env, 'XDG_STATE_HOME') ?? join(homedir(), ...STATE_HOME_FALLBACK);
+  return join(base, SERVER_DIR, JOURNAL_FILE);
+}
+
+/**
+ * Canonical defaults from docs/architecture.md §12.
+ *
+ * `writeJournal` is the one derived entry: it is resolved from an EMPTY env, so
+ * it is the path you get with no `IG_WRITE_JOURNAL` and no `XDG_STATE_HOME`
+ * override — the documented `~/.local/state/...` default, not whatever this
+ * process happens to be configured with. {@link loadSettings} resolves it
+ * against the real environment.
+ */
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   maxConcurrent: 4,
   maxItems: 200,
@@ -44,6 +93,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   transport: 'stdio',
   httpHost: '127.0.0.1',
   httpPort: 3000,
+  writeJournal: resolveWriteJournal({}),
 });
 
 /** Truthy/falsy spellings accepted for boolean knobs (case-insensitive). */
@@ -122,6 +172,11 @@ function isIpv4(host: string): boolean {
 export function isLoopbackHost(host: string): boolean {
   const h = host.trim().toLowerCase();
   if (LOOPBACK_LITERALS.has(h)) return true;
+  // The trailing dot cannot change the answer today: {@link isIpv4} caps the
+  // first octet at three digits and 255, so any dotted quad whose text starts
+  // `127` starts with the octet `127`. It stays because it is what the check
+  // means, and it is the only thing standing between this and a prefix match on
+  // `1270.x.y.z` the day that octet rule loosens.
   return isIpv4(h) && h.startsWith('127.');
 }
 
@@ -143,43 +198,6 @@ function parseHostEnv(env: NodeJS.ProcessEnv, name: string, def: string): string
     );
   }
   return raw;
-}
-
-// --- write journal ---------------------------------------------------------
-
-/** Directory the server owns under the state home (mirrors the config-home layout). */
-const SERVER_DIR = 'instagram-mcp-ai';
-/** File name of the applied-write journal inside {@link SERVER_DIR}. */
-const JOURNAL_FILE = 'writes.jsonl';
-/** State base used when `XDG_STATE_HOME` is unset or blank (XDG default). */
-const STATE_HOME_FALLBACK = ['.local', 'state'] as const;
-
-/**
- * Resolve the applied-write journal path — the home of `IG_WRITE_JOURNAL`
- * (docs/architecture.md §12, default
- * `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl`, falling back to
- * `~/.local/state/...` when `XDG_STATE_HOME` is unset).
- *
- * It is a function rather than a {@link Settings} field because `Settings` is
- * part of the FROZEN Gate-G1 contract in `core/types.ts` (a change there is a
- * dedicated contract-bump PR, see docs/workplan.md §1) and exactly one call site
- * — the write gate in `mcp/write-mode.ts` — consumes the value. What matters is
- * that the parsing lives here, with every other knob: reading, trimming and
- * defaulting follow the same {@link read} convention, so a blank or
- * whitespace-only value means "use the default" exactly like `IG_LOG_LEVEL` or
- * `IG_HTTP_HOST`, and no consumer touches `process.env` for it.
- *
- * Unlike the enum/numeric/host knobs this one has no allowed-value check: every
- * string is a syntactically legal path, and the journal is a best-effort audit
- * sink (`mcp/write-mode.ts` warns instead of throwing when an append fails), so
- * an unusable path surfaces as a warning on the first applied write rather than
- * as a load-time refusal to start the server.
- */
-export function resolveWriteJournal(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = read(env, 'IG_WRITE_JOURNAL');
-  if (explicit !== undefined) return explicit;
-  const base = read(env, 'XDG_STATE_HOME') ?? join(homedir(), ...STATE_HOME_FALLBACK);
-  return join(base, SERVER_DIR, JOURNAL_FILE);
 }
 
 function parseEnumEnv<T extends string>(
@@ -216,5 +234,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     transport: parseEnumEnv(env, 'IG_TRANSPORT', d.transport, TRANSPORTS),
     httpHost: parseHostEnv(env, 'IG_HTTP_HOST', d.httpHost),
     httpPort: parseIntEnv(env, 'IG_PORT', d.httpPort, { min: 1, max: 65535 }),
+    // Resolved against `env`, not defaulted from `d` — the fallback depends on
+    // `XDG_STATE_HOME`/`homedir()`, which only this env knows.
+    writeJournal: resolveWriteJournal(env),
   };
 }

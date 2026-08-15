@@ -1,14 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  DEFAULT_SETTINGS,
-  isLoopbackHost,
-  loadSettings,
-  resolveWriteJournal,
-} from '../../src/core/settings.js';
+import { DEFAULT_SETTINGS, isLoopbackHost, loadSettings } from '../../src/core/settings.js';
 import { InstagramError } from '../../src/core/types.js';
 
 /** A validation `InstagramError` naming `variable` is thrown. */
@@ -35,6 +31,10 @@ test('empty env yields the canonical §12 defaults', () => {
     transport: 'stdio',
     httpHost: '127.0.0.1',
     httpPort: 3000,
+    // Spelled out rather than copied from DEFAULT_SETTINGS: this is the §12
+    // default an operator gets with no XDG_STATE_HOME, and asserting it against
+    // the same constant it is built from would prove nothing.
+    writeJournal: join(homedir(), '.local', 'state', 'instagram-mcp-ai', 'writes.jsonl'),
   });
   // DEFAULT_SETTINGS mirrors the resolved defaults.
   assert.deepEqual(s, DEFAULT_SETTINGS);
@@ -82,6 +82,11 @@ test('boolean knobs accept true/false/1/0/yes/no/on/off (case-insensitive)', () 
   assert.equal(loadSettings({ IG_PRETTY_JSON: 'on' }).prettyJson, true);
   assert.equal(loadSettings({ IG_ALLOW_DESTRUCTIVE: 'false' }).allowDestructive, false);
   assert.equal(loadSettings({ IG_ALLOW_DESTRUCTIVE: '0' }).allowDestructive, false);
+  // `no` is the one falsy spelling the name promises that nothing else asserts —
+  // and it is the one an operator reaches for when disabling a knob by hand. It
+  // must not fall through to the "must be a boolean" error.
+  assert.equal(loadSettings({ IG_ALLOW_DESTRUCTIVE: 'no' }).allowDestructive, false);
+  assert.equal(loadSettings({ IG_ALLOW_DESTRUCTIVE: 'No' }).allowDestructive, false);
   assert.equal(loadSettings({ IG_ALLOW_DESTRUCTIVE: 'Off' }).allowDestructive, false);
 });
 
@@ -115,15 +120,39 @@ test('a non-loopback IG_HTTP_HOST is rejected — the HTTP transport must not bi
 });
 
 test('isLoopbackHost accepts only loopback literals and 127.0.0.0/8', () => {
-  for (const host of ['localhost', 'LOCALHOST', ' 127.0.0.1 ', '127.255.255.254', '::1', '[::1]']) {
+  for (const host of [
+    'localhost',
+    'LOCALHOST',
+    ' 127.0.0.1 ',
+    '127.255.255.254',
+    '::1',
+    '[::1]',
+    // The expanded IPv6 loopback: what `getaddrinfo` and several container
+    // runtimes hand back, and what an operator copying from `ss -ltn` pastes.
+    // The literal set carries it precisely so those spellings are not a startup
+    // refusal; nothing else asserts the two entries exist.
+    '0:0:0:0:0:0:0:1',
+    '[0:0:0:0:0:0:0:1]',
+  ]) {
     assert.equal(isLoopbackHost(host), true, `${host} should be loopback`);
   }
   for (const host of [
     '0.0.0.0',
     '::',
+    // The expanded wildcard — one character away from the expanded loopback
+    // above, and the address that would publish the whole write surface.
+    '0:0:0:0:0:0:0:0',
     '128.0.0.1',
     '127.0.0',
+    // Five numeric octets: still all-digits and still `127.`-prefixed, so only
+    // the exact-length check stands between it and "loopback". It is not an
+    // address at all — accepting it turns a config typo into a bind-time crash
+    // with no mention of IG_HTTP_HOST.
+    '127.0.0.1.9',
     '127.0.0.256',
+    // A padded octet is not a canonical dotted quad, and libc would read the
+    // leading zero as octal — reject the spelling rather than pick a reading.
+    '127.0.0.0001',
     'localhost.evil.com',
   ]) {
     assert.equal(isLoopbackHost(host), false, `${host} should NOT be loopback`);
@@ -136,6 +165,18 @@ test('non-numeric numeric input is rejected', () => {
   assertValidationError(() => loadSettings({ IG_MAX_CONCURRENT: '1e3' }), 'IG_MAX_CONCURRENT');
 });
 
+test('a digit string too large for an exact double is rejected as unsafe, not silently rounded', () => {
+  // `/^[+-]?\d+$/` is happy with any number of digits, but `Number()` loses the
+  // low bits past 2^53 — `IG_TIMEOUT_MS=99999999999999999999` would become
+  // 1e20 and pass a naive range check as "just a big timeout". Rejecting keeps
+  // the operator's typo a startup error rather than an effectively infinite one.
+  assertValidationError(
+    () => loadSettings({ IG_TIMEOUT_MS: '99999999999999999999' }),
+    'IG_TIMEOUT_MS',
+  );
+  assertValidationError(() => loadSettings({ IG_MAX_ITEMS: '-99999999999999999999' }), 'safe');
+});
+
 test('out-of-range numeric input is rejected', () => {
   assertValidationError(() => loadSettings({ IG_MAX_CONCURRENT: '0' }), 'IG_MAX_CONCURRENT');
   assertValidationError(() => loadSettings({ IG_MAX_CONCURRENT: '65' }), 'IG_MAX_CONCURRENT');
@@ -146,6 +187,37 @@ test('out-of-range numeric input is rejected', () => {
   assertValidationError(() => loadSettings({ IG_PORT: '0' }), 'IG_PORT');
   assertValidationError(() => loadSettings({ IG_PORT: '70000' }), 'IG_PORT');
   assertValidationError(() => loadSettings({ IG_MAX_ITEMS: '-5' }), 'IG_MAX_ITEMS');
+});
+
+test('every numeric knob accepts its documented range, and one step outside it is rejected', () => {
+  // The bounds live only in `loadSettings` — architecture §12 documents the
+  // defaults but not the ranges, so this table is the only place the contract is
+  // written down twice. Both edges are asserted from *inside* as well as
+  // outside: a range check with the wrong strictness (`<=` where `<` was meant)
+  // still rejects everything an out-of-range-only test throws at it, so the
+  // rejection cases above cannot tell 64 from 63 as the real ceiling.
+  const RANGES = [
+    { env: 'IG_MAX_CONCURRENT', field: 'maxConcurrent', min: 1, max: 64 },
+    { env: 'IG_MAX_ITEMS', field: 'maxItems', min: 1, max: 100_000 },
+    { env: 'IG_REFRESH_AFTER_DAYS', field: 'refreshAfterDays', min: 1, max: 60 },
+    { env: 'IG_TIMEOUT_MS', field: 'timeoutMs', min: 1, max: 600_000 },
+    { env: 'IG_PORT', field: 'httpPort', min: 1, max: 65535 },
+  ] as const;
+
+  for (const { env, field, min, max } of RANGES) {
+    assert.equal(
+      loadSettings({ [env]: String(min) })[field],
+      min,
+      `${env}=${min} must be accepted`,
+    );
+    assert.equal(
+      loadSettings({ [env]: String(max) })[field],
+      max,
+      `${env}=${max} must be accepted`,
+    );
+    assertValidationError(() => loadSettings({ [env]: String(min - 1) }), env);
+    assertValidationError(() => loadSettings({ [env]: String(max + 1) }), env);
+  }
 });
 
 test('invalid enum input is rejected', () => {
@@ -164,24 +236,33 @@ test('DEFAULT_SETTINGS is frozen', () => {
 });
 
 // --- IG_WRITE_JOURNAL ------------------------------------------------------
+//
+// Exercised through `loadSettings` rather than the resolver behind it: the
+// resolver is module-private, and `settings.writeJournal` is the only surface
+// the write gate ever sees.
+
+/** The resolved journal path for `env` — the field `mcp/write-mode.ts` reads. */
+function journalFor(env: NodeJS.ProcessEnv): string {
+  return loadSettings(env).writeJournal;
+}
 
 test('the write journal defaults to $XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl', () => {
   assert.equal(
-    resolveWriteJournal({ XDG_STATE_HOME: '/var/state' }),
+    journalFor({ XDG_STATE_HOME: '/var/state' }),
     join('/var/state', 'instagram-mcp-ai', 'writes.jsonl'),
   );
 });
 
 test('without XDG_STATE_HOME the journal falls back to ~/.local/state (XDG default)', () => {
   const expected = join(homedir(), '.local', 'state', 'instagram-mcp-ai', 'writes.jsonl');
-  assert.equal(resolveWriteJournal({}), expected);
+  assert.equal(journalFor({}), expected);
   // A blank XDG_STATE_HOME means "unset", exactly like every other knob.
-  assert.equal(resolveWriteJournal({ XDG_STATE_HOME: '   ' }), expected);
+  assert.equal(journalFor({ XDG_STATE_HOME: '   ' }), expected);
 });
 
 test('an explicit IG_WRITE_JOURNAL wins over XDG_STATE_HOME and is trimmed', () => {
   assert.equal(
-    resolveWriteJournal({
+    journalFor({
       IG_WRITE_JOURNAL: '  /audit/writes.jsonl  ',
       XDG_STATE_HOME: '/ignored',
     }),
@@ -194,7 +275,7 @@ test('a blank IG_WRITE_JOURNAL means "use the default", it is not an empty path'
   // the current working directory (or throw) — it means the knob is unset.
   for (const blank of ['', '   ', '\t\n']) {
     assert.equal(
-      resolveWriteJournal({ IG_WRITE_JOURNAL: blank, XDG_STATE_HOME: '/var/state' }),
+      journalFor({ IG_WRITE_JOURNAL: blank, XDG_STATE_HOME: '/var/state' }),
       join('/var/state', 'instagram-mcp-ai', 'writes.jsonl'),
       `${JSON.stringify(blank)} should fall back to the default`,
     );
@@ -204,18 +285,52 @@ test('a blank IG_WRITE_JOURNAL means "use the default", it is not an empty path'
 test('a path knob is not validated — any non-blank value passes through verbatim', () => {
   // Deliberate: the journal is a best-effort audit sink, so an unusable path is
   // reported at warn on the first applied write, never as a refusal to start.
-  assert.equal(resolveWriteJournal({ IG_WRITE_JOURNAL: 'writes.jsonl' }), 'writes.jsonl');
+  assert.equal(journalFor({ IG_WRITE_JOURNAL: 'writes.jsonl' }), 'writes.jsonl');
   assert.equal(
-    resolveWriteJournal({ IG_WRITE_JOURNAL: '/no/such/mount/writes.jsonl' }),
+    journalFor({ IG_WRITE_JOURNAL: '/no/such/mount/writes.jsonl' }),
     '/no/such/mount/writes.jsonl',
   );
 });
 
-test('resolveWriteJournal reads process.env when no env map is passed', () => {
+test('DEFAULT_SETTINGS.writeJournal is the documented default, not this process’s environment', () => {
+  // `DEFAULT_SETTINGS` is built at import time from an EMPTY env deliberately:
+  // it is the value the docs promise, so `doctor` can label it "default" and an
+  // operator can look it up in §12. Resolving it from `process.env` instead
+  // would make the constant echo whatever the running process is configured
+  // with — and no in-process test can see that, because this test runner has no
+  // XDG_STATE_HOME to be echoed. Ask a child process that does have one.
+  const moduleUrl = new URL('../../src/core/settings.js', import.meta.url).href;
+  const probe = [
+    `import { DEFAULT_SETTINGS, loadSettings } from ${JSON.stringify(moduleUrl)};`,
+    'process.stdout.write(',
+    '  JSON.stringify([DEFAULT_SETTINGS.writeJournal, loadSettings().writeJournal]),',
+    ');',
+  ].join('\n');
+
+  const env: NodeJS.ProcessEnv = { ...process.env, XDG_STATE_HOME: '/probe/state' };
+  // Inherited so `homedir()` agrees with the parent; cleared so the child cannot
+  // take the explicit-path shortcut and skip the XDG resolution entirely.
+  delete env.IG_WRITE_JOURNAL;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', probe], {
+    env,
+    encoding: 'utf8',
+  });
+  const [frozen, resolved] = JSON.parse(out) as [string, string];
+
+  assert.equal(frozen, join(homedir(), '.local', 'state', 'instagram-mcp-ai', 'writes.jsonl'));
+  // The other half of the same contract: `loadSettings` DOES follow the ambient
+  // environment. Asserting both from one child is what makes the first line a
+  // statement about `DEFAULT_SETTINGS` rather than about the probe env.
+  assert.equal(resolved, join('/probe/state', 'instagram-mcp-ai', 'writes.jsonl'));
+});
+
+test('loadSettings reads process.env when no env map is passed', () => {
+  // The production call site is the argless one (`src/index.ts`), so the
+  // default parameter carries the journal path too, not just the scalar knobs.
   const prev = process.env.IG_WRITE_JOURNAL;
   process.env.IG_WRITE_JOURNAL = '/from/process-env/writes.jsonl';
   try {
-    assert.equal(resolveWriteJournal(), '/from/process-env/writes.jsonl');
+    assert.equal(loadSettings().writeJournal, '/from/process-env/writes.jsonl');
   } finally {
     if (prev === undefined) delete process.env.IG_WRITE_JOURNAL;
     else process.env.IG_WRITE_JOURNAL = prev;

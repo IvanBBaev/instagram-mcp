@@ -14,12 +14,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
+import { Buffer } from 'node:buffer';
 import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
-import { startHttp } from '../../src/mcp/transport.js';
+import { startHttp, startStdio } from '../../src/mcp/transport.js';
 import type { McpServerFactory, RunningHttpTransport } from '../../src/mcp/transport.js';
 import { InstagramError } from '../../src/core/types.js';
 import type { Logger } from '../../src/core/types.js';
@@ -152,6 +154,7 @@ async function post(
   url: string,
   body: string,
   headers: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<{ status: number; text: string }> {
   const res = await fetch(url, {
     method: 'POST',
@@ -161,8 +164,48 @@ async function post(
       ...headers,
     },
     body,
+    ...(signal !== undefined ? { signal } : {}),
   });
   return { status: res.status, text: await res.text() };
+}
+
+/**
+ * POST with a caller-chosen `Host` header. `fetch` derives `Host` from the URL
+ * and will not let it be overridden, so the SDK's DNS-rebinding protection can
+ * only be exercised through the raw client — which is also exactly what an
+ * attacker's rebound browser request looks like on the wire.
+ */
+async function postWithHost(
+  port: number,
+  hostHeader: string,
+  body: string,
+): Promise<{ status: number; text: string }> {
+  return await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'content-length': Buffer.byteLength(body),
+          host: hostHeader,
+        },
+      },
+      (res) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          text += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+      },
+    );
+    req.once('error', reject);
+    req.end(body);
+  });
 }
 
 test('startHttp refuses a non-loopback bind with no bearer token', async () => {
@@ -441,5 +484,245 @@ test('a server that fails to build is logged and answered with a stack-free 500'
     assert.equal(after.status, 200, `the transport must recover: ${after.text}`);
   } finally {
     await running.close();
+  }
+});
+
+test('a teardown that throws a bare string still names the value in the log', async () => {
+  // Nothing guarantees a rejection is an `Error`: `close()` here belongs to the
+  // SDK and to whatever a future embedder swaps in. Reading `.message` off a
+  // string yields `undefined`, which would turn a real teardown failure into a
+  // log line that says nothing at all.
+  const port = await freePort('127.0.0.1');
+  const url = `http://127.0.0.1:${port}/mcp`;
+  const records: LogRecord[] = [];
+  const running = await startHttp(
+    () => {
+      const server = realServer();
+      const close = server.close.bind(server);
+      server.close = async () => {
+        await close();
+        throw 'close threw a string' as unknown as Error;
+      };
+      return server;
+    },
+    { host: '127.0.0.1', port },
+    recordingLogger(records),
+  );
+
+  try {
+    assert.equal((await post(url, initializeBody(1))).status, 200);
+    await waitFor('the teardown failure to be logged', () =>
+      records.some((r) => r.msg === 'http request teardown failed'),
+    );
+    const logged = records.find((r) => r.msg === 'http request teardown failed');
+    assert.equal(logged?.fields?.err, 'close threw a string');
+  } finally {
+    await running.close();
+  }
+});
+
+test('shutdown closes an exchange that is still in flight before it stops the listener', async () => {
+  // `httpServer.close()` waits for open connections, and a transport still
+  // attached to a live exchange is exactly that. If shutdown skipped it, a
+  // server with one hung request would never finish closing — the process would
+  // sit there on SIGINT instead of exiting.
+  const port = await freePort('127.0.0.1');
+  const url = `http://127.0.0.1:${port}/mcp`;
+  const records: LogRecord[] = [];
+
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let wired = false;
+  let transportClosed = false;
+
+  const running = await startHttp(
+    () => {
+      const server = realServer();
+      const connect = server.connect.bind(server);
+      server.connect = async (transport) => {
+        await connect(transport);
+        // `Protocol.connect` routes the transport's close through here, so this
+        // fires exactly when shutdown closes the in-flight transport.
+        server.server.onclose = () => {
+          transportClosed = true;
+        };
+        wired = true;
+        // Pin the exchange open: the transport is registered and connected, but
+        // the request is never answered.
+        await held;
+      };
+      return server;
+    },
+    { host: '127.0.0.1', port },
+    recordingLogger(records),
+  );
+
+  const controller = new AbortController();
+  const pending = post(url, initializeBody(1), {}, controller.signal).catch(() => undefined);
+
+  try {
+    await waitFor('the exchange to register its transport', () => wired);
+
+    const closing = running.close();
+    await waitFor('shutdown to close the in-flight transport', () => transportClosed);
+
+    // Only now let the client's socket go, so the listener had a live connection
+    // for the whole of the assertion above.
+    controller.abort();
+    await closing;
+  } finally {
+    release();
+    await pending;
+  }
+});
+
+test('a shutdown that cannot close the listener rejects rather than resolving silently', async () => {
+  // Closing twice is the cheap way to reach it, but the real case is a listener
+  // that is already down. Swallowing the error would report a clean shutdown
+  // for a server whose socket may still be held by something else.
+  const port = await freePort('127.0.0.1');
+  const running = await startHttp(
+    stubFactory().create,
+    { host: '127.0.0.1', port },
+    recordingLogger([]),
+  );
+
+  await running.close();
+
+  await assert.rejects(
+    () => running.close(),
+    (err: unknown) => err instanceof Error && /not running/i.test(err.message),
+  );
+});
+
+test('a teardown that throws after the response is logged, not left as an unhandled rejection', async () => {
+  // `dispose` runs when the response is already on the wire, so a throwing
+  // `close()` has nowhere to be reported: unguarded it becomes an unhandled
+  // rejection, which under Node's default policy takes the whole server process
+  // down on a request that in fact succeeded.
+  const port = await freePort('127.0.0.1');
+  const url = `http://127.0.0.1:${port}/mcp`;
+  const records: LogRecord[] = [];
+  const running = await startHttp(
+    () => {
+      const server = realServer();
+      const close = server.close.bind(server);
+      server.close = async () => {
+        await close();
+        throw new Error('close raced the socket');
+      };
+      return server;
+    },
+    { host: '127.0.0.1', port },
+    recordingLogger(records),
+  );
+
+  try {
+    const res = await post(url, initializeBody(1));
+    assert.equal(res.status, 200, `the exchange itself succeeded: ${res.text}`);
+
+    // Disposal happens on response close, so it lands after the POST resolves.
+    await waitFor('the teardown failure to be logged', () =>
+      records.some((r) => r.msg === 'http request teardown failed'),
+    );
+    const logged = records.find((r) => r.msg === 'http request teardown failed');
+    assert.equal(
+      logged?.level,
+      'debug',
+      'a post-response teardown is noise, not an operator alarm',
+    );
+    assert.equal(logged?.fields?.err, 'close raced the socket');
+
+    // And the listener still serves the next client.
+    assert.equal((await post(url, initializeBody(2))).status, 200);
+  } finally {
+    await running.close();
+  }
+});
+
+test('a forged Host header is refused: DNS-rebinding protection is ON, not merely available', async () => {
+  // Without it, any web page the operator visits can have the browser POST to
+  // http://127.0.0.1:<port>/mcp — the loopback bind is no boundary at all against
+  // a rebound name, and the full write surface is one fetch() away.
+  const port = await freePort('127.0.0.1');
+  const running = await startHttp(realServer, { host: '127.0.0.1', port }, recordingLogger([]));
+
+  try {
+    const forged = await postWithHost(port, 'attacker.example', initializeBody(1));
+    assert.notEqual(forged.status, 200, `a forged Host must not be served: ${forged.text}`);
+    assert.equal(forged.status, 403);
+
+    // ...and the honest Host an MCP client sends is still served.
+    const honest = await postWithHost(port, `127.0.0.1:${port}`, initializeBody(2));
+    assert.equal(honest.status, 200, honest.text);
+  } finally {
+    await running.close();
+  }
+});
+
+test('startStdio announces readiness only after the connection actually succeeded', async () => {
+  // `connect` is what starts serving. Reporting "ready" without awaiting it
+  // would log a healthy line over a server that never came up, and turn the
+  // failure into an unhandled rejection instead of an error the caller sees.
+  const records: LogRecord[] = [];
+  const failing = {
+    connect: async (): Promise<void> => {
+      throw new Error('stdio refused');
+    },
+    close: async (): Promise<void> => undefined,
+  } as unknown as McpServer;
+
+  await assert.rejects(() => startStdio(failing, recordingLogger(records)), /stdio refused/);
+  assert.equal(
+    records.some((r) => r.msg === 'mcp server ready'),
+    false,
+    'a failed connect must never be announced as ready',
+  );
+});
+
+test('a finished exchange leaves the in-flight set instead of accumulating until shutdown', async () => {
+  // The set exists so shutdown can end streams nothing else will end. If
+  // completed exchanges are never removed it becomes an unbounded leak for the
+  // lifetime of the process, and shutdown re-closes every transport it ever
+  // served. Counting `close()` calls is how that is visible from outside.
+  const port = await freePort('127.0.0.1');
+  const url = `http://127.0.0.1:${port}/mcp`;
+  const running = await startHttp(realServer, { host: '127.0.0.1', port }, recordingLogger([]));
+
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalClose = StreamableHTTPServerTransport.prototype.close;
+  let closes = 0;
+  StreamableHTTPServerTransport.prototype.close = async function (
+    this: StreamableHTTPServerTransport,
+  ): Promise<void> {
+    closes += 1;
+    await originalClose.call(this);
+  };
+
+  let stopped = false;
+  const shutdown = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    await running.close();
+  };
+
+  try {
+    for (const id of [1, 2, 3]) {
+      assert.equal((await post(url, initializeBody(id))).status, 200);
+    }
+    await waitFor('all three exchanges to be disposed', () => closes >= 3);
+    const afterRequests = closes;
+
+    await shutdown();
+    assert.equal(
+      closes,
+      afterRequests,
+      'shutdown re-closed a transport whose exchange had already ended',
+    );
+  } finally {
+    StreamableHTTPServerTransport.prototype.close = originalClose;
+    await shutdown();
   }
 });

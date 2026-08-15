@@ -201,6 +201,14 @@ async function readJsonOrThrow(res: Response): Promise<Record<string, unknown>> 
     try {
       parsed = JSON.parse(raw);
     } catch {
+      // EQUIVALENT-MUTANT NOTE: writing `{}` here instead of `raw` cannot be
+      // observed. Both consumers funnel the value through `toRecord`, and
+      // `toRecord` of a string is `{}` — the error path reads
+      // `toRecord(toRecord(parsed).error)` and the success path `toRecord(parsed)`,
+      // so a non-JSON body already contributes nothing either way. Keeping `raw`
+      // is deliberate: it is the only thing that would let a future reader of
+      // this value see what actually arrived. There is no behaviour to assert,
+      // so do not contort a test into 'killing' it.
       parsed = raw;
     }
   }
@@ -435,7 +443,12 @@ export function captureAuthorizationCode(
 ): Promise<string> {
   const url = new URL(params.redirectUri);
   const port = url.port !== '' ? Number(url.port) : DEFAULT_REDIRECT_PORT;
+  /* c8 ignore start -- the `'/'` arm is unreachable through this function: the
+     WHATWG parser normalises an empty path to `/` for every special scheme, and
+     `listenHostFor` below rejects anything that is not loopback http. It stays
+     because an empty `expectedPath` would make the route match nothing at all. */
   const expectedPath = url.pathname === '' ? '/' : url.pathname;
+  /* c8 ignore stop */
   const clock = deps.clock ?? systemClock;
   const timeoutMs = deps.timeoutMs ?? CAPTURE_TIMEOUT_MS;
   const createServerImpl = deps.createServerImpl ?? defaultCreateServer;
@@ -444,7 +457,12 @@ export function captureAuthorizationCode(
   try {
     listenHost = listenHostFor(params.redirectUri);
   } catch (err) {
+    /* c8 ignore start -- the `new Error(String(err))` arm is defensive: the only
+       thrower here is `listenHostFor`, which raises an `InstagramError`. It exists
+       because `catch` is typed `unknown`, and rejecting with a bare value would
+       give `runLogin`'s handler nothing to print. */
     return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    /* c8 ignore stop */
   }
 
   return new Promise<string>((resolve, reject) => {

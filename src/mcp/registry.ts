@@ -73,7 +73,12 @@ export function buildManifest(tools: ToolSpec[]): PackageManifest[] {
     groups.set(pkg, list);
   }
 
+  /* c8 ignore start -- the `?? []` arm is unreachable: every name comes from
+     `groups.keys()`, so the lookup always hits. Kept because `Map.get` is typed
+     as possibly-undefined and a non-null assertion here would silently produce
+     a package with `tools: undefined` if the map were ever built elsewhere. */
   return [...groups.keys()].sort().map((name) => ({ name, tools: groups.get(name) ?? [] }));
+  /* c8 ignore stop */
 }
 
 // --- Package selection ------------------------------------------------------
@@ -161,7 +166,12 @@ export function selectPackages(
     if (lower === 'all') {
       active = new Set(available);
     } else {
+      /* c8 ignore start -- the `?? []` arm is unreachable: `usesProfile` is only
+         true after `Object.hasOwn(PACKAGE_PROFILES, lower)`. It exists because
+         `noUncheckedIndexedAccess` types the lookup as possibly-undefined, and
+         an empty selection is the safe reading if that guard ever moves. */
       const profile = PACKAGE_PROFILES[lower] ?? [];
+      /* c8 ignore stop */
       active = new Set(profile.filter((p) => available.has(p)));
     }
   } else {
@@ -342,6 +352,18 @@ const accountField = z
  * covers root-level object issues — nested field issues carry their own
  * schemas' (default) messages, which the SDK already renders with a path.
  */
+/**
+ * Render the "valid arguments" list carried by every rejection message.
+ *
+ * The `(none)` fallback is defensive only: {@link registerOne} always folds the
+ * injected `account` selector into the shape, so a registered tool's key list
+ * is never empty even for a tool that declares no inputs of its own.
+ */
+/* c8 ignore next 3 -- the `(none)` arm is unreachable while `account` is injected. */
+function validArgList(validKeys: string[]): string {
+  return validKeys.join(', ') || '(none)';
+}
+
 function strictInputSchema(shape: z.ZodRawShape): z.AnyZodObject {
   const validKeys = Object.keys(shape);
   return z
@@ -351,7 +373,7 @@ function strictInputSchema(shape: z.ZodRawShape): z.AnyZodObject {
           return {
             message:
               `unknown argument(s) [${issue.keys.join(', ')}]; ` +
-              `valid arguments: ${validKeys.join(', ') || '(none)'}.`,
+              `valid arguments: ${validArgList(validKeys)}.`,
           };
         }
         return { message: ctx.defaultError };
@@ -366,7 +388,7 @@ function validationMessage(spec: ToolSpec, error: z.ZodError, validKeys: string[
   for (const issue of error.issues) {
     if (issue.code === 'unrecognized_keys') unknownKeys.push(...issue.keys);
   }
-  const valid = validKeys.join(', ') || '(none)';
+  const valid = validArgList(validKeys);
   if (unknownKeys.length > 0) {
     return `Unknown argument(s) [${unknownKeys.join(', ')}] for tool '${spec.name}'; valid arguments: ${valid}.`;
   }

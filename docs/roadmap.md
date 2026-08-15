@@ -26,7 +26,7 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
 | M3 Moderation | **PARTIAL** | 9 comment tools + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
-| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29 — `.claude-plugin/plugin.json`). **Not done:** the npm publish itself, the MCP-registry submission, and clean-machine install testing of all channels. Those are outward, irreversible acts awaiting an explicit go-ahead. |
+| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **Not done:** the npm publish itself, the MCP-registry submission, and clean-machine install testing of all four channels. Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
 **Cross-cutting blocker.** The whole of Lane E (live QA, `T-E1`–`T-E4`) is
@@ -253,17 +253,32 @@ matrix (D1) enforced end-to-end and snapshot-tested.
 - **DONE:** `.cjs` bin launcher + `prepublishOnly` gate + `provenance: true`;
   `server.json`; MCPB `manifest.json`; README generated sections with the
   `test/docs-sync.test.ts` drift guard; `SECURITY.md`, `CHANGELOG.md`,
-  `docs/release-checklist.md`, the three-channel version-drift test,
+  `docs/release-checklist.md`, the four-channel version-drift test,
   `docs/stability.md`, `docs/setup-guide.md`, `docs/troubleshooting.md`; the
   OIDC release workflow.
-- **DONE 2026-07-29:** the **Claude Code plugin manifest**
-  (`.claude-plugin/plugin.json`), a fourth install channel. It is deliberately
-  **outside** the npm tarball's `files` allowlist — the plugin channel installs
-  from git, not from `node_modules` — and a test locks that exclusion in.
+- **DONE 2026-07-29, completed 2026-08-07:** the **Claude Code plugin channel**, a
+  fourth install channel, now whole rather than a lone manifest.
+  `.claude-plugin/plugin.json` declares the stdio server and — since 2026-08-07 —
+  a `userConfig.IG_ACCESS_TOKEN` entry (`sensitive` → OS keychain, `required`)
+  wired to the server through `env: { IG_ACCESS_TOKEN: "${user_config.…}" }`, so
+  installing prompts for the credential exactly like the MCPB bundle instead of
+  demanding a hand-placed env var. `.claude-plugin/marketplace.json` makes the repo
+  its own single-plugin catalog, which is what `/plugin marketplace add` actually
+  requires — without it the manifest alone was not installable. Both files
+  validate against their published JSON schemas and are locked by
+  `test/release/plugin-manifest.test.ts` (16 tests) plus the four-channel drift
+  test. `.claude-plugin/` stays deliberately **outside** the npm tarball's `files`
+  allowlist — the plugin channel installs from git, not from `node_modules` — and
+  a test locks that exclusion in.
 - **NOT DONE:** the npm publish itself (nothing is on the registry at all — not
-  even the M0 stub); the MCP-registry submission.
+  even the M0 stub); the MCP-registry submission. The npm publish now gates **two**
+  channels: `npx instagram-mcp-ai` directly, and the plugin, whose manifest
+  launches the server through that same unpublished name.
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
-  users, and the exit gate's install testing of all three channels. See
+  users, and the exit gate's install testing of all **four** channels — including
+  proving that the plugin's `${user_config.IG_ACCESS_TOKEN}` interpolation really
+  reaches the server, which is schema-valid and unit-asserted but has never been
+  executed by a real client. See
   [release-checklist.md](release-checklist.md) §"Current status" for the same
   breakdown at step granularity.
 
@@ -273,7 +288,7 @@ Claude Code plugin manifest (`.claude-plugin/plugin.json`);
 MCPB bundle with keychain-backed `user_config` + a token-acquisition story for
 non-CLI users (devops condition); README generated sections (tool table, env
 catalog) with sync tests; SECURITY.md, CHANGELOG.md, release checklist,
-three-channel version-drift test;
+four-channel version-drift test;
 **user-facing setup guide + troubleshooting table** (`docs/setup-guide.md`,
 `docs/troubleshooting.md` — Meta-app creation through token-in-hand, both paths);
 **tool-surface stability/semver policy + config-tier matrix**
@@ -281,8 +296,8 @@ three-channel version-drift test;
 token-only vs full config tiers). The doc items can start much earlier
 (workplan T-R1/T-R2) and are only *finalized* here.
 
-Exit gate: all three channels (npm / registry / MCPB) install-tested from clean
-machines; generated docs proven in sync by CI.
+Exit gate: all four channels (npm / registry / MCPB / Claude Code plugin)
+install-tested from clean machines; generated docs proven in sync by CI.
 
 ## M6 — Messaging (optional, gated design review first) — **NOT STARTED (review says DEFER)**
 

@@ -177,6 +177,20 @@ test('a redactor that does not return a string leaves msg intact', () => {
   assert.deepEqual(sink.records()[0], { level: 'info', msg: 'plain message', time: 1 });
 });
 
+test('a redactor that collapses the fields to a scalar drops them, never spreads them', () => {
+  const sink = collector();
+  // `redact` is an injected seam typed `unknown -> unknown`; a stringifying
+  // scrubber returns a string for the fields object too. Spreading that into the
+  // record would emit `{0:'s',1:'c',…}` — one key per character, burying the
+  // level/msg/time the sink exists to carry. Dropping is the only safe reading.
+  const redact = (): unknown => 'scrubbed';
+  const log = createLogger({ level: 'debug', stream: sink.stream, clock: fakeClock(1), redact });
+
+  log.warn('rate limited', { host: 'graph.instagram.com', usagePct: 95 });
+
+  assert.deepEqual(sink.records()[0], { level: 'warn', msg: 'scrubbed', time: 1 });
+});
+
 test('time advances with the injected clock', () => {
   const sink = collector();
   const clock = fakeClock(100);
@@ -197,4 +211,63 @@ test('fields are optional', () => {
   log.debug('no fields');
 
   assert.deepEqual(sink.records()[0], { level: 'debug', msg: 'no fields', time: 1 });
+});
+
+test('the default sink is stderr — never stdout, which is the MCP channel', () => {
+  // Every other test in this file injects a stream, which leaves the ONE line
+  // that decides where an unconfigured logger writes completely unexercised. On
+  // stdio transport stdout carries framed JSON-RPC: a single log line written
+  // there corrupts the frame and the client drops the session. This is the
+  // cheapest possible guard on the most expensive possible mistake.
+  const stderrWrites: string[] = [];
+  const stdoutWrites: string[] = [];
+  const realErr = process.stderr.write.bind(process.stderr);
+  const realOut = process.stdout.write.bind(process.stdout);
+  process.stderr.write = (chunk: string | Uint8Array): boolean => {
+    stderrWrites.push(chunk.toString());
+    return true;
+  };
+  process.stdout.write = (chunk: string | Uint8Array): boolean => {
+    stdoutWrites.push(chunk.toString());
+    return true;
+  };
+  try {
+    // No `stream` option: this is the production call shape.
+    createLogger({ level: 'debug', clock: fakeClock(7) }).warn('default sink probe');
+  } finally {
+    process.stderr.write = realErr;
+    process.stdout.write = realOut;
+  }
+
+  assert.deepEqual(stdoutWrites, [], 'nothing may reach the transport channel');
+  assert.equal(stderrWrites.length, 1);
+  assert.deepEqual(JSON.parse(stderrWrites[0] ?? ''), {
+    level: 'warn',
+    msg: 'default sink probe',
+    time: 7,
+  });
+});
+
+test('caller fields shadow the reserved record keys — the current, deliberate order', () => {
+  // `{ level, msg, time, ...extra }` puts the spread last, so a field (or a child
+  // binding) named `level`/`msg`/`time` replaces the real one. Pinned here
+  // because nothing else in the suite distinguishes the two spread orders, and
+  // an unpinned key order is exactly the kind of thing that flips silently
+  // during a refactor and quietly rewrites the audit trail.
+  //
+  // Worth revisiting: no legitimate caller needs to override its own severity,
+  // and every log field on the write paths is at least partly Graph-derived.
+  // Reserved-keys-win would be the safer contract. Changing it is a deliberate
+  // decision, not a side effect — hence a test that states today's answer.
+  const sink = collector();
+  const log = createLogger({ level: 'info', stream: sink.stream, clock: fakeClock(1) });
+
+  log.info('real message', { level: 'audit', msg: 'forged', time: 999, keep: 'me' });
+
+  assert.deepEqual(sink.records()[0], {
+    level: 'audit',
+    msg: 'forged',
+    time: 999,
+    keep: 'me',
+  });
 });

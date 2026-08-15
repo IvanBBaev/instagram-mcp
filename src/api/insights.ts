@@ -179,6 +179,14 @@ function requireAccountId(accountId: string | undefined): string {
  * CC-INS-2: refuse metrics that are invalid for a known `media_product_type`.
  * Unknown/omitted product types pass through (open vocabulary — CC-DATA-6);
  * Meta remains the final authority.
+ *
+ * Equivalent-mutant note: dropping the `=== ''` arm of the first guard changes
+ * nothing. A blank string falls through to `MEDIA_METRIC_MATRIX['']`, which is
+ * `undefined` (the matrix keys are FEED/REELS/STORY, and `''` is not on
+ * `Object.prototype`), so the very next line returns anyway; `''.toUpperCase()`
+ * cannot throw. The arm stays because it states the intent — "blank is the same
+ * as absent" — at the guard rather than leaving it to a lookup miss two lines
+ * down. Do not contort a test into "killing" it.
  */
 export function validateMediaMetrics(
   metrics: readonly MediaMetric[],

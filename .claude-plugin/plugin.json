@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "instagram-mcp-ai",
   "displayName": "Instagram MCP",
   "version": "0.0.1",
@@ -12,11 +13,23 @@
   "repository": "https://github.com/IvanBBaev/instagram-mcp",
   "license": "MIT",
   "keywords": ["instagram", "mcp", "meta", "graph-api", "social"],
+  "userConfig": {
+    "IG_ACCESS_TOKEN": {
+      "type": "string",
+      "title": "Instagram access token",
+      "description": "Long-lived access token for the Instagram professional account. This is the only token variable the server reads, and it is the same variable for both auth paths — Instagram Login and Facebook Login. Get one with `npx instagram-mcp-ai login` (see docs/plugin-install.md). Stored in the OS keychain, never in settings.json.",
+      "sensitive": true,
+      "required": true
+    }
+  },
   "mcpServers": {
     "instagram": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "instagram-mcp-ai@0.0.1"]
+      "args": ["-y", "instagram-mcp-ai@0.0.1"],
+      "env": {
+        "IG_ACCESS_TOKEN": "${user_config.IG_ACCESS_TOKEN}"
+      }
     }
   }
 }

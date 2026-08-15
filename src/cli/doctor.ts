@@ -11,7 +11,7 @@
  *
  * What the report covers for the active profile (docs/operations.md §6):
  *   1. Configuration — profile, auth path, transport, write mode, destructive
- *      flag, active packages, refresh window (no secrets).
+ *      flag, applied-write journal, active packages, refresh window (no secrets).
  *   2. Token & authentication — Path B introspects via `debug_token` (validity,
  *      scopes, expiry); Path A has no `debug_token`, so validity is confirmed
  *      only by the reachability check (CC-AUTH-7).
@@ -25,6 +25,9 @@
  * throwing out of `runDoctor`, and the whole report is passed through the secret
  * redactor as a final safety net.
  */
+import { accessSync, constants, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
 import { debugToken, getAccount, summarizeTokenExpiry } from '../api/account.js';
 import { createRedactor } from '../core/redact.js';
 import { isInstagramError } from '../core/types.js';
@@ -125,7 +128,12 @@ function expandSelection(selection: string, isDefault: boolean): string {
   const prefix = isDefault ? 'default: ' : '';
   if (lower === 'all') return `${selection} (${prefix}every package)`;
   if (!Object.hasOwn(PACKAGE_PROFILES, lower)) return selection;
+  /* c8 ignore start -- the `?? []` arm is unreachable: the line above returns
+     unless `Object.hasOwn(PACKAGE_PROFILES, lower)`. It is here because
+     `noUncheckedIndexedAccess` types the lookup as possibly-undefined, and an
+     empty expansion is the safe reading if that guard is ever moved. */
   const packages = (PACKAGE_PROFILES[lower] ?? []).join(', ');
+  /* c8 ignore stop */
   const readonly = READONLY_PROFILES.has(lower) ? '; forced read-only' : '';
   return `${selection} (${prefix}${packages}${readonly})`;
 }
@@ -145,6 +153,171 @@ function describePackages(env: NodeJS.ProcessEnv): string {
   if (deny !== undefined && deny !== '') base = `${base} (deny: ${deny})`;
   if (readonly !== undefined && readonly !== '') base = `${base} (read-only: ${readonly})`;
   return base;
+}
+
+// --- applied-write journal --------------------------------------------------
+
+/**
+ * What a cheap look at the journal path found.
+ *
+ * `blocked` and `unknown` are separate on purpose: "I proved you cannot append
+ * here" deserves a WARN, "I could not tell" does not. Collapsing them would
+ * either cry wolf on an exotic filesystem or hide a real dead audit trail.
+ */
+type JournalState =
+  | { kind: 'present'; bytes: number }
+  | { kind: 'absent' }
+  | { kind: 'blocked'; reason: string }
+  | { kind: 'unknown'; reason: string };
+
+const KIB = 1024;
+const MIB = 1024 * 1024;
+
+/** Compact human size — the bytes come free with the existence check. */
+function formatSize(bytes: number): string {
+  if (bytes < KIB) return `${bytes} B`;
+  if (bytes < MIB) return `${(bytes / KIB).toFixed(1)} KiB`;
+  return `${(bytes / MIB).toFixed(1)} MiB`;
+}
+
+/** Outcome of walking up from the journal path to the first existing ancestor. */
+type AnchorResult =
+  { kind: 'dir'; dir: string } | { kind: 'notDir'; path: string } | { kind: 'none' };
+
+/**
+ * Walk up from the journal path to the first ancestor that exists.
+ *
+ * The write gate creates the journal's directory tree on the first applied write
+ * (`mkdirSync({ recursive: true })`), so "is the directory missing?" is not the
+ * question — "can the tree be created and appended to?" is, and that is decided
+ * by the deepest ancestor that already exists. A `notDir` hit is reported rather
+ * than walked past: with a regular file sitting where a directory has to go,
+ * `mkdirSync` fails with `ENOTDIR` no matter how writable the directory above it
+ * is, so continuing the walk would find a writable anchor and answer "fine".
+ *
+ * `resolve` first, so a relative `IG_WRITE_JOURNAL` is walked from the cwd the
+ * append would use and the walk terminates at the filesystem root, not at `.`.
+ */
+function nearestExistingDir(path: string): AnchorResult {
+  let dir = dirname(resolve(path));
+  for (;;) {
+    const stat = statSync(dir, { throwIfNoEntry: false });
+    if (stat !== undefined) {
+      return stat.isDirectory() ? { kind: 'dir', dir } : { kind: 'notDir', path: dir };
+    }
+    const parent = dirname(dir);
+    /* c8 ignore start -- the walk cannot actually run out of parents: `dirname`
+       is a fixed point at the filesystem root, and `statSync` on the root always
+       resolves, so the loop returns above before `parent === dir` can hold. The
+       guard stays because a `for(;;)` with no terminating case is a hang. */
+    if (parent === dir) return { kind: 'none' };
+    /* c8 ignore stop */
+    dir = parent;
+  }
+}
+
+/**
+ * Inspect the journal path without touching it.
+ *
+ * Two hard rules, both load-bearing:
+ *
+ * 1. **Nothing is created.** `doctor` diagnoses; it does not mutate. Creating
+ *    the file (or its 0700 directory) here would make the very next probe report
+ *    a healthy journal that the write gate never actually wrote to, and would
+ *    leave state behind on a machine the operator was only inspecting. Only
+ *    `statSync` and `accessSync` are used — both pure reads.
+ * 2. **Nothing throws.** Every call is inside the guard, and an unexpected
+ *    failure degrades to `unknown` rather than propagating: the journal is a
+ *    best-effort audit sink (`mcp/write-mode.ts` warns instead of throwing when
+ *    an append fails), so it must not be able to break — let alone fail — a
+ *    health check about token validity and API reachability.
+ *
+ * `accessSync` is an advisory answer (it can be wrong under ACLs, or on a
+ * read-only mount that reports the mode bits of a writable directory), which is
+ * exactly why a negative result is a WARN and never an exit-code failure.
+ */
+function probeJournal(path: string): JournalState {
+  try {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    if (stat !== undefined) {
+      if (!stat.isFile()) return { kind: 'blocked', reason: 'the path is not a regular file' };
+      try {
+        accessSync(path, constants.W_OK);
+      } catch {
+        return { kind: 'blocked', reason: 'no write permission on the file' };
+      }
+      return { kind: 'present', bytes: stat.size };
+    }
+    const anchor = nearestExistingDir(path);
+    /* c8 ignore start -- unreachable for the same reason `nearestExistingDir`
+       never returns `none`; kept so the exhaustive match over `AnchorResult`
+       stays exhaustive rather than leaning on a cast. */
+    if (anchor.kind === 'none') return { kind: 'blocked', reason: 'no existing parent directory' };
+    /* c8 ignore stop */
+    if (anchor.kind === 'notDir') {
+      return { kind: 'blocked', reason: `${anchor.path} is not a directory` };
+    }
+    try {
+      accessSync(anchor.dir, constants.W_OK);
+    } catch {
+      return { kind: 'blocked', reason: `no write permission on ${anchor.dir}` };
+    }
+    return { kind: 'absent' };
+  } catch (err) {
+    return { kind: 'unknown', reason: describeError(err) };
+  }
+}
+
+/**
+ * The `Write journal:` line — path, whether it will really receive anything, and
+ * whether it can be appended to.
+ *
+ * The bare path alone is the misleading version of this diagnostic. The journal
+ * is written **only** on an applied write, so in the default `preview` mode an
+ * operator reading `Write journal: …/writes.jsonl` reasonably concludes their
+ * audit trail is live, when in fact nothing has been or will be recorded until
+ * something flips to apply. The mode clause states that in the same breath as
+ * the path, so the line cannot be read the wrong way.
+ *
+ * Existence and writability are reported for the complementary reason: an
+ * unwritable path is the one failure mode the write gate deliberately swallows
+ * (it warns to the log and returns success, so the write happens un-audited),
+ * which makes `doctor` the only place an operator can find out *before* trusting
+ * the trail. It is a WARN in either write mode — an unwritable journal path is
+ * never intentional, and in preview mode it is precisely the latent problem you
+ * want to learn about before switching to apply — but never a failure: `doctor`
+ * answers "can this profile talk to the Graph API", and a broken audit sink is
+ * not an answer of "no" to that question.
+ */
+function describeJournal(settings: Settings): { status: Status; text: string } {
+  const state = probeJournal(settings.writeJournal);
+  const applying = settings.writeMode === 'apply';
+  const mode = applying
+    ? 'apply mode — every applied write is appended here'
+    : 'preview mode — nothing is recorded until a write is applied via IG_WRITE_MODE=apply or apply:true';
+
+  let status: Status = 'info';
+  let detail: string;
+  switch (state.kind) {
+    case 'present':
+      detail = `file exists, ${formatSize(state.bytes)}`;
+      break;
+    case 'absent':
+      detail = 'not created yet — it appears on the first applied write';
+      break;
+    case 'blocked':
+      status = 'warn';
+      detail = `NOT writable (${state.reason}) — applied writes ${
+        applying ? 'will' : 'would'
+      } NOT be audited`;
+      break;
+    case 'unknown':
+    default:
+      detail = `state could not be determined (${state.reason})`;
+      break;
+  }
+
+  return { status, text: `Write journal:      ${settings.writeJournal} (${mode}; ${detail})` };
 }
 
 /** Exact secret values scoped to this run so redaction never depends on global state. */
@@ -229,6 +402,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorResult> {
   item('info', `Transport:          ${settings.transport}`);
   item('info', `Write mode:         ${settings.writeMode}`);
   item('info', `Allow destructive:  ${settings.allowDestructive}`);
+  const journal = describeJournal(settings);
+  item(journal.status, journal.text);
   item('info', `Active packages:    ${describePackages(env)}`);
   item('info', `Refresh after:      ${settings.refreshAfterDays} day(s)`);
 

@@ -47,6 +47,11 @@ const MIN_NODE_MAJOR = 22;
 /** Fail fast on an unsupported runtime before any Node-22-only API is touched. */
 function assertNodeVersion(): void {
   const major = Number(process.versions.node.split('.')[0]);
+  // Equivalent-mutant note: dropping `Number.isFinite(major)` changes no
+  // outcome — `NaN < MIN_NODE_MAJOR` is already false, so a version string we
+  // cannot parse is tolerated either way. The guard stays because "tolerate what
+  // we cannot parse" is the deliberate rule here, and the bare comparison
+  // expresses it only by accident.
   if (Number.isFinite(major) && major < MIN_NODE_MAJOR) {
     process.stderr.write(
       `instagram-mcp-ai requires Node >= ${MIN_NODE_MAJOR} (running ${process.versions.node}).\n`,
@@ -74,7 +79,21 @@ function loadEnvFiles(): void {
       ? [explicit]
       : [path.join(resolveConfigHome(), SERVER_NAME, '.env'), path.resolve(process.cwd(), '.env')];
   for (const file of candidates) {
-    if (existsSync(file)) dotenvConfig({ path: file, override: false });
+    // `quiet: true` is load-bearing, not cosmetic. From dotenv 17 a successful
+    // load prints a banner ("injected env (N) from …" plus a product tip) to
+    // STDOUT. On the stdio transport stdout carries JSON-RPC and nothing else,
+    // so that banner is a framing error the client reports as a parse failure —
+    // and it leaks the config-home path into the stream on the way. dotenv 16
+    // ignores the option, so this is correct under both. Dropping it is caught
+    // by the "every stdout byte is JSON-RPC" test in `test/index.test.ts`.
+    //
+    // Equivalent-mutant note: the `existsSync` guard is an optimisation, not a
+    // behaviour — dotenv 17 given a missing path returns an error object, writes
+    // nothing to either stream (with `quiet: true`) and throws nothing, so
+    // calling it unconditionally is indistinguishable from skipping. It stays
+    // because "load the files that exist" is the documented rule, and because it
+    // is what keeps a future dotenv's missing-file diagnostics off stdout.
+    if (existsSync(file)) dotenvConfig({ path: file, override: false, quiet: true });
   }
 }
 
@@ -122,6 +141,12 @@ async function main(): Promise<void> {
   // `login` runs before profile resolution — it is what an operator runs when
   // there is no valid credential yet, so it must not require a loadable profile.
   if (subcommand === 'login') {
+    // `slice(3)` drops the subcommand itself. Equivalent-mutant note: `slice(2)`
+    // hands `'login'` to the flag parser as a bare positional, where it is read
+    // as a possible auth-path name — and `normalizePath('login')` is `undefined`,
+    // so nothing changes today. The correct slice stays: the parser's positional
+    // rule is first-wins, so the day `login` grows a real positional argument,
+    // `slice(2)` would silently consume it.
     process.exit(await runLogin(process.argv.slice(3)));
   }
 
@@ -232,11 +257,12 @@ async function main(): Promise<void> {
 main().catch((err: unknown) => {
   // Config/validation failures surface here before the server starts. Keep the
   // message clean (no stack, no token) — the redactor is not guaranteed yet.
-  const message = isInstagramError(err)
-    ? err.message
-    : err instanceof Error
-      ? err.message
-      : String(err);
+  /* c8 ignore start -- the `String(err)` arm is defensive only: everything the
+     startup path can reject with is an `InstagramError` (config/validation) or a
+     plain `Error` (the runtime guard, the transport). It exists because `catch`
+     is typed `unknown` and a dependency throwing a bare value must still print. */
+  const message = isInstagramError(err) || err instanceof Error ? err.message : String(err);
+  /* c8 ignore stop */
   process.stderr.write(`instagram-mcp-ai failed to start: ${message}\n`);
   process.exit(1);
 });

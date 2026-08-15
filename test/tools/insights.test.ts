@@ -12,6 +12,7 @@ import type {
   Settings,
 } from '../../src/core/types.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+import { testSettings } from '../helpers/settings.js';
 
 const NOW_MS = 1_700_000_000_000;
 const NOW_SEC = Math.floor(NOW_MS / 1000);
@@ -27,19 +28,7 @@ const noopLogger: Logger = {
   },
 };
 
-const settings: Settings = {
-  maxConcurrent: 4,
-  maxItems: 200,
-  refreshAfterDays: 45,
-  timeoutMs: 30_000,
-  logLevel: 'info',
-  prettyJson: false,
-  writeMode: 'preview',
-  allowDestructive: false,
-  transport: 'stdio',
-  httpHost: '127.0.0.1',
-  httpPort: 3000,
-};
+const settings: Settings = testSettings();
 
 /** A ToolContext whose `req` records outgoing options and returns a canned body. */
 function makeCtx(opts: { response?: unknown; accountId?: string; nowMs?: number }): {
@@ -133,6 +122,10 @@ test('media insights input requires media_id and rejects legacy metrics', () => 
   // Enum accepts a story-only metric; the media-type matrix is an api-layer concern.
   assert.equal(schema.safeParse({ media_id: 'm1', metrics: ['navigation'] }).success, true);
   assert.equal(schema.safeParse({ media_id: 'm1', media_product_type: 'REELS' }).success, true);
+  // `.min(1)` is load-bearing, not decoration: an empty id is not "missing" to
+  // zod, so without it the handler would happily build `GET //insights` and burn
+  // a rate-limited call on a request that cannot succeed.
+  assert.equal(schema.safeParse({ media_id: '' }).success, false);
 });
 
 test('demographics input requires both breakdown and timeframe', () => {
@@ -162,6 +155,29 @@ test('account insights handler returns text + structuredContent and builds the r
   assert.equal(calls[0]?.path, '/999/insights');
   assert.equal(calls[0]?.method, 'GET');
   assert.equal(calls[0]?.params?.metric_type, 'total_value');
+});
+
+test("account insights forwards the caller's metrics, period and metric_type verbatim", async () => {
+  // Every one of these three arguments has a *silent* default one layer down:
+  // the api falls back to all eleven ACCOUNT_METRICS, `period=day` and
+  // `metric_type=total_value`. So a handler that dropped an argument would still
+  // produce a well-formed answer — just an answer to a different question than
+  // the caller asked, at a different (and for the metric list, much larger)
+  // rate-limit cost. Only the outgoing params can tell the two apart.
+  const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '42' });
+
+  await toolByName('instagram_get_account_insights').handler(
+    { metrics: ['views', 'reach'], period: 'week', metric_type: 'time_series' },
+    ctx,
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.path, '/42/insights');
+  // Each assertion pins one argument against the default it would silently
+  // decay to: the full metric set, `day`, and `total_value` respectively.
+  assert.equal(calls[0]?.params?.metric, 'views,reach');
+  assert.equal(calls[0]?.params?.period, 'week');
+  assert.equal(calls[0]?.params?.metric_type, 'time_series');
 });
 
 test('account insights handler clamps an old "since" using the injected clock (CC-INS-3)', async () => {
@@ -246,6 +262,19 @@ test('media insights with no rows is an empty result, not an error', async () =>
   assert.deepEqual(res.structuredContent, { mediaId: 'm3', metrics: [] });
 });
 
+test('media insights logs the metric selection, naming the implicit set "default"', () => {
+  // Media metrics are the post-2025 set unless the caller overrides them. An
+  // audit line that logged `undefined` for the common case could not be told
+  // apart from a call whose metrics were dropped on the way in.
+  const fn = toolByName('instagram_get_media_insights').logFields;
+  assert.ok(fn);
+  assert.deepEqual(fn({ media_id: 'm1', metrics: ['saved', 'shares'] }).metrics, [
+    'saved',
+    'shares',
+  ]);
+  assert.equal(fn({ media_id: 'm1' }).metrics, 'default');
+});
+
 test('demographics handler forwards breakdown, timeframe and metric_type=total_value', async () => {
   const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '5' });
   await toolByName('instagram_get_audience_demographics').handler(
@@ -258,6 +287,23 @@ test('demographics handler forwards breakdown, timeframe and metric_type=total_v
   assert.equal(calls[0]?.params?.metric_type, 'total_value');
 });
 
+test('demographics forwards the requested population instead of the default one', async () => {
+  // `metrics` defaults to ["follower_demographics"] in the api layer, so asking
+  // for the engaged audience and silently getting the follower base back is a
+  // wrong answer that looks entirely plausible — the two populations differ only
+  // in their numbers. The outgoing `metric` param is the only witness.
+  const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '5' });
+
+  await toolByName('instagram_get_audience_demographics').handler(
+    { metrics: ['engaged_audience_demographics'], breakdown: 'country', timeframe: 'last_14_days' },
+    ctx,
+  );
+
+  assert.equal(calls[0]?.params?.metric, 'engaged_audience_demographics');
+  assert.equal(calls[0]?.params?.breakdown, 'country');
+  assert.equal(calls[0]?.params?.timeframe, 'last_14_days');
+});
+
 test('online followers handler requests the lifetime online_followers metric', async () => {
   const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '7' });
   const res = await toolByName('instagram_get_online_followers').handler({}, ctx);
@@ -266,4 +312,86 @@ test('online followers handler requests the lifetime online_followers metric', a
   assert.equal(calls[0]?.path, '/7/insights');
   assert.equal(calls[0]?.params?.metric, 'online_followers');
   assert.equal(calls[0]?.params?.period, 'lifetime');
+});
+
+// --- the declared output contract -------------------------------------------
+//
+// `registerOne` hands `spec.output` to the MCP server as the tool's
+// `outputSchema`, and the SDK does two things with it: it publishes it in
+// `tools/list` as JSON Schema — `required` list included — and it validates
+// every `structuredContent` against it before the result reaches the client
+// (see test/mcp/registry.test.ts, "outputSchema handling ..."). So what is
+// *required* here is a promise made to clients and a runtime guard on our own
+// handlers at once. Relaxing a field to `.optional()` keeps every happy-path
+// parse green while telling clients the field may simply not be there and
+// removing the SDK's ability to catch a handler that stopped emitting it. These
+// tests therefore assert the negatives: which payloads the declaration rejects.
+
+test('the account-insights output schema requires notes, the clamp flag and named metric rows', () => {
+  const spec = toolByName('instagram_get_account_insights');
+  const schema = z.object(spec.output ?? {});
+  const row = { name: 'views', total_value: { value: 5 } };
+
+  // Baseline: the real handler shape parses, paging optional.
+  assert.equal(
+    schema.safeParse({ metrics: [row], window: { clamped: false }, notes: [] }).success,
+    true,
+  );
+
+  // `notes` carries the retention-clamp disclosure. Declared optional, a client
+  // has no guarantee it will ever see one, and "no notes" stops being a fact.
+  assert.equal(schema.safeParse({ metrics: [row], window: { clamped: false } }).success, false);
+
+  // `window.clamped` is the boolean a caller reads to know whether the numbers
+  // cover the range it asked for (CC-INS-3). Absent must not be legal — an
+  // absent flag reads as "not clamped" to every consumer that checks it.
+  assert.equal(
+    schema.safeParse({ metrics: [row], window: { since: 1, until: 2 }, notes: [] }).success,
+    false,
+  );
+
+  // The metric rows are declared rows, not an anonymous bag of records: a row
+  // without a `name`, or with a non-string one, is not a metric anybody can read.
+  assert.equal(
+    schema.safeParse({ metrics: [{ period: 'day' }], window: { clamped: false }, notes: [] })
+      .success,
+    false,
+  );
+  assert.equal(
+    schema.safeParse({ metrics: [{ name: 42 }], window: { clamped: false }, notes: [] }).success,
+    false,
+  );
+  // …while additive Meta fields still pass through untouched (CC-DATA-7).
+  assert.equal(
+    schema.safeParse({
+      metrics: [{ name: 'views', unknown_future_field: 1 }],
+      window: { clamped: false, future: 'x' },
+      notes: [],
+    }).success,
+    true,
+  );
+});
+
+test('the media-insights output schema requires the mediaId it answered for', () => {
+  const spec = toolByName('instagram_get_media_insights');
+  const schema = z.object(spec.output ?? {});
+
+  assert.equal(schema.safeParse({ mediaId: 'm1', metrics: [{ name: 'views' }] }).success, true);
+
+  // The echoed `mediaId` is how a caller that fanned out over several posts
+  // pairs a result with its media. Optional, the numbers arrive unattributable —
+  // and the SDK would no longer stop a handler that dropped it.
+  assert.equal(schema.safeParse({ metrics: [{ name: 'views' }] }).success, false);
+
+  // Same named-row requirement as above, asserted here on the shared metric-row
+  // schema so it holds independently of the account-insights declaration.
+  assert.equal(
+    schema.safeParse({ mediaId: 'm1', metrics: [{ period: 'lifetime' }] }).success,
+    false,
+  );
+  assert.equal(
+    schema.safeParse({ mediaId: 'm1', metrics: [{ name: 'views', unknown_future_field: 1 }] })
+      .success,
+    true,
+  );
 });

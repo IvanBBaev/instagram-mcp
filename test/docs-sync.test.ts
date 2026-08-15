@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { allTools } from '../src/tools/index.js';
+import type { ToolSpec } from '../src/mcp/define.js';
 import { renderToolTable, renderEnvCatalog } from './helpers/doc-generators.js';
 
 /** The exact text between a `BEGIN`/`END` AUTOGEN marker pair, without the
@@ -50,5 +51,79 @@ test('README env catalog is in sync with .env.example', () => {
     actual,
     expected,
     'README Configuration table is out of date — run `npm run gen:readme` to regenerate it.',
+  );
+});
+
+// --- Generator edge cases the live catalog cannot reach ----------------------
+//
+// The two tests above compare the generators against the real registry, which
+// is well-behaved by construction: every description is a sentence and every
+// tool name is unique. That leaves the generators' fallback arms unexercised —
+// and those arms only ever run on the day someone adds a tool that breaks one
+// of those unstated assumptions, which is precisely when a silent misrender
+// (a truncated row, a nondeterministic ordering) would slip into the README.
+
+/** A ToolSpec with only the fields the renderers read. */
+function specFor(
+  name: string,
+  pkg: string,
+  description: string,
+  paths?: ToolSpec['paths'],
+): ToolSpec {
+  return {
+    name,
+    title: name,
+    description,
+    package: pkg,
+    annotations: { readOnlyHint: true },
+    input: {},
+    handler: () => ({ content: [] }),
+    ...(paths === undefined ? {} : { paths }),
+  };
+}
+
+test('an empty paths list renders as unrestricted, not as a blank cell', () => {
+  // `paths` absent and `paths: []` mean the same thing — no auth-path
+  // restriction — and every tool in the live registry expresses it the first
+  // way, so only the second arm can rot. A blank cell would read as "this tool
+  // works on no auth path at all", which is the opposite of what it means.
+  const table = renderToolTable([specFor('instagram_x', 'core', 'Unrestricted.', [])]);
+  assert.match(table, /\| `instagram_x` \| core \| both \|/);
+
+  const restricted = renderToolTable([
+    specFor('instagram_y', 'core', 'Path B only.', ['fb-login']),
+  ]);
+  assert.match(restricted, /\| `instagram_y` \| core \| fb-login \|/);
+});
+
+test('a description with no sentence terminator is rendered whole, not dropped', () => {
+  // `firstSentence` looks for `.`/`!`/`?` followed by whitespace or end of
+  // input. A description without one — a fragment, or a trailing token like
+  // `business_discovery.username` — must fall back to the full trimmed text.
+  // Returning `''` here would render an empty Summary cell that still passes a
+  // byte-comparison drift test, because the README would be regenerated with
+  // the same emptiness.
+  const table = renderToolTable([specFor('instagram_x', 'core', '  a fragment with no stop  ')]);
+  assert.match(table, /\| a fragment with no stop \|/);
+
+  // And the normal case still stops at the first sentence, with the period kept.
+  const stopped = renderToolTable([specFor('instagram_y', 'core', 'First. Second.')]);
+  assert.match(stopped, /\| First\. \|/);
+});
+
+test('two tools sharing a name and package keep a stable relative order', () => {
+  // The name comparison is the last tie-break in the sort. If its equal arm
+  // returned anything but 0 the comparator would stop being a total order, and
+  // `Array.prototype.sort` is only stable for a consistent comparator — the
+  // README rows could then reorder between runs and fail the drift test with no
+  // source change. A duplicate name is a registry bug, but it must not turn
+  // into a *nondeterministic* one.
+  const a = specFor('instagram_dup', 'core', 'First copy.');
+  const b = specFor('instagram_dup', 'core', 'Second copy.');
+  const forward = renderToolTable([a, b]);
+  assert.equal(forward, renderToolTable([a, b]), 'the same input must render the same bytes');
+  assert.ok(
+    forward.indexOf('First copy.') < forward.indexOf('Second copy.'),
+    'equal keys must preserve input order',
   );
 });

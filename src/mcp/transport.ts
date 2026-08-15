@@ -74,7 +74,16 @@ export interface RunningHttpTransport {
  */
 export type McpServerFactory = () => McpServer;
 
-/** Constant-time bearer comparison that never short-circuits on length. */
+/**
+ * Constant-time bearer comparison that never short-circuits on length.
+ *
+ * Equivalent-mutant note: replacing this whole function with `provided ===
+ * expected` returns the same verdict for every input — the difference is only in
+ * how long the wrong answer takes to produce, which no in-process test can
+ * observe reliably. It is kept because a timing oracle over a loopback socket is
+ * a real (if narrow) way to recover a token byte by byte, and the property is
+ * cheap to hold. Do not "fix" a surviving mutation here with a timing assertion.
+ */
 function bearerMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);

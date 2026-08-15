@@ -177,7 +177,12 @@ function mergeEnv(existing: string, updates: Map<string, string>): string {
     if (key !== undefined && remaining.has(key)) {
       const value = remaining.get(key);
       remaining.delete(key);
+      /* c8 ignore start -- the `?? ''` arm is unreachable: the `has(key)` guard
+         above means the lookup always hits, and `buildUpdates` never stores an
+         undefined value. It stands in for a non-null assertion, which would
+         write the literal `undefined` into the operator's env file instead. */
       return `${key}=${value ?? ''}`;
+      /* c8 ignore stop */
     }
     return line;
   });

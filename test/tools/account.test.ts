@@ -18,6 +18,7 @@ import type { Clock } from '../../src/core/clock.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { fence } from '../../src/mcp/result.js';
 import { accountTools } from '../../src/tools/account.js';
+import { testSettings } from '../helpers/settings.js';
 
 const DAY = 86_400_000;
 
@@ -31,19 +32,7 @@ const noopLog: Logger = {
   },
 };
 
-const baseSettings: Settings = {
-  maxConcurrent: 4,
-  maxItems: 200,
-  refreshAfterDays: 45,
-  timeoutMs: 30_000,
-  logLevel: 'info',
-  prettyJson: false,
-  writeMode: 'preview',
-  allowDestructive: false,
-  transport: 'stdio',
-  httpHost: '127.0.0.1',
-  httpPort: 3000,
-};
+const baseSettings: Settings = testSettings();
 
 const baseProfile: ResolvedProfile = {
   name: 'default',
@@ -165,6 +154,33 @@ test('get_account falls back to /me when no account ID is resolved, and omits ab
   assert.equal(body.biography, undefined);
 });
 
+test('get_account renders its text block according to the prettyJson setting', async () => {
+  // The text block is the only payload a client without structured-output
+  // support ever sees, and `IG_PRETTY_JSON` is the operator's knob for how it is
+  // rendered. The handler has to hand that setting to `json()`; a handler that
+  // called `json(structured)` would look correct in every content assertion
+  // above while silently pinning every deployment to the compact rendering.
+  const wire = { id: '178414', username: 'acme', followers_count: 12 };
+
+  const compact = await tool('instagram_get_account').handler(
+    {},
+    makeCtx({ req: stubReq(() => wire).req, settings: { prettyJson: false } }),
+  );
+  const compactText = String(compact.content[0]?.text);
+  assert.equal(compactText, JSON.stringify(sc(compact)));
+  assert.equal(compactText.includes('\n'), false, 'the default rendering is single-line');
+
+  const pretty = await tool('instagram_get_account').handler(
+    {},
+    makeCtx({ req: stubReq(() => wire).req, settings: { prettyJson: true } }),
+  );
+  const prettyText = String(pretty.content[0]?.text);
+  // The killer: with prettyJson on, the text must be the two-space indented form
+  // of exactly the same structured payload.
+  assert.equal(prettyText, JSON.stringify(sc(pretty), null, 2));
+  assert.ok(prettyText.includes('\n  "id": "178414"'), 'the payload is indented, not compact');
+});
+
 // --- instagram_list_linked_accounts ----------------------------------------
 
 test('list_linked_accounts fences names/handles and queries /me/accounts on graph.facebook.com', async () => {
@@ -190,6 +206,30 @@ test('list_linked_accounts fences names/handles and queries /me/accounts on grap
   assert.equal(items[1]!.pageName, fence('Spare Page'));
   assert.equal(items[1]!.igId, undefined);
   assert.equal(items[1]!.igUsername, undefined);
+});
+
+test('list_linked_accounts renders its text block according to the prettyJson setting', async () => {
+  // Same operator knob as get_account, and the same trap: the `{ items }`
+  // envelope always produces valid JSON, so only the *shape* of the rendering
+  // tells a dropped `pretty` option apart from an honoured one.
+  const wire = { data: [{ id: 'p1', name: 'Acme Page' }] };
+  const fbProfile = { authPath: 'fb-login' as const };
+
+  const compact = await tool('instagram_list_linked_accounts').handler(
+    {},
+    makeCtx({ req: stubReq(() => wire).req, profile: fbProfile, settings: { prettyJson: false } }),
+  );
+  const compactText = String(compact.content[0]?.text);
+  assert.equal(compactText, JSON.stringify(sc(compact)));
+  assert.equal(compactText.includes('\n'), false, 'the default rendering is single-line');
+
+  const pretty = await tool('instagram_list_linked_accounts').handler(
+    {},
+    makeCtx({ req: stubReq(() => wire).req, profile: fbProfile, settings: { prettyJson: true } }),
+  );
+  const prettyText = String(pretty.content[0]?.text);
+  assert.equal(prettyText, JSON.stringify(sc(pretty), null, 2));
+  assert.ok(prettyText.includes('\n  "items": ['), 'the payload is indented, not compact');
 });
 
 // --- instagram_token_status ------------------------------------------------
@@ -295,4 +335,69 @@ test('token_status (Path A) reports expiry unknown and makes no network call (CC
   assert.equal(body.tokenConfigured, true);
   assert.equal((body.rateLimitBudget as Record<string, unknown>).available, false);
   assert.ok(typeof body.warning === 'string' && body.warning.includes('login'));
+});
+
+test('token_status reports an empty token and a blank app id as NOT configured', async () => {
+  // A profile can be half-configured: `IG_ACCESS_TOKEN=` / `IG_APP_ID=` in an env
+  // file export present-but-empty strings, which survive resolution as `''`.
+  // Reporting either as "configured" is the worst possible answer this tool can
+  // give — it is exactly what an operator runs to find out why nothing works,
+  // and a `true` here sends them hunting for the fault everywhere except where
+  // it actually is. `.length > 0`, not "is defined", is what makes the flags mean
+  // "usable credential".
+  const { req, calls } = stubReq(() => {
+    throw new Error('Path A must not call debug_token');
+  });
+
+  const blank = sc(
+    await tool('instagram_token_status').handler(
+      {},
+      makeCtx({ req, profile: { authPath: 'ig-login', accessToken: '', appId: '' } }),
+    ),
+  );
+  assert.equal(calls.length, 0);
+  assert.equal(blank.tokenConfigured, false, 'an empty token string is not a configured token');
+  assert.equal(blank.appConfigured, false, 'a blank app id is not a configured app');
+
+  // An absent app id must read the same as a blank one; a non-empty token still
+  // reads as configured, so the flags stay informative rather than always-false.
+  const absent = sc(
+    await tool('instagram_token_status').handler(
+      {},
+      makeCtx({
+        req,
+        profile: { authPath: 'ig-login', accessToken: 'token-abc', appId: undefined },
+      }),
+    ),
+  );
+  assert.equal(absent.appConfigured, false, 'an unset app id is not a configured app');
+  assert.equal(absent.tokenConfigured, true, 'a real token is still reported as configured');
+});
+
+test('token_status (Path A) stays "unknown" whatever refresh threshold is configured', async () => {
+  // Path A has no debug_token, so there is no expiry to compare a threshold
+  // against (CC-AUTH-7). Whatever `IG_REFRESH_AFTER_DAYS` says, the answer must
+  // remain the honest "unknown" with the re-login remediation — a configured
+  // threshold must never be able to dress this up as a confident `valid` or
+  // `expiring_soon`, and no expiry numbers may be invented alongside it.
+  const { req } = stubReq(() => {
+    throw new Error('Path A must not call debug_token');
+  });
+
+  for (const refreshAfterDays of [0, 7, 3650]) {
+    const body = sc(
+      await tool('instagram_token_status').handler(
+        {},
+        makeCtx({ req, settings: { refreshAfterDays } }),
+      ),
+    );
+    assert.equal(
+      body.expiryState,
+      'unknown',
+      `threshold ${refreshAfterDays} must not change state`,
+    );
+    assert.equal(body.expiresAt, undefined, 'no absolute expiry may be invented on Path A');
+    assert.equal(body.daysLeft, undefined, 'no days-left may be invented on Path A');
+    assert.ok(typeof body.warning === 'string' && body.warning.includes('login'));
+  }
 });

@@ -157,7 +157,10 @@ async function loadEnvFiles(resolveConfigHome) {
       ? [explicit]
       : [join(resolveConfigHome(), 'instagram-mcp-ai', '.env'), join(process.cwd(), '.env')];
   for (const file of candidates) {
-    if (existsSync(file)) dotenvConfig({ path: file, override: false });
+    // `quiet: true` for the same reason as `src/index.ts`: from dotenv 17 a
+    // successful load prints the loaded env-file path to stdout, which would
+    // both pollute this script's output and disclose the config-home location.
+    if (existsSync(file)) dotenvConfig({ path: file, override: false, quiet: true });
   }
 }
 

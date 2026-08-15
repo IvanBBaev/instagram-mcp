@@ -32,6 +32,21 @@ function fakeReq(responder: (opts: IgRequestOptions) => unknown): {
   return { req, calls };
 }
 
+// --- wire field sets -------------------------------------------------------
+//
+// Mirrors of `COMMENT_FIELDS` / `COMMENT_DETAIL_FIELDS` / `TAGGED_MEDIA_FIELDS`,
+// which are module-private in `api/comments.ts`. Graph returns exactly the
+// fields it was asked for and silently omits the rest, so a field dropped from
+// a set is never a compile error — it is a tool that quietly stops reporting
+// timestamps or like counts. These are pinned byte-for-byte and asserted by
+// equality, not by substring: a substring check passes on a set with holes in it.
+const EXPECTED_COMMENT_FIELDS =
+  'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
+const EXPECTED_DETAIL_FIELDS =
+  'id,text,username,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
+  'replies{id,text,username,timestamp,like_count}';
+const EXPECTED_TAGGED_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
+
 // --- listComments ----------------------------------------------------------
 
 test('listComments returns a single page, forwards fields/limit, and flattens inline replies', async () => {
@@ -63,8 +78,33 @@ test('listComments returns a single page, forwards fields/limit, and flattens in
   assert.equal(calls[0]?.path, '/M1/comments');
   assert.equal(calls[0]?.params?.limit, 25);
   assert.equal(calls[0]?.params?.after, undefined);
-  assert.ok(String(calls[0]?.params?.fields).includes('text'));
-  assert.ok(String(calls[0]?.params?.fields).includes('replies{'));
+  assert.equal(calls[0]?.params?.fields, EXPECTED_COMMENT_FIELDS);
+});
+
+test('listComments normalizes replies recursively so a reply-of-a-reply is a flat array too', async () => {
+  // Graph nests the reply edge at every level: a reply that has replies of its
+  // own arrives as `{ replies: { data: [...] } }`, never as an array. Flattening
+  // only the outermost level leaks that raw envelope into a field the domain
+  // type declares to be `Comment[]` — a lie the compiler cannot catch. The model
+  // reading the thread sees a sub-conversation of zero, and closes a support
+  // thread that still has unanswered replies underneath it.
+  const page = {
+    data: [
+      {
+        id: 'c1',
+        text: 'nice',
+        replies: { data: [{ id: 'r1', text: 'thanks', replies: { data: [{ id: 'r1a' }] } }] },
+      },
+    ],
+    paging: {},
+  };
+  const { req } = fakeReq(() => page);
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 10 });
+
+  assert.deepEqual(res.items, [
+    { id: 'c1', text: 'nice', replies: [{ id: 'r1', text: 'thanks', replies: [{ id: 'r1a' }] }] },
+  ]);
 });
 
 test('listComments fetchAll caps at maxItems and reports truncated with a resume cursor', async () => {
@@ -87,6 +127,13 @@ test('listComments fetchAll caps at maxItems and reports truncated with a resume
   assert.equal(res.truncated, true);
   assert.equal(res.after, 'A2');
   assert.equal(calls.length, 2);
+  // `maxItems` is the walk cap, not a page size. Leaking it into Graph's `limit`
+  // makes every request ask for a page sized to the whole budget — an edge that
+  // trims or rejects oversized pages then changes where cursor boundaries fall,
+  // and the resume cursor we hand back no longer lines up with what the caller
+  // already saw. When the caller states no `limit`, nothing must travel in it.
+  assert.equal(calls[0]?.params?.limit, undefined);
+  assert.equal(calls[1]?.params?.limit, undefined);
 });
 
 test('listComments fetchAll stopping exactly at the cap with no more data is NOT truncated (CC-DATA-4)', async () => {
@@ -212,9 +259,22 @@ test('getComment fetches by id with the detail field set and flattens replies + 
   assert.equal(detail.replies?.[0]?.id, 'R1');
   assert.equal(calls[0]?.method, 'GET');
   assert.equal(calls[0]?.path, '/C1');
-  assert.ok(String(calls[0]?.params?.fields).includes('hidden'));
-  assert.ok(String(calls[0]?.params?.fields).includes('parent_id'));
-  assert.ok(String(calls[0]?.params?.fields).includes('media{'));
+  assert.equal(calls[0]?.params?.fields, EXPECTED_DETAIL_FIELDS);
+});
+
+test('getComment omits replies entirely when Graph returned none (CC-DATA-2)', async () => {
+  // CC-DATA-2: Meta omits what it will not disclose, and we must not invent it
+  // back. A payload with no reply edge means "unknown", not "known to have zero
+  // replies" — materializing `replies: []` tells the model the thread was read
+  // and found empty. That is the difference between an agent asking to check
+  // again and an agent confidently resolving a comment it never actually saw.
+  const raw = { id: 'C1', text: 'hi', username: 'bob', hidden: false };
+  const { req } = fakeReq(() => raw);
+
+  const detail = await getComment(req, { commentId: 'C1' });
+
+  assert.equal('replies' in detail, false);
+  assert.deepEqual(detail, { id: 'C1', text: 'hi', username: 'bob', hidden: false });
 });
 
 test('getComment propagates an InstagramError for a deleted comment (CC-DATA-5)', async () => {
@@ -251,8 +311,7 @@ test('listTaggedMedia lists the /tags edge with the tagged-media field set and p
   );
   assert.equal(res.truncated, false);
   assert.equal(calls[0]?.path, '/999/tags');
-  assert.ok(String(calls[0]?.params?.fields).includes('caption'));
-  assert.ok(String(calls[0]?.params?.fields).includes('permalink'));
+  assert.equal(calls[0]?.params?.fields, EXPECTED_TAGGED_FIELDS);
 });
 
 // --- writes ----------------------------------------------------------------

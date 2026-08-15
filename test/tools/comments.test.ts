@@ -7,12 +7,13 @@
  * without IG_ALLOW_DESTRUCTIVE and to proceed with both flags set. `fence` is
  * imported so expected values come from the real implementation.
  *
- * Applied writes journal via mcp/write-mode; IG_WRITE_JOURNAL is pointed at a
- * temp file so the tests never touch the real audit log.
+ * Applied writes journal via mcp/write-mode; every context carries a
+ * `writeJournal` pointed at a temp file so the tests never touch the real
+ * audit log.
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -27,10 +28,11 @@ import type { ToolContext, ToolSpec } from '../../src/mcp/define.js';
 import { fence } from '../../src/mcp/result.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { commentsTools } from '../../src/tools/comments.js';
+import { testSettings } from '../helpers/settings.js';
 
 // Isolate the best-effort write journal to a temp dir for the whole file.
 const journalDir = mkdtempSync(join(tmpdir(), 'ig-comments-journal-'));
-process.env.IG_WRITE_JOURNAL = join(journalDir, 'writes.jsonl');
+const journalPath = join(journalDir, 'writes.jsonl');
 after(() => rmSync(journalDir, { recursive: true, force: true }));
 
 const noopLog: Logger = {
@@ -44,20 +46,7 @@ const noopLog: Logger = {
 };
 
 function makeSettings(overrides: Partial<Settings> = {}): Settings {
-  return {
-    maxConcurrent: 4,
-    maxItems: 200,
-    refreshAfterDays: 45,
-    timeoutMs: 30000,
-    logLevel: 'info',
-    prettyJson: false,
-    writeMode: 'preview',
-    allowDestructive: false,
-    transport: 'stdio',
-    httpHost: '127.0.0.1',
-    httpPort: 3000,
-    ...overrides,
-  };
+  return testSettings({ writeJournal: journalPath, ...overrides });
 }
 
 function makeProfile(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile {
@@ -207,6 +196,34 @@ test('list_comments caps at maxItems, marks truncated, and fences text + usernam
   assert.equal(calls[0]?.path, '/M1/comments');
 });
 
+test('list_comments passes the pager note through so a give-up is visible to the model', async () => {
+  // The pager stops early on a no-progress edge and explains why in `note`. If
+  // the tool drops that field the model sees a short, `truncated: true` list with
+  // a cursor and no reason — indistinguishable from a normal capped read, so it
+  // retries the same losing walk instead of resuming from `after`.
+  const { req } = fakeReq((opts) => {
+    const after = opts.params?.after;
+    if (after === undefined)
+      return { data: [{ id: 'c1', text: 'first' }], paging: { cursors: { after: 'A1' } } };
+    // An empty page while a cursor still points forward — the pager's
+    // "filtered or deleted" guard.
+    return { data: [], paging: { cursors: { after: 'A2' } } };
+  });
+
+  const res = await tool('instagram_list_comments').handler(
+    { mediaId: 'M1', fetchAll: true },
+    makeCtx(req, { settings: { maxItems: 50 } }),
+  );
+
+  const scv = res.structuredContent as {
+    note?: string;
+    paging: { after?: string; truncated: boolean };
+  };
+  assert.match(String(scv.note), /resume from `after`/);
+  assert.equal(scv.paging.truncated, true);
+  assert.equal(scv.paging.after, 'A2', 'and the cursor to resume from comes with it');
+});
+
 test('get_comment fences text + username and surfaces hidden/parent/media context', async () => {
   const raw = {
     id: 'C1',
@@ -257,6 +274,91 @@ test('list_tagged_media uses /{ig-id}/tags, falls back to /me/tags, and fences c
     makeCtx(req2, { profile: { accountId: undefined } }),
   );
   assert.equal(calls2[0]?.path, '/me/tags');
+});
+
+test('list_tagged_media hands back both its cursor and the pager note', async () => {
+  // Same contract as list_comments, on a separate handler with its own copy of
+  // the paging assembly: a caller that cannot see `after` cannot page at all,
+  // and one that cannot see `note` does not know the walk gave up.
+  const { req } = fakeReq((opts) => {
+    const after = opts.params?.after;
+    if (after === undefined)
+      return { data: [{ id: 't1', caption: 'one' }], paging: { cursors: { after: 'T1' } } };
+    return { data: [], paging: { cursors: { after: 'T2' } } };
+  });
+
+  const res = await tool('instagram_list_tagged_media').handler(
+    { fetchAll: true },
+    makeCtx(req, { settings: { maxItems: 50 } }),
+  );
+
+  const scv = res.structuredContent as {
+    note?: string;
+    paging: { after?: string; truncated: boolean };
+  };
+  assert.equal(scv.paging.after, 'T2');
+  assert.equal(scv.paging.truncated, true);
+  assert.match(String(scv.note), /resume from `after`/);
+});
+
+test('list_tagged_media stops at maxItems instead of walking the whole edge', async () => {
+  // IG_MAX_ITEMS is the operator's only bound on how much one call may pull, and
+  // a busy account's /tags edge runs to thousands of items: uncapped, a single
+  // fetchAll burns the shared rate-limit budget and returns a payload no context
+  // window can hold. This handler keeps its own copy of the api call, so the cap
+  // has to be honoured here too — and the caller must still see `truncated` plus
+  // the cursor, or a silently partial list reads as a complete one.
+  const { req, calls } = fakeReq((opts) => {
+    const after = opts.params?.after;
+    if (after === undefined)
+      return { data: [{ id: 't1', caption: 'first' }], paging: { cursors: { after: 'T1' } } };
+    return { data: [{ id: 't2', caption: 'second' }], paging: {} };
+  });
+
+  const res = await tool('instagram_list_tagged_media').handler(
+    { fetchAll: true },
+    makeCtx(req, { settings: { maxItems: 1 } }),
+  );
+
+  const scv = res.structuredContent as {
+    items: Array<{ id: string }>;
+    paging: { after?: string; truncated: boolean };
+  };
+  assert.equal(scv.items.length, 1, 'the cap bounds the aggregate, not just one page');
+  assert.equal(scv.items[0]?.id, 't1');
+  assert.equal(scv.paging.truncated, true);
+  assert.equal(scv.paging.after, 'T1', 'and the cursor to resume from comes with it');
+  assert.equal(calls.length, 1, 'the walk stops at the cap — the next page is never fetched');
+});
+
+test('both listings forward the caller page-size limit to the Graph call', async () => {
+  // `limit` is the per-request page size, a different knob from the server item
+  // cap: a caller sampling five comments off a thread should get one small
+  // response, not the edge's default page. Dropped on the floor, every call
+  // over-fetches — more quota spent and more third-party text dragged into the
+  // model's context — while the tool still advertises the hint in its schema.
+  const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
+  await tool('instagram_list_comments').handler({ mediaId: 'M1', limit: 5 }, makeCtx(req));
+  assert.equal(calls[0]?.params?.limit, 5, 'list_comments forwards the hint');
+
+  const { req: req2, calls: calls2 } = fakeReq(() => ({ data: [], paging: {} }));
+  await tool('instagram_list_tagged_media').handler({ limit: 7 }, makeCtx(req2));
+  assert.equal(calls2[0]?.params?.limit, 7, 'list_tagged_media forwards the hint');
+
+  const { req: req3, calls: calls3 } = fakeReq(() => ({ data: [], paging: {} }));
+  await tool('instagram_list_comments').handler({ mediaId: 'M1' }, makeCtx(req3));
+  assert.equal(calls3[0]?.params?.limit, undefined, 'and invents none when the caller omits it');
+});
+
+test('list_tagged_media logs whether the caller asked for a full walk', () => {
+  // `fetchAll` is what separates one Graph call from up to MAX_PAGES of them.
+  // An audit reader tracing a rate-limit incident needs the real value on both
+  // sides, and the field defaults to a stated `false`, never `undefined`.
+  const fn = tool('instagram_list_tagged_media').logFields;
+  assert.ok(fn);
+  assert.equal(fn({ fetchAll: true }).fetchAll, true);
+  assert.equal(fn({ limit: 25 }).fetchAll, false);
+  assert.equal(fn({ after: 'CUR' }).hasCursor, true);
 });
 
 test('the declared output schema accepts a nested reply tree, fenced at every depth', async () => {
@@ -408,6 +510,48 @@ test('set_comments_enabled (media package) previews without apply and POSTs comm
   assert.equal(calls[0]?.params?.comment_enabled, false);
 });
 
+test('set_comments_enabled tells the human which direction the toggle moves', async () => {
+  // The consent summary is the only place a human reads what the write does, and
+  // the two directions are opposites: a collapsed label would have someone
+  // approving "disabled" while the call re-opens the media to comments.
+  const { req, calls } = fakeReq(() => ({ success: true }));
+
+  const on = await tool('instagram_set_comments_enabled').handler(
+    { mediaId: 'M1', enabled: true },
+    makeCtx(req),
+  );
+  assert.match(String(on.structuredContent?.summary), /Set comments enabled on media M1/);
+  assert.equal(calls.length, 0, 'a preview stays a preview');
+
+  const off = await tool('instagram_set_comments_enabled').handler(
+    { mediaId: 'M1', enabled: false },
+    makeCtx(req),
+  );
+  assert.match(String(off.structuredContent?.summary), /Set comments disabled on media M1/);
+});
+
+test('the delete and unhide previews each name their own operation, not a neighbour', async () => {
+  // The summary is the entire consent surface: it is what the preview shows and
+  // what buildConfirmPrompt puts in front of a person. Three of these tools differ
+  // in that one line alone, and two of the differences are irreversible against
+  // reversible — a delete labelled "Hide", or an unhide labelled "Hide", gets a
+  // human to approve the opposite of what they just read.
+  const { req, calls } = fakeReq(() => ({ success: true }));
+
+  const del = await tool('instagram_delete_comment').handler({ commentId: 'C1' }, makeCtx(req));
+  assert.equal(del.structuredContent?.action, 'delete_comment');
+  assert.equal(del.structuredContent?.summary, 'Delete comment C1');
+
+  const unhide = await tool('instagram_unhide_comment').handler({ commentId: 'C1' }, makeCtx(req));
+  assert.equal(unhide.structuredContent?.action, 'unhide_comment');
+  assert.equal(unhide.structuredContent?.summary, 'Unhide comment C1');
+
+  const hide = await tool('instagram_hide_comment').handler({ commentId: 'C1' }, makeCtx(req));
+  assert.equal(hide.structuredContent?.summary, 'Hide comment C1');
+
+  assert.equal(calls.length, 0, 'a preview stays a preview');
+});
+
 // --- delete_comment: double gate -------------------------------------------
 
 test('delete_comment stays a preview with apply:true but no IG_ALLOW_DESTRUCTIVE', async () => {
@@ -435,4 +579,49 @@ test('delete_comment proceeds with apply:true AND allowDestructive', async () =>
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.method, 'DELETE');
   assert.equal(calls[0]?.path, '/C1');
+});
+
+// --- write journal: what the audit trail records ---------------------------
+
+test('an applied delete journals the delete_comment action, not hide_comment', async () => {
+  // The journal is the only durable record that an irreversible write happened.
+  // Filed under the wrong verb, `grep delete_comment` over the audit trail comes
+  // back empty while the comment is really gone: the operator answering "did we
+  // ever delete anything?" is told no, and the line sits camouflaged among the
+  // routine, reversible moderation entries.
+  const journal = join(journalDir, 'delete-action.jsonl');
+  const { req } = fakeReq(() => ({ success: true }));
+
+  const res = await tool('instagram_delete_comment').handler(
+    { commentId: 'C1', apply: true },
+    makeCtx(req, { settings: { allowDestructive: true, writeJournal: journal } }),
+  );
+  assert.equal(res.structuredContent?.deleted, 'C1', 'the write really ran');
+
+  const rec = JSON.parse(readFileSync(journal, 'utf8').trim()) as Record<string, unknown>;
+  assert.equal(rec.action, 'delete_comment');
+  assert.equal(rec.summary, 'Delete comment C1');
+  assert.equal(rec.targetId, 'C1');
+  assert.equal(rec.destructive, true);
+});
+
+test('an applied create_comment journals the new comment id as the target', async () => {
+  // `targetId` is what an operator greps for when a comment posted by this server
+  // has to be traced, audited or taken down later. Journaling the media id instead
+  // points every recovery at the post rather than at what was created — and the
+  // media id already repeats on every write to that post, so the one identifier
+  // that could find this specific comment is never written down at all.
+  const journal = join(journalDir, 'create-target.jsonl');
+  const { req } = fakeReq(() => ({ id: 'comment-1' }));
+
+  const res = await tool('instagram_create_comment').handler(
+    { mediaId: 'M1', message: 'nice', apply: true },
+    makeCtx(req, { settings: { writeJournal: journal } }),
+  );
+  assert.equal(res.structuredContent?.commentId, 'comment-1');
+
+  const rec = JSON.parse(readFileSync(journal, 'utf8').trim()) as Record<string, unknown>;
+  assert.equal(rec.action, 'create_comment');
+  assert.equal(rec.targetId, 'comment-1');
+  assert.notEqual(rec.targetId, 'M1', 'the media is the container, not the thing created');
 });

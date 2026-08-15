@@ -117,6 +117,24 @@ function normalizeComment(raw: RawComment): Comment {
   return comment;
 }
 
+/**
+ * The same flattening for the single-comment read, typed at the wider shape.
+ *
+ * Equivalent-mutant note: calling {@link normalizeComment} here instead changes
+ * NO output — `{ ...rest }` copies every key the payload actually carries, so
+ * `hidden`/`parent_id`/`media` ride along whatever the parameter type says; the
+ * reply edge is flattened by the very same recursive call; and `CommentDetail`
+ * only widens `Comment` with optional fields, so the narrower return type still
+ * assigns and the swap even compiles. No assertion over the returned value can
+ * separate the two — do not contort a test into "killing" it.
+ *
+ * The second function earns its place by keeping the types honest at the seam:
+ * `replies` is `Comment[]`, because the reply field set never asks for
+ * moderation state or media context, while the top-level object `get_comment`
+ * returns genuinely is the wider `CommentDetail`. One shared normalizer would
+ * have to either promise moderation state on replies that cannot have it, or
+ * narrow the detail read back down to a plain comment.
+ */
 function normalizeCommentDetail(raw: RawCommentDetail): CommentDetail {
   const { replies, ...rest } = raw;
   const detail: CommentDetail = { ...rest };

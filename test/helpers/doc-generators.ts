@@ -57,11 +57,12 @@ export function renderToolTable(tools: ToolSpec[]): string {
   for (const tool of tools) {
     if (!packageOrder.includes(tool.package)) packageOrder.push(tool.package);
   }
-  const rank = new Map(packageOrder.map((pkg, index) => [pkg, index] as const));
-
+  // `indexOf` rather than a Map lookup: `packageOrder` is built from these very
+  // tools, so every package is present, and `indexOf` says so in the type. A
+  // `Map.get(...) ?? 0` would carry a fallback that can never run.
   const sorted = [...tools].sort((a, b) => {
-    const rankA = rank.get(a.package) ?? 0;
-    const rankB = rank.get(b.package) ?? 0;
+    const rankA = packageOrder.indexOf(a.package);
+    const rankB = packageOrder.indexOf(b.package);
     if (rankA !== rankB) return rankA - rankB;
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
@@ -92,8 +93,13 @@ export function renderEnvCatalog(envExampleText: string): string {
   for (const rawLine of envExampleText.split('\n')) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(rawLine.trim());
     if (match === null) continue;
+    /* c8 ignore start -- both groups are unconditional in the pattern, so a
+       non-null match always carries them; the `?? ''` fallbacks exist only
+       because `noUncheckedIndexedAccess` types indexed access into the match
+       array as possibly-undefined. */
     const key = match[1] ?? '';
     const rest = match[2] ?? '';
+    /* c8 ignore stop */
     const hashIndex = rest.indexOf('#');
     const value = (hashIndex === -1 ? rest : rest.slice(0, hashIndex)).trim();
     const description = hashIndex === -1 ? '' : rest.slice(hashIndex + 1).trim();

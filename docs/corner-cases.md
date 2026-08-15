@@ -134,6 +134,53 @@ that owns them, following the QA review's protocol: stories-first smoke tests
 can be toggled), findings recorded back into this file replacing the `[verify]`
 markers with `[verified <date>]` + observed behavior.
 
+**The protocol is executable.** It is not a checklist to work through by hand:
+[`scripts/live-probe.mjs`](../scripts/live-probe.mjs) implements it as **26 probes
+across 7 lanes**, each declaring in an `answers:` field which corner case it
+discharges. Run it, then transcribe its findings into this file — that is the whole
+Lane E workflow.
+
+```bash
+npm run build                              # the probe imports the built core seam
+node scripts/live-probe.mjs                # read-only: lanes `read` + `discovery`
+node scripts/live-probe.mjs --allow-writes --image-url https://…/probe.jpg
+node scripts/live-probe.mjs --only comment-length-ladder    # one probe, or one lane
+```
+
+**Three separate consent flags, escalating, none implied by default.** The ordering
+is the safety design, not ergonomics:
+
+| Flag | Unlocks | Why it is its own flag |
+|---|---|---|
+| *(none)* | `read`, `discovery` | Nothing is created. Safe on any account. |
+| `--allow-writes` | `container`, `story`, `comment` | Stories expire in 24 h and comments are deletable — recoverable. |
+| `--allow-feed-post` | `feed` | A published feed post **cannot be deleted via the API**. Permanent, forever, on that account. |
+| `--allow-token-refresh` | `auth` | Rotates the live credential and **rewrites the XDG env file**. If the old token dies, concurrent instances break. |
+
+Both `--allow-feed-post` and `--allow-token-refresh` imply `--allow-writes`; neither
+is implied by it. A gated lane is reported as skipped with its reason rather than
+silently omitted, so a run's report always states what it did *not* do.
+
+Each of the five still-open cases below is discharged by a named probe:
+
+| Case | Probe | Lane |
+|---|---|---|
+| CC-AUTH-14 | `refresh-old-token-fate` | `auth` (3rd flag) |
+| CC-PUB-4 | `double-publish` | `story` |
+| CC-PUB-11 | `caption-at-cap`, `caption-over-cap` | `container` |
+| CC-COM-6 | `comment-length-ladder` | `comment` |
+| CC-INS-4 | `insights-timezone` | `read` (no flag) |
+
+The two docs-closed cases (CC-PUB-6, CC-COM-5) also have confirmation-only probes
+(`mixed-carousel-container`, `hide-own-comment`) — they are not expected to change
+the verdict, only to catch the documentation being wrong.
+
+Note what the lane ordering buys: everything answerable read-only runs *first*, so a
+run that dies halfway has already banked CC-INS-4 and the whole PCA/hashtag lane
+without having written anything. CC-COM-6's ladder brackets an undocumented cap by
+bisection and stops on a spam block (CC-COM-4) rather than reporting the block as a
+length answer.
+
 ### Open `[verify]` register — triaged 2026-07-30 against official Meta docs
 
 **Closed from public documentation** (no live call needed; see the rows above for

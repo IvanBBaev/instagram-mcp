@@ -183,4 +183,15 @@ export interface Settings {
   transport: 'stdio' | 'http';
   httpHost: string;
   httpPort: number;
+  /**
+   * Absolute path of the applied-write journal (`IG_WRITE_JOURNAL`, default
+   * `<XDG_STATE_HOME|~/.local/state>/instagram-mcp-ai/writes.jsonl`).
+   *
+   * Unlike the knobs above this one is **derived**, not a literal: its default
+   * is built from the state home at load time. It is a settings field rather
+   * than an ad-hoc lookup so the write gate reads a resolved value off
+   * `ToolContext` like every other knob, instead of reaching into `process.env`
+   * from inside `mcp/`.
+   */
+  writeJournal: string;
 }

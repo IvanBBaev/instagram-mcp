@@ -325,7 +325,11 @@ export function createSanitizer(opts: SanitizerOptions = {}): Sanitizer {
   };
 
   const mapUrl = (key: string, raw: string): string => {
-    const cacheKey = `${key} ${raw}`;
+    // NUL separator: it cannot occur in a key or a URL, so no two inputs can
+    // collide by straddling the boundary. Written as an escape, never as a
+    // literal NUL byte — a literal one makes the whole file `data` to grep/rg,
+    // which then silently reports no matches anywhere in it.
+    const cacheKey = `${key}\u0000${raw}`;
     const existing = urls.get(cacheKey);
     if (existing !== undefined) return existing;
     const synthetic = `https://${SYNTHETIC_URL_HOST}/${key}/${urls.size + 1}`;
@@ -473,7 +477,13 @@ export function createSanitizer(opts: SanitizerOptions = {}): Sanitizer {
       const cleaned = walk(value, 'recurse', '$', new WeakSet<object>());
       // Backstop: the production redactor masks anything token-shaped that an
       // allowlisted field let through (and every registered exact secret).
+      /* c8 ignore start -- the `null` arm is unreachable from here: the root is
+         always walked with `recurse`, and that rule returns DROP only for a value
+         already on the `seen` set, which a freshly built WeakSet cannot contain.
+         It stays because DROP is a symbol — handing it to `redact` would put a
+         raw sentinel where the caller expects JSON. */
       return redact(cleaned === DROP ? null : cleaned);
+      /* c8 ignore stop */
     },
     get droppedKeys(): readonly string[] {
       return [...dropped].sort();

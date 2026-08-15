@@ -77,7 +77,20 @@ test('getHashtagMedia top edge reads /top_media with user_id on graph.facebook.c
   assert.equal(calls[0]?.path, '/H1/top_media');
   assert.equal(calls[0]?.params?.user_id, '999');
   assert.equal(calls[0]?.params?.limit, 25);
-  assert.ok(String(calls[0]?.params?.fields).includes('caption'));
+  // The whole field set is pinned, not just a sample of it. `id` is the field
+  // every follow-up depends on (fetch the media, read its comments, build a
+  // permalink); dropping it yields a page of captions nothing can act on, and
+  // nothing else in the suite would notice.
+  assert.deepEqual(String(calls[0]?.params?.fields).split(','), [
+    'id',
+    'caption',
+    'media_type',
+    'media_url',
+    'permalink',
+    'timestamp',
+    'like_count',
+    'comments_count',
+  ]);
 });
 
 test('getHashtagMedia recent edge reads /recent_media', async () => {
@@ -155,6 +168,63 @@ test('getHashtagMedia within the cap is not truncated', async () => {
   assert.equal(res.after, undefined);
 });
 
+test('getHashtagMedia treats a page exactly at the cap as complete, not truncated', async () => {
+  // The boundary case decides whether paging can continue at all. A page whose
+  // length EQUALS the cap lost nothing, so it is complete and its cursor is
+  // safe to hand back. Calling it truncated would also withhold that cursor —
+  // and a caller that asked for exactly `maxItems` per page (the normal way to
+  // page) would then stop after page one, silently losing every later page.
+  const { req } = fakeReq(() => ({
+    data: [{ id: '1' }, { id: '2' }],
+    paging: { cursors: { after: 'NEXT' } },
+  }));
+
+  const res = await getHashtagMedia(req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'top',
+    maxItems: 2,
+  });
+
+  assert.equal(res.items.length, 2);
+  assert.equal(res.truncated, false);
+  assert.equal(res.after, 'NEXT');
+});
+
+test('getHashtagMedia floors a fractional maxItems and clamps a negative one to zero', async () => {
+  // `maxItems` is the resolved IG_MAX_ITEMS and reaches here as a plain number.
+  // Rounding UP would return one item more than the operator's cap allows.
+  // Failing to clamp a negative is worse than a bad count: `slice(0, -1)` drops
+  // the LAST item and keeps the rest, so the caller gets a quietly incomplete
+  // page rather than an obvious empty one.
+  const page = () => ({
+    data: [{ id: '1' }, { id: '2' }, { id: '3' }],
+    paging: { cursors: { after: 'NEXT' } },
+  });
+
+  const fractional = await getHashtagMedia(fakeReq(page).req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'top',
+    maxItems: 2.9,
+  });
+  assert.deepEqual(
+    fractional.items.map((i) => i.id),
+    ['1', '2'],
+  );
+  assert.equal(fractional.truncated, true);
+
+  const negative = await getHashtagMedia(fakeReq(page).req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'top',
+    maxItems: -1,
+  });
+  assert.deepEqual(negative.items, []);
+  assert.equal(negative.truncated, true);
+  assert.equal(negative.after, undefined);
+});
+
 test('getHashtagMedia forwards the after cursor so a returned page can be continued', async () => {
   const { req, calls } = fakeReq(() => ({ data: [{ id: 'm3' }], paging: { cursors: {} } }));
 
@@ -167,6 +237,23 @@ test('getHashtagMedia forwards the after cursor so a returned page can be contin
   });
 
   assert.equal(calls[0]?.params?.after, 'CURSOR_FROM_PAGE_1');
+});
+
+test('getHashtagMedia treats a body with no data key as an empty page (CC-DATA-2)', async () => {
+  // Graph omits `data` entirely for an edge it has nothing to return — most
+  // often a fresh hashtag whose 24-hour `recent_media` window is empty. Reading
+  // `.length` off the missing array would throw a TypeError from inside the api
+  // layer, turning "no posts yet" into an unknown-error tool failure.
+  const { req } = fakeReq(() => ({}));
+
+  const res = await getHashtagMedia(req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'recent',
+    maxItems: 25,
+  });
+
+  assert.deepEqual(res, { items: [], truncated: false });
 });
 
 test('getHashtagMedia omits after when no cursor is supplied', async () => {
@@ -187,7 +274,9 @@ test('discoverBusiness reads /{ig-id} on graph.facebook.com with the business_di
       username: 'target',
       name: 'Target Co',
       biography: 'we make things',
+      website: 'https://target.example',
       followers_count: 1000,
+      follows_count: 12,
       media_count: 42,
       media: { data: [{ id: 'p1', caption: 'a post', media_type: 'IMAGE' }] },
     },
@@ -195,27 +284,79 @@ test('discoverBusiness reads /{ig-id} on graph.facebook.com with the business_di
 
   const biz = await discoverBusiness(req, { igId: '999', username: 'target', mediaLimit: 10 });
 
-  assert.equal(biz.username, 'target');
-  assert.equal(biz.followers_count, 1000);
-  assert.equal(biz.media_count, 42);
-  assert.equal(biz.media?.length, 1);
-  assert.equal(biz.media?.[0]?.caption, 'a post');
+  // The WHOLE mapped object, not a sample of it. The field expression asserted
+  // below asks Graph for eight profile fields; a sampled check proves the ask
+  // but not the mapping, so a field could be requested (and paid for in quota)
+  // and then silently dropped on the way out — which is exactly what happened
+  // to `follows_count` and `website` before this became an equality check.
+  assert.deepStrictEqual(biz, {
+    id: '555',
+    username: 'target',
+    name: 'Target Co',
+    biography: 'we make things',
+    website: 'https://target.example',
+    followers_count: 1000,
+    follows_count: 12,
+    media_count: 42,
+    media: [{ id: 'p1', caption: 'a post', media_type: 'IMAGE' }],
+  });
 
   assert.equal(calls[0]?.host, 'graph.facebook.com');
   assert.equal(calls[0]?.path, '/999');
-  const fields = String(calls[0]?.params?.fields);
-  assert.ok(fields.includes('business_discovery.username(target)'));
-  assert.ok(fields.includes('followers_count'));
-  assert.ok(fields.includes('media.limit(10){'));
+  // The entire field expression is pinned character-for-character. It is a
+  // single interpolated string sent to Graph, and every part of it is load
+  // bearing: the nested `media.limit(<cap>)` bounds the quota this one call
+  // spends, and `biography`/`website` are the fields the discovery tool is
+  // actually for. A sampled `includes()` check would let any of them silently
+  // drop out.
+  assert.equal(
+    calls[0]?.params?.fields,
+    'business_discovery.username(target){' +
+      'id,username,name,biography,website,followers_count,follows_count,media_count,' +
+      'media.limit(10){id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count}}',
+  );
+});
+
+test('discoverBusiness floors a fractional mediaLimit and clamps a negative one to zero', async () => {
+  // `mediaLimit` reaches here from a tool argument, so it can be any number the
+  // schema admits. It is interpolated into `media.limit(<cap>)`, and Graph reads
+  // that literally: `limit(-5)` is a malformed request, `limit(10.5)` likewise.
+  // Rounding UP would also spend more quota than the resolved IG_MAX_ITEMS
+  // allows — the cap has to floor, not ceil.
+  const { req: fractionalReq, calls: fractionalCalls } = fakeReq(() => ({ id: '999' }));
+  await discoverBusiness(fractionalReq, { igId: '999', username: 'target', mediaLimit: 9.7 });
+  assert.ok(String(fractionalCalls[0]?.params?.fields).includes('media.limit(9){'));
+
+  const { req: negativeReq, calls: negativeCalls } = fakeReq(() => ({ id: '999' }));
+  await discoverBusiness(negativeReq, { igId: '999', username: 'target', mediaLimit: -5 });
+  assert.ok(String(negativeCalls[0]?.params?.fields).includes('media.limit(0){'));
 });
 
 test('discoverBusiness tolerates a missing business_discovery block (CC-DATA-2)', async () => {
+  // The envelope still carries `id: '999'` — the OPERATOR's own node id, which
+  // Graph always echoes. That id must not be laundered into the discovered
+  // profile: a `bd.id ?? wire.id` fallback would report the operator's own
+  // account as the handle that was looked up, and a caller chaining on
+  // `biz.id` would then read insights for itself and label them `ghost`.
   const { req } = fakeReq(() => ({ id: '999' }));
 
   const biz = await discoverBusiness(req, { igId: '999', username: 'ghost', mediaLimit: 5 });
 
-  assert.equal(biz.username, undefined);
-  assert.equal(biz.media, undefined);
+  // Equality, not field sampling: `media` must be ABSENT, not present-and-
+  // undefined. The object goes out as MCP `structuredContent`, where an own key
+  // is a claim that the edge was fetched and came back empty — a different fact
+  // from "this account discloses no media".
+  assert.deepStrictEqual(biz, {
+    id: undefined,
+    username: undefined,
+    name: undefined,
+    biography: undefined,
+    website: undefined,
+    followers_count: undefined,
+    follows_count: undefined,
+    media_count: undefined,
+  });
+  assert.equal(Object.hasOwn(biz, 'media'), false);
 });
 
 test('discoverBusiness refuses a username that would rewrite the Graph field expression', async () => {

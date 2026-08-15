@@ -126,13 +126,13 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   additional under `IG_PROFILE_<NAME>_*`; a per-request `account` argument
   (auto-injected into every tool schema) selects the profile via `AsyncLocalStorage`.
 - Every runtime knob in §12 that is not a credential is read in `core/settings.ts`,
-  each a small documented env-reading function: the numeric/enum/boolean ones
-  (timeouts, retries, caps, truncation budgets, `IG_WRITE_MODE`, `IG_TRANSPORT`, …)
-  resolve into the `Settings` contract via `loadSettings`, and the write-journal
-  path (`IG_WRITE_JOURNAL`) resolves via `resolveWriteJournal` — a function rather
-  than a `Settings` field because `Settings` is frozen at Gate G1 and the path has
-  a single consumer (`mcp/write-mode.ts`). Consumers never read `process.env`
-  themselves; blank means "use the default" uniformly.
+  each a small documented env-reading function, and **all** of them — the
+  numeric/enum/boolean ones (timeouts, retries, caps, truncation budgets,
+  `IG_WRITE_MODE`, `IG_TRANSPORT`, …) and the write-journal path
+  (`IG_WRITE_JOURNAL`) alike — resolve into the `Settings` contract via
+  `loadSettings`. `writeJournal` is the one derived entry: its default is built
+  from the state home at load time rather than being a literal. Consumers never
+  read `process.env` themselves; blank means "use the default" uniformly.
 
 ## 7. Results, pagination, truncation
 
@@ -207,12 +207,12 @@ the MCPB `user_config` are generated from this list and sync-tested against it.
 | `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (`delete_comment`) |
 | `IG_WRITE_JOURNAL` | `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl` | Append-only JSONL audit log of applied writes |
 | `IG_TRANSPORT` | `stdio` | `stdio` \| `http` |
-| `IG_HTTP_HOST` / `IG_PORT` | `127.0.0.1` / `3000` | HTTP transport binding |
+| `IG_HTTP_HOST` / `IG_PORT` | `127.0.0.1` / `3000` | HTTP transport binding (`IG_PORT` range 1–65535) |
 | `IG_HTTP_TOKEN` | — | HTTP bearer token (**secret**; constant-time compare) |
-| `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore |
-| `IG_MAX_ITEMS` | `200` | `fetchAll` hard item cap |
-| `IG_REFRESH_AFTER_DAYS` | `45` | Path-A auto-refresh threshold |
-| `IG_TIMEOUT_MS` | `30000` | Per-request timeout for Graph calls |
+| `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore (range 1–64) |
+| `IG_MAX_ITEMS` | `200` | `fetchAll` hard item cap (range 1–100000) |
+| `IG_REFRESH_AFTER_DAYS` | `45` | Path-A auto-refresh threshold (range 1–60) |
+| `IG_TIMEOUT_MS` | `30000` | Per-request timeout for Graph calls (range 1–600000) |
 | `IG_LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` (stderr JSON logger) |
 | `IG_PRETTY_JSON` | `false` | Pretty-print JSON results |
 

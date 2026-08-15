@@ -165,6 +165,10 @@ export async function fetchPagedEdge<TRaw, T>(
   params: PageParams,
   normalize: (raw: TRaw) => T,
 ): Promise<PagedResult<T>> {
+  // `Math.floor` is load-bearing: a fractional cap lets one extra item through
+  // AND hides the overflow. The `Math.max(0, …)` clamp is defensive only — every
+  // cap <= 0 behaves identically against a length — and mirrors the same
+  // expression in `api/discovery.ts`, where a negative cap WOULD reach Graph.
   const cap = Math.max(0, Math.floor(params.maxItems));
   const items: T[] = [];
   let cursor = params.after;

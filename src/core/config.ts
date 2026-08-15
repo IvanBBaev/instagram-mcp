@@ -49,7 +49,13 @@ type Suffix = (typeof SUFFIXES)[number];
  */
 const SUFFIX_ALIASES: Readonly<Record<string, Suffix>> = { AUTH_MODE: 'AUTH_PATH' };
 
-/** Every accepted suffix spelling, longest first so `_AUTH_PATH` never matches as `_PATH`. */
+/**
+ * Every accepted suffix spelling, longest first: if one suffix is ever an
+ * underscore-boundary suffix of another (say `_ID` alongside `_ACCOUNT_ID`), the
+ * shorter one would match first and slice the profile name short. No current
+ * pair overlaps that way, so the order is not observable today — it is the
+ * invariant that keeps adding a suffix from being a silent mis-parse.
+ */
 const READABLE_SUFFIXES: readonly string[] = [...SUFFIXES, ...Object.keys(SUFFIX_ALIASES)].sort(
   (a, b) => b.length - a.length,
 );
@@ -81,9 +87,13 @@ function envVarFor(name: string, suffix: string): string {
 function readDefaultRaw(env: Env): RawProfile {
   return {
     ACCESS_TOKEN: env.IG_ACCESS_TOKEN,
-    // Canonical `IG_AUTH_PATH`, with `IG_AUTH_MODE` (the env catalog's name)
-    // accepted as an alias — see {@link SUFFIX_ALIASES}, which gives named
-    // profiles the same pair.
+    // `IG_AUTH_MODE` is the operator-facing name — architecture §12,
+    // `.env.example` and every guide document that one; `IG_AUTH_PATH` matches
+    // this module's field and is accepted as an alias. See
+    // {@link SUFFIX_ALIASES}, which gives named profiles the same pair.
+    // `IG_AUTH_PATH` wins when both are set, mirroring the named-profile rule
+    // ("the canonical suffix wins") — note that makes the alias beat the
+    // documented spelling, which only matters if an operator sets both.
     AUTH_PATH: clean(env.IG_AUTH_PATH) ?? clean(env.IG_AUTH_MODE),
     ACCOUNT_ID: env.IG_ACCOUNT_ID,
     APP_ID: env.IG_APP_ID,

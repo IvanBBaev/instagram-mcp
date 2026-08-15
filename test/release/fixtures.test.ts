@@ -20,6 +20,7 @@ import {
   SYNTHETIC_OPAQUE_PREFIX,
   SYNTHETIC_URL_HOST,
   SYNTHETIC_USERNAME_PREFIX,
+  assertFixtureSafe,
   createSanitizer,
   findSecretLeaks,
   sanitizeGraphResponse,
@@ -299,6 +300,229 @@ test('findSecretLeaks pinpoints a surviving secret by path', () => {
   const leaks = findSecretLeaks({ data: [{ note: `see ${FAKE_FB_TOKEN}` }] });
   assert.deepEqual(leaks, ['$.data[0].note']);
   assert.deepEqual(findSecretLeaks({ data: [{ note: 'nothing to see' }] }), []);
+});
+
+test('assertFixtureSafe refuses a leaking fixture, naming the fixture and the path', () => {
+  // The last gate a capture script passes before touching disk. A token that
+  // reaches git history cannot be un-leaked, so the message has to say which
+  // fixture was refused and where the leak is — an operator who only learns
+  // "unsafe" will re-run the capture and get the same silent failure.
+  assert.throws(
+    () => assertFixtureSafe({ data: [{ id: '178', note: `see ${FAKE_FB_TOKEN}` }] }, 'media-list'),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /Refusing to write fixture "media-list"/);
+      assert.match(err.message, /\$\.data\[0\]\.note/);
+      return true;
+    },
+  );
+  // The sanitizer's own output is what this gate is expected to wave through.
+  assertFixtureSafe(sanitizeAdversarial().out, 'sanitized-adversarial');
+});
+
+// --- Rule engine: the arms a well-behaved capture never reaches --------------
+//
+// The tests above drive the sanitizer the way a capture run does. The ones below
+// aim at the arms that only fire when Graph returns a shape nobody planned for —
+// a scalar that grew into an object, a relative `next`, a cycle — because those
+// are precisely the shapes where "it dropped the field" and "it copied the field
+// verbatim" look identical from the outside.
+
+test('an explicit `drop` override deletes a field the shared policy keeps', () => {
+  // `drop` is how a capture site denies a field the shared policy allows: the
+  // same key can be harmless on one endpoint and identifying on another. Without
+  // the rule the field is copied verbatim by `keep`, which is the whole risk.
+  const raw = { data: [{ id: '17841400000000001', timestamp: '2026-01-02T03:04:05+0000' }] };
+  const out = sanitizeGraphResponse(raw, { overrides: { timestamp: 'drop' } }) as {
+    data: Array<Record<string, unknown>>;
+  };
+  assert.equal(out.data[0]?.timestamp, undefined, 'a dropped field must not reach the fixture');
+  assert.match(out.data[0]?.id as string, SYNTHETIC_ID_RE, 'the rest of the record survives');
+});
+
+test('`keepDeep` copies a subtree verbatim but still meets the redactor backstop', () => {
+  // The demographics capture opts into this for `value`: the payload is an
+  // aggregate map whose KEYS are dimension values (`"US"`, `"13-17"`), not field
+  // names, so the by-name allowlist has nothing to match and the default-deny
+  // walk would empty it. Verbatim is only defensible because the backstop runs
+  // afterwards over everything, escape hatch included.
+  const raw = { data: [{ value: { US: 1201, '13-17': 4, leaked: FAKE_FB_TOKEN } }] };
+  const out = sanitizeGraphResponse(raw, { overrides: { value: 'keepDeep' } }) as {
+    data: Array<{ value: Record<string, unknown> }>;
+  };
+  assert.equal(out.data[0]?.value.US, 1201);
+  assert.equal(out.data[0]?.value['13-17'], 4, 'a key the allowlist cannot name is still kept');
+  assert.equal(out.data[0]?.value.leaked, '[REDACTED]', 'the backstop still runs over keepDeep');
+});
+
+test('a scalar rule applied to an array maps every element, not the array', () => {
+  // `target_ids` arrives as a list. Handing the array itself to the container
+  // walk would find no keys to match and copy the real IDs straight through.
+  const out = sanitizeGraphResponse({
+    data: [{ target_ids: ['17841400000000007', '17841400000000008', '17841400000000007'] }],
+  }) as { data: Array<{ target_ids: string[] }> };
+
+  const ids = out.data[0]?.target_ids ?? [];
+  assert.equal(ids.length, 3);
+  for (const id of ids) assert.match(id, SYNTHETIC_ID_RE);
+  assert.notEqual(ids[0], ids[1], 'distinct real IDs stay distinct');
+  assert.equal(ids[0], ids[2], 'a repeated real ID keeps its mapping inside the array too');
+});
+
+test('numeric identifiers and cursors are mapped, not waved through as numbers', () => {
+  // Graph documents `user_id` as a number and returns offset-style cursors as
+  // integers on some edges. A number is no less of a real identifier than its
+  // string form — treating "not a string" as "not sensitive" copies it verbatim.
+  const out = sanitizeGraphResponse({
+    data: [{ user_id: 178414000000001 }],
+    paging: { cursors: { after: 42 } },
+  }) as { data: Array<{ user_id: string }>; paging: { cursors: { after: string } } };
+
+  assert.match(out.data[0]?.user_id as string, SYNTHETIC_ID_RE);
+  assert.equal(out.paging.cursors.after, `${SYNTHETIC_OPAQUE_PREFIX}1`);
+});
+
+test('a scalar rule handed a container re-enters the default-deny walk', () => {
+  // Meta has turned scalars into envelopes before (`error` grew from a string
+  // into an object). A field the policy classifies as scalar must therefore not
+  // copy an unexpected container: it falls back to the allowlist walk, where
+  // known children follow their own rule and unknown ones are dropped.
+  const out = sanitizeGraphResponse({
+    data: [
+      {
+        id: { id: '17841400000000001', surprise: FAKE_IG_TOKEN },
+        username: { username: 'the_real_operator' },
+        caption: { text: 'hi' },
+        media_url: { url: 'https://scontent.cdninstagram.com/v/real.jpg' },
+        after: { id: '17841400000000002' },
+      },
+    ],
+  }) as { data: Array<Record<string, Record<string, string>>> };
+
+  const record = out.data[0] ?? {};
+  assert.match(record.id?.id ?? '', SYNTHETIC_ID_RE, 'a nested id still goes through the map');
+  assert.equal(record.id?.surprise, undefined, 'an unknown child of a container is dropped');
+  assert.ok(record.username?.username?.startsWith(SYNTHETIC_USERNAME_PREFIX));
+  assert.match(record.caption?.text ?? '', /^\[synthetic text: 2 code points removed\]$/);
+  assert.ok(record.media_url?.url?.startsWith(`https://${SYNTHETIC_URL_HOST}/`));
+  assert.match(record.after?.id ?? '', SYNTHETIC_ID_RE);
+});
+
+test('`keep` on a container walks it rather than smuggling its children through', () => {
+  // `keep` means "this scalar is Meta vocabulary". Applied to an object it would
+  // be a hole straight through the allowlist: every child, named or not, copied.
+  const out = sanitizeGraphResponse({
+    data: [{ count: { total_count: 3, leaked: FAKE_FB_TOKEN } }],
+  }) as { data: Array<{ count: Record<string, unknown> }> };
+
+  assert.equal(out.data[0]?.count.total_count, 3, 'a known child keeps its own rule');
+  assert.equal(out.data[0]?.count.leaked, undefined, 'an unknown child is still dropped');
+});
+
+test('a paging URL that is not a string is dropped, never coerced', () => {
+  // `next` is the one field whose non-string fallback is DROP rather than the
+  // walk: it is where the token rides, so an unrecognised shape there is refused
+  // outright instead of being picked apart for whatever looks safe.
+  const out = sanitizeGraphResponse({
+    paging: {
+      next: { href: `https://graph.facebook.com/v25.0/me/media?access_token=${FAKE_FB_TOKEN}` },
+    },
+  }) as { paging: Record<string, unknown> };
+  assert.equal(out.paging.next, undefined);
+});
+
+test('an unparseable paging URL is dropped rather than copied', () => {
+  // A relative `next` does not parse without a base, and `new URL` throws. The
+  // catch is what stops the raw string — query string and all — from being
+  // copied into the fixture as "not a URL, must be harmless text".
+  const out = sanitizeGraphResponse({
+    paging: { next: `/v25.0/17841400000000001/media?access_token=${FAKE_FB_TOKEN}` },
+  }) as { paging: Record<string, unknown> };
+  assert.equal(out.paging.next, undefined);
+});
+
+test('a Graph URL whose query is entirely off-allowlist keeps only its path', () => {
+  // Rebuilding from parts means the result can legitimately have no query left.
+  // It must then be the bare URL: a dangling `?` is not what Graph returns and
+  // makes the fixture's URL differ from the shape the client parses.
+  const out = sanitizeGraphResponse({
+    paging: {
+      next: `https://graph.instagram.com/v25.0/me/media?access_token=${FAKE_FB_TOKEN}&fields=id,caption`,
+    },
+  }) as { paging: { next: string } };
+  assert.equal(out.paging.next, 'https://graph.instagram.com/v25.0/me/media');
+});
+
+test('a URL under a non-alphabetic key still names a path segment', () => {
+  // Insights breakdowns are keyed by dimension value (`"13-17"`), and a capture
+  // may widen one of those buckets. The key becomes the synthetic URL's path
+  // segment, so stripping it to nothing would emit `https://example.invalid//1`
+  // — an empty segment that says nothing about which field was replaced.
+  const out = sanitizeGraphResponse(
+    { results: { '13-17': 'https://scontent.cdninstagram.com/v/real.jpg' } },
+    { overrides: { '13-17': 'url' } },
+  ) as { results: Record<string, string> };
+  assert.equal(out.results['13-17'], `https://${SYNTHETIC_URL_HOST}/url/1`);
+});
+
+test('the same URL under the same field maps to one synthetic URL', () => {
+  // Two records can share a thumbnail. Minting a second synthetic URL for it
+  // would make the fixture claim two distinct assets where the capture saw one,
+  // and a de-duplication test replaying that fixture would pass for free.
+  const sanitizer = createSanitizer();
+  const out = sanitizer.sanitize({
+    data: [
+      { thumbnail_url: 'https://scontent.cdninstagram.com/v/thumb.jpg' },
+      { thumbnail_url: 'https://scontent.cdninstagram.com/v/thumb.jpg' },
+      { thumbnail_url: 'https://scontent.cdninstagram.com/v/other.jpg' },
+    ],
+  }) as { data: Array<{ thumbnail_url: string }> };
+
+  assert.equal(out.data[0]?.thumbnail_url, out.data[1]?.thumbnail_url);
+  assert.notEqual(out.data[0]?.thumbnail_url, out.data[2]?.thumbnail_url);
+});
+
+test('a string where a container was expected is treated as free text', () => {
+  // `error` is an envelope in the policy, but Graph also returns a bare message
+  // string under that name. Falling through to the scalar `return value` would
+  // copy it — and an error message quotes back the caller's own input.
+  const out = sanitizeGraphResponse({
+    error: 'Invalid OAuth access token for user the_real_operator',
+  }) as { error: string };
+  assert.match(out.error, /^\[synthetic text: \d+ code points removed\]$/);
+});
+
+test('a circular reference is cut instead of overflowing the stack', () => {
+  // A JSON-parsed wire body cannot be cyclic, but the sanitizer is also pointed
+  // at objects assembled in memory by the probe helper. A cycle there must cost
+  // one dropped key, not the whole capture run.
+  const node: Record<string, unknown> = { id: '17841400000000001' };
+  node.media = node;
+  const out = sanitizeGraphResponse({ data: [node] }) as {
+    data: Array<Record<string, unknown>>;
+  };
+  assert.match(out.data[0]?.id as string, SYNTHETIC_ID_RE);
+  assert.equal(out.data[0]?.media, undefined, 'the cycle is cut, not followed');
+});
+
+test('per-call overrides apply to that call only, and both calls share the ID map', () => {
+  // One sanitizer per capture run is what makes fixtures cross-referenceable, so
+  // widening `name` for the insights response must not widen it for the account
+  // response captured seconds later by the same instance — `name` is a metric
+  // name on one and the operator's own display name on the other.
+  const sanitizer = createSanitizer();
+  const insights = sanitizer.sanitize(
+    { data: [{ id: '17841400000000001', name: 'reach', period: 'day' }] },
+    { name: 'keep' },
+  ) as { data: Array<{ id: string; name: string }> };
+  const account = sanitizer.sanitize({ id: '17841400000000001', name: 'Ivan Real' }) as {
+    id: string;
+    name: string;
+  };
+
+  assert.equal(insights.data[0]?.name, 'reach');
+  assert.match(account.name, /^\[synthetic text:/, 'the override did not outlive its call');
+  assert.equal(account.id, insights.data[0]?.id, 'the ID mapping is shared across both calls');
 });
 
 // --- The committed fixtures directory ---------------------------------------

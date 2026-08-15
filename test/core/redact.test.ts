@@ -106,6 +106,19 @@ test("registering '' or a short string is a no-op (does not mask everything)", (
   assert.equal(out.y, 'abcde');
 });
 
+test('registering a non-string is a no-op rather than a poisoned registry entry', () => {
+  // The signature says `string`, but the callers are config load and the token
+  // mint path — both reading values that arrive from an env file or a Graph JSON
+  // body, where a compiled-from-JS embedder can hand over anything. A non-string
+  // in the registry would be compared with `String(...)` on every redaction and
+  // could mask an unrelated substring (`null`, `42`) across every log line.
+  for (const bad of [undefined, null, 42, {}, ['a-long-enough-looking-secret']]) {
+    registerSecret(bad as string);
+  }
+  const redact = createRedactor();
+  assert.equal(redact('null 42 [object Object] undefined'), 'null 42 [object Object] undefined');
+});
+
 test('passes non-string primitives through and honors extraSecrets', () => {
   const redact = createRedactor({ extraSecrets: ['scoped-extra-secret-value-xyz'] });
   assert.equal(redact(42), 42);
@@ -155,4 +168,93 @@ test('property: a registered secret never survives redaction, and input never mu
     }),
     { numRuns: 200 },
   );
+});
+
+// --- Masking mechanics ------------------------------------------------------
+//
+// The tests above prove that secrets get masked. These prove *how*: the exact
+// boundary of what is registrable, and the three ways a partial mask could leave
+// a readable secret behind while every assertion above still passes. They are
+// last in the file on purpose — each registers a literal into the process-wide
+// registry, and running after the property test keeps that registry out of the
+// earlier "a short registration is a no-op" assertions.
+
+test('a secret of exactly the minimum length is registered, not rejected', () => {
+  // The floor is a `<` comparison, so the shortest accepted secret is the one
+  // most likely to be lost to an off-by-one. Nothing in production is this
+  // short today, but the boundary is what the constant means.
+  registerSecret('s3cr3t-8'); // exactly 8 characters
+  registerSecret('s3cr3t7'); // one short — must stay ignored
+  const redact = createRedactor();
+  assert.equal(redact('token=s3cr3t-8 here'), `token=${REDACTED} here`);
+  assert.equal(redact('token=s3cr3t7 here'), 'token=s3cr3t7 here');
+});
+
+test('an overlapping pair is masked longest-first, leaving no readable remainder', () => {
+  // Real registries hold overlapping values: `refresh` registers the new token
+  // while the old one is still registered, and an `appsecret_proof` can appear
+  // inside a longer signed URL. Masking the shorter one first splits the longer
+  // one in half — the surviving halves are then unmatchable and get written to
+  // the log, which is exactly the leak the registry exists to prevent.
+  const inner = 'inner-token-abc';
+  const outer = `wrapper-${inner}-tail`;
+  registerSecret(inner);
+  registerSecret(outer);
+  const redact = createRedactor();
+  assert.equal(redact(`see ${outer} here`), `see ${REDACTED} here`);
+  assert.equal(redact(`see ${inner} here`), `see ${REDACTED} here`);
+});
+
+test('every occurrence of a secret in one string is masked, not just the first', () => {
+  // A retry log line, a URL echoed inside its own error message, a request and
+  // its response in one record — a secret repeats constantly. `String.replace`
+  // with a string pattern only replaces the first match; the second copy would
+  // be written in the clear right next to a `[REDACTED]` that says otherwise.
+  const secret = 'repeated-secret-value-9876';
+  registerSecret(secret);
+  const redact = createRedactor();
+  assert.equal(
+    redact(`first ${secret} then ${secret} end`),
+    `first ${REDACTED} then ${REDACTED} end`,
+  );
+});
+
+test('the token-shape backstop masks every match in a string, in either hex case', () => {
+  // Same repetition problem, one layer down: the shape patterns are the backstop
+  // for the mint→register window, so they run on strings nobody has registered
+  // anything for. A non-global regex would mask the first token and print the
+  // second. And the proof pattern is case-insensitive because a hex digest that
+  // came back uppercased from an intermediary is still the same secret.
+  const redact = createRedactor();
+  const a = 'EAA' + 'Gm0Bak1'.repeat(5);
+  const b = 'EAA' + 'Zx9Qw2e'.repeat(5);
+  const both = redact(`one ${a} two ${b} end`);
+  assert.equal(both, `one ${REDACTED} two ${REDACTED} end`);
+
+  const upperProof = 'ABCDEF0123456789'.repeat(4); // 64 hex chars, uppercase
+  assert.equal(upperProof.length, 64);
+  assert.equal(redact(`proof is ${upperProof} ok`), `proof is ${REDACTED} ok`);
+});
+
+test('a node reachable twice is redacted twice, not reported as a cycle', () => {
+  // The cycle guard tracks the path being walked, not every node ever seen, so
+  // it has to unwind on the way out. Without that, the second reference to a
+  // shared node renders as `[Circular]` — a log record that silently drops real
+  // fields, and the failure only appears for object graphs that share a node,
+  // which is what a Graph response with a repeated paging cursor looks like.
+  const secret = 'shared-node-secret-value-4321';
+  registerSecret(secret);
+  const redact = createRedactor();
+  const shared = { token: secret, kind: 'page' };
+  const out = redact({ a: shared, b: shared, list: [shared, shared] }) as Record<string, any>;
+
+  assert.deepEqual(out.a, { token: REDACTED, kind: 'page' });
+  assert.deepEqual(out.b, { token: REDACTED, kind: 'page' }, 'the second reference is not a cycle');
+  assert.deepEqual(out.list, [
+    { token: REDACTED, kind: 'page' },
+    { token: REDACTED, kind: 'page' },
+  ]);
+  // Still a deep copy: the two outputs are separate objects, not the shared input.
+  assert.notEqual(out.a, shared);
+  assert.notEqual(out.a, out.b);
 });

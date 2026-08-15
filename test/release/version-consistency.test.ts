@@ -14,6 +14,13 @@
  * the npm version it launches via `npx`, so that pin is checked too — otherwise a
  * released plugin could silently serve a different version than it declares.
  *
+ * A fifth file carries the version without being a channel of its own:
+ * `.claude-plugin/marketplace.json` is the catalog `/plugin marketplace add`
+ * reads, and its `plugins[]` entry repeats the plugin's version. It is checked
+ * here for the same reason as the `npx` pin — it is a copy of the version that a
+ * release can leave behind, and the copy is the one users see in the install
+ * listing before anything is fetched.
+ *
  * The test process runs from the repo root (`npm test` -> `node --test` with
  * cwd = repo root), so the files resolve from `process.cwd()`. If cwd does not
  * hold a `package.json` (e.g. the compiled test is invoked directly from
@@ -64,6 +71,16 @@ const repoRoot = findRepoRoot();
 
 /** The Claude Code plugin manifest, relative to the repo root. */
 const PLUGIN_MANIFEST = join('.claude-plugin', 'plugin.json');
+/** The Claude Code marketplace catalog, relative to the repo root. */
+const MARKETPLACE_MANIFEST = join('.claude-plugin', 'marketplace.json');
+/**
+ * The marketplace's own name — deliberately NOT the plugin name. Installing takes
+ * both: `/plugin marketplace add IvanBBaev/instagram-mcp` registers the catalog
+ * under this name, then `/plugin install instagram-mcp-ai@instagram-mcp` names
+ * the plugin inside it. Collapsing the two strings into one would make the second
+ * command read `instagram-mcp-ai@instagram-mcp-ai`, which is why they differ.
+ */
+const MARKETPLACE_NAME = 'instagram-mcp';
 
 /** Read + parse a JSON file from the repo root; fail clearly if it is absent. */
 function readRepoJson(file: string): Record<string, unknown> {
@@ -80,6 +97,35 @@ function readRepoJson(file: string): Record<string, unknown> {
     throw new Error(`${file} did not parse to a JSON object`);
   }
   return parsed;
+}
+
+/** An npm package specifier from the plugin's `npx` args, split into its parts. */
+interface PackageSpec {
+  /** The raw argument, e.g. `instagram-mcp-ai@1.2.3`. */
+  raw: string;
+  /** The pin after `@`, or `null` when the arg carries no pin at all. */
+  pin: string | null;
+}
+
+/**
+ * Find the arg that names the npm package and split off its pin.
+ *
+ * Matching is structural (`<name>` or `<name>@<pin>`) rather than a compare
+ * against a pre-built `name@version` string: an exact compare collapses every
+ * failure into "not found", which cannot tell a stale pin apart from a missing
+ * one or from a floating dist-tag. Parsing lets the assertions name the drift.
+ *
+ * Returns `null` when no argument names the package.
+ */
+function findPackageSpec(args: readonly unknown[]): PackageSpec | null {
+  for (const arg of args) {
+    if (typeof arg !== 'string') continue;
+    if (arg === PACKAGE_NAME) return { raw: arg, pin: null };
+    if (arg.startsWith(`${PACKAGE_NAME}@`)) {
+      return { raw: arg, pin: arg.slice(PACKAGE_NAME.length + 1) };
+    }
+  }
+  return null;
 }
 
 test('package.json is the single source of truth for name and version', () => {
@@ -136,7 +182,9 @@ test('plugin.json (Claude Code) matches the source-of-truth version and identity
   assert.equal(
     plugin.version,
     pkg.version,
-    `${PLUGIN_MANIFEST}.version must equal package.json.version`,
+    `${PLUGIN_MANIFEST} drift site 1 of 2 — the "version" field is ` +
+      `${JSON.stringify(plugin.version)} but package.json.version is ` +
+      `${JSON.stringify(pkg.version)}; bump the field to match`,
   );
   assert.equal(
     plugin.name,
@@ -176,10 +224,90 @@ test('plugin.json pins the same npm version it declares', () => {
 
   const args = server.args;
   assert.ok(Array.isArray(args), 'the MCP server must pass args to npx');
+
+  const spec = findPackageSpec(args);
   assert.ok(
-    args.includes(`${PACKAGE_NAME}@${String(pkg.version)}`),
-    `${PLUGIN_MANIFEST} must pin "${PACKAGE_NAME}@${String(pkg.version)}" in its npx args, got ${JSON.stringify(args)}`,
+    spec !== null,
+    `${PLUGIN_MANIFEST} drift site 2 of 2 — no npx arg names "${PACKAGE_NAME}", ` +
+      `so the plugin launches something else entirely; got ${JSON.stringify(args)}`,
   );
+  assert.ok(
+    spec.pin !== null,
+    `${PLUGIN_MANIFEST} drift site 2 of 2 — the npx arg "${spec.raw}" carries no pin; ` +
+      `it must be "${PACKAGE_NAME}@${String(pkg.version)}" so the plugin cannot install ` +
+      `whatever npm happens to serve that day`,
+  );
+  // A dist-tag (`@latest`, `@next`) is not a version either; it fails here too,
+  // which is the point — the pin has to be the exact released version.
+  assert.equal(
+    spec.pin,
+    pkg.version,
+    `${PLUGIN_MANIFEST} drift site 2 of 2 — the npx arg pins ` +
+      `"${PACKAGE_NAME}@${String(spec.pin)}" but package.json.version is ` +
+      `${JSON.stringify(pkg.version)}; bump mcpServers[].args, not just the "version" field`,
+  );
+});
+
+test('marketplace.json lists this plugin at the source-of-truth version', () => {
+  const pkg = readRepoJson('package.json');
+  const marketplace = readRepoJson(MARKETPLACE_MANIFEST);
+
+  assert.equal(
+    marketplace.name,
+    MARKETPLACE_NAME,
+    `${MARKETPLACE_MANIFEST}.name is the catalog name used in ` +
+      `\`/plugin install <plugin>@<marketplace>\` — changing it breaks the install ` +
+      `command documented in docs/plugin-install.md`,
+  );
+
+  const plugins = marketplace.plugins;
+  assert.ok(Array.isArray(plugins), `${MARKETPLACE_MANIFEST}.plugins must be an array`);
+  assert.equal(
+    plugins.length,
+    1,
+    `${MARKETPLACE_MANIFEST} should list exactly this repo's single plugin`,
+  );
+
+  const entry = plugins[0];
+  assert.ok(isRecord(entry), `${MARKETPLACE_MANIFEST}.plugins[0] must be an object`);
+  assert.equal(
+    entry.name,
+    PACKAGE_NAME,
+    `${MARKETPLACE_MANIFEST}.plugins[0].name must match plugin.json.name — it is the ` +
+      `left half of the install specifier`,
+  );
+  assert.equal(
+    entry.source,
+    './',
+    `${MARKETPLACE_MANIFEST}.plugins[0].source must be "./" — the marketplace root is ` +
+      `the directory holding .claude-plugin/, i.e. the repo root`,
+  );
+  assert.equal(
+    entry.version,
+    pkg.version,
+    `${MARKETPLACE_MANIFEST} drift site — plugins[0].version is ` +
+      `${JSON.stringify(entry.version)} but package.json.version is ` +
+      `${JSON.stringify(pkg.version)}; this is the version shown in the install ` +
+      `listing, so a stale copy misinforms users before anything is fetched`,
+  );
+});
+
+test('marketplace.json and plugin.json describe the same plugin', () => {
+  const plugin = readRepoJson(PLUGIN_MANIFEST);
+  const marketplace = readRepoJson(MARKETPLACE_MANIFEST);
+  const plugins = marketplace.plugins;
+  assert.ok(Array.isArray(plugins) && isRecord(plugins[0]), 'marketplace must list a plugin');
+  const entry = plugins[0];
+
+  // The catalog entry is what users read when choosing; the plugin manifest is what
+  // they get. Divergence here is a listing that advertises something else.
+  for (const field of ['description', 'homepage', 'repository', 'license'] as const) {
+    assert.equal(
+      entry[field],
+      plugin[field],
+      `${MARKETPLACE_MANIFEST}.plugins[0].${field} must equal ${PLUGIN_MANIFEST}.${field}`,
+    );
+  }
 });
 
 test('all four channels agree on a single version (single source of truth)', () => {

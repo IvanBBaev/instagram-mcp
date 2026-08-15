@@ -78,15 +78,35 @@ test('fb-login: appsecret_proof is included only for graph.facebook.com targets'
   assert.ok(!('appsecret_proof' in igParams));
 });
 
-test('fb-login: throws a validation InstagramError when appSecret is missing', () => {
+test('fb-login: throws a validation InstagramError naming the profile when appSecret is missing', () => {
   assert.throws(
-    () => createAuthProvider(fbProfile({ appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ name: 'brand', appSecret: undefined })),
     (err: unknown) => {
       assert.ok(isInstagramError(err));
       assert.equal(err.kind, 'validation');
+      // Providers are built per profile and a multi-account setup can have any
+      // number of them. "an fb-login profile needs an app secret" leaves the
+      // operator to guess which of their accounts to fix; the name is the whole
+      // actionable content of the message.
+      assert.match(err.message, /brand/);
       return true;
     },
   );
+});
+
+test('authParams hands back a fresh object on every call', async () => {
+  // The result is a plain mutable record that leaves this module, and `fb-login`
+  // *writes* into it (`appsecret_proof`) — a single shared instance would carry
+  // the proof from a graph.facebook.com call into the next graph.instagram.com
+  // one. `ig-login` never writes, so only the shape of the contract stops the
+  // two halves of the interface from disagreeing about whether the caller owns
+  // what it is given.
+  for (const provider of [createAuthProvider(igProfile()), createAuthProvider(fbProfile())]) {
+    const first = await provider.authParams(FB_HOST);
+    const second = await provider.authParams(FB_HOST);
+    assert.notEqual(first, second, `${provider.path} must not share one params object`);
+    assert.deepEqual(first, second, `${provider.path} params must still be equal by value`);
+  }
 });
 
 test('fb-login: throws a validation InstagramError when appSecret is empty', () => {

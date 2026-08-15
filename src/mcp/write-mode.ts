@@ -17,7 +17,6 @@ import { dirname } from 'node:path';
 import type { ToolContext, ToolResult } from './define.js';
 import { fence, json } from './result.js';
 import { createRedactor } from '../core/redact.js';
-import { resolveWriteJournal } from '../core/settings.js';
 import type { ResolvedProfile } from '../core/types.js';
 
 /** Describes the mutation a write tool intends to perform. */
@@ -79,11 +78,10 @@ const redactJournalEntry = createRedactor();
  *
  * The journal location (`IG_WRITE_JOURNAL`, default
  * `<XDG_STATE_HOME|~/.local/state>/instagram-mcp-ai/writes.jsonl`) is owned by
- * `core/settings.ts` like every other configuration knob — this gate asks
- * {@link resolveWriteJournal} for the resolved path instead of parsing the
- * environment itself. It is resolved per append rather than once at module load
- * so a late `.env` load or an in-process override still takes effect, matching
- * how `loadSettings` is called on demand.
+ * `core/settings.ts` like every other configuration knob, and arrives here as
+ * `ctx.settings.writeJournal` — this gate never reads the environment itself.
+ * `index.ts` loads the env files before `loadSettings()`, so the value is
+ * already final by the time any tool can run.
  *
  * Best-effort audit: any I/O failure is caught so a broken journal never fails a
  * write the operator already authorized — but it is logged at **warn**, not
@@ -102,7 +100,7 @@ const redactJournalEntry = createRedactor();
  */
 function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | undefined): void {
   try {
-    const path = resolveWriteJournal(process.env);
+    const path = ctx.settings.writeJournal;
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: JOURNAL_DIR_MODE });
     const entry = {

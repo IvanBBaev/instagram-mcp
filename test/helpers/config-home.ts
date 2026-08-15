@@ -25,9 +25,18 @@ export const SERVER_DIR = 'instagram-mcp-ai';
  * Only the variable the running platform actually reads is set — deliberately,
  * so a resolver that consulted the wrong one would fall back to the real config
  * home and fail the test instead of silently passing.
+ *
+ * `platform` defaults to the running platform and exists so this mapping can be
+ * asserted for BOTH platforms from either one. Without it the win32 arm is only
+ * ever executed on Windows, which is exactly the arm whose absence corrupts a
+ * Windows developer's real credentials — the case least affordable to leave
+ * unproven on the machine where the suite actually runs.
  */
-export function configHomeEnv(dir: string): NodeJS.ProcessEnv {
-  return process.platform === 'win32' ? { APPDATA: dir } : { XDG_CONFIG_HOME: dir };
+export function configHomeEnv(
+  dir: string,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return platform === 'win32' ? { APPDATA: dir } : { XDG_CONFIG_HOME: dir };
 }
 
 /** The env file `writeCredentials` produces under a config-home base. */

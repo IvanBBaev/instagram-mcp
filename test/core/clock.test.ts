@@ -56,6 +56,7 @@ test('systemClock.sleep rejects immediately when the signal is already aborted',
   const controller = new AbortController();
   const reason = new Error('caller gave up before sleeping');
   controller.abort(reason);
+  const before = armedTimers();
 
   await assert.rejects(
     () => systemClock.sleep(NEVER_MS, controller.signal),
@@ -66,6 +67,12 @@ test('systemClock.sleep rejects immediately when the signal is already aborted',
       return true;
     },
   );
+
+  // Rejecting is only half of it: falling through and arming the timer anyway
+  // pins the event loop for the full backoff on a request that was cancelled
+  // before it ever slept. Nothing observes that through the promise — it settles
+  // identically either way — so the handle count is again the only evidence.
+  assert.equal(armedTimers(), before, 'an already-aborted sleep must arm no timer at all');
 });
 
 test('systemClock.sleep clears its pending timer when the signal aborts mid-flight', async () => {

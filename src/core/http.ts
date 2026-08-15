@@ -47,6 +47,20 @@ export interface IgRequestDeps {
 const MAX_ATTEMPTS = 4;
 /** Exponential backoff `min(500·2^n, 8000) + jitter`. */
 const BACKOFF_BASE_MS = 500;
+/**
+ * The ceiling of that `min` — and, at `MAX_ATTEMPTS = 4`, an equivalent-mutant
+ * spot: no value of this constant is observable. Proof: `backoffMs` has exactly
+ * two call sites, both in the retry loop and both reached only when `lastAttempt`
+ * is false, i.e. `attempt < MAX_ATTEMPTS - 1`, so it is only ever called with 0,
+ * 1 or 2 and the base is 500/1000/2000 ms — always under the cap, so the `min`
+ * returns its first argument every time. The cap first changes a delay at attempt
+ * 5 (500·2^5 = 16 000 ms), which would need `MAX_ATTEMPTS >= 7`. Widening it to
+ * 800 000 therefore alters no sleep, no request, no log line and no timing, so
+ * nothing downstream — and no test — can distinguish the two. It stays because it
+ * is the documented contract (docs/operations.md §2, docs/architecture.md §5) and
+ * because it is what keeps a future attempt-budget bump from silently turning a
+ * retry into a multi-minute stall; do not contort a test into "killing" it.
+ */
 const BACKOFF_CAP_MS = 8000;
 /** `Retry-After` is honored but never trusted beyond this ceiling. */
 const RETRY_AFTER_CAP_MS = 60_000;
@@ -366,7 +380,11 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
         }
         return (await readBody(res)) as T;
       }
+      /* c8 ignore start -- V8 reports the fall-through point after an endless
+         `for` as an uncovered range: the loop has no exit condition, so control
+         leaves it only by `return` or `throw`. Nothing here is skippable code. */
     } finally {
+      /* c8 ignore stop */
       release();
     }
   };

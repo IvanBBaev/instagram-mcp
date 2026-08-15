@@ -131,6 +131,13 @@ npx instagram-mcp-ai
 Credentials are read from `~/.config/instagram-mcp-ai/.env` (XDG), the project
 `.env`, or real environment variables (which always win) — see below.
 
+Two client-specific install channels wrap the same server: a **Claude Desktop
+extension** ([docs/mcpb-install.md](docs/mcpb-install.md)) and a **Claude Code
+plugin** ([docs/plugin-install.md](docs/plugin-install.md)). Both prompt for the
+access token at install time and keep it in the OS keychain rather than in a
+settings file. **Neither has shipped yet** — both launch the server through the
+npm package, which is not published; each doc states its own status.
+
 ## Configure credentials
 
 All settings are environment variables with the uniform `IG_` prefix; the

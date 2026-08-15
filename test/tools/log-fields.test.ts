@@ -21,16 +21,17 @@ import { registerTools } from '../../src/mcp/registry.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { Logger, ResolvedProfile } from '../../src/core/types.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+import { testSettings } from '../helpers/settings.js';
 import { allTools } from '../../src/tools/index.js';
 
 /**
  * The live-path tests below drive real write specs with `apply: true`, and an
- * applied write appends to the journal resolved from `process.env` at append
- * time. Point it at a temp file so the suite never touches the operator's real
- * audit log at ~/.local/state/instagram-mcp-ai/writes.jsonl.
+ * applied write appends to `settings.writeJournal`. Point it at a temp file so
+ * the suite never touches the operator's real audit log at
+ * ~/.local/state/instagram-mcp-ai/writes.jsonl.
  */
 const journalDir = mkdtempSync(join(tmpdir(), 'ig-log-fields-journal-'));
-process.env.IG_WRITE_JOURNAL = join(journalDir, 'writes.jsonl');
+const journalPath = join(journalDir, 'writes.jsonl');
 after(() => rmSync(journalDir, { recursive: true, force: true }));
 
 type RegisterCb = (args: Record<string, unknown>, extra?: unknown) => Promise<ToolResult>;
@@ -302,6 +303,33 @@ test('every write tool records the resolved apply flag so an audit log can tell 
   }
 });
 
+test('post_story logs which of the three sources it was given, never a URL', () => {
+  // The table above pins the video row; the other two arms of the discriminator
+  // are the ones an audit reader needs to tell "photo story" from "resume", and
+  // a collapsed ternary would silently relabel one as the other.
+  const fn = spec('instagram_post_story').logFields;
+  assert.ok(fn);
+  assert.equal(fn({ imageUrl: CANARIES.imageUrl }).source, 'image');
+  assert.equal(fn({ videoUrl: CANARIES.videoUrl }).source, 'video');
+  // A resume carries neither URL — it must say so rather than guess 'video'.
+  const resumed = fn({ resumeContainerId: 'C7', apply: true });
+  assert.equal(resumed.source, 'none');
+  assert.equal(resumed.resume, true);
+});
+
+test('media counters are logged as real counts and as 0 when the field is absent', () => {
+  // Both counters are `?.length ?? 0`. The table pins one side of each; an audit
+  // reader distinguishing a 3-child carousel from a resume needs the other.
+  const container = spec('instagram_create_media_container').logFields;
+  const postImage = spec('instagram_post_image').logFields;
+  assert.ok(container && postImage);
+  assert.equal(container({ children: ['A', 'B', 'C'], mediaType: 'CAROUSEL' }).children, 3);
+  assert.equal(container({ imageUrl: CANARIES.imageUrl }).children, 0);
+  assert.equal(postImage({ imageUrls: [CANARIES.imageUrl] }).images, 1);
+  // A resume carries no imageUrls at all — 0, never undefined.
+  assert.equal(postImage({ resumeContainerId: 'C7' }).images, 0);
+});
+
 // --- the live path: logFields as the registry actually emits it ------------
 
 /**
@@ -357,19 +385,7 @@ function registerAll(records: Emitted[]): Map<string, RegisterCb> {
     tools: allTools,
     profiles: [igProfile, fbProfile, brand],
     defaultProfileName: 'default',
-    settings: {
-      maxConcurrent: 4,
-      maxItems: 200,
-      refreshAfterDays: 45,
-      timeoutMs: 30_000,
-      logLevel: 'debug',
-      prettyJson: false,
-      writeMode: 'preview',
-      allowDestructive: false,
-      transport: 'stdio',
-      httpHost: '127.0.0.1',
-      httpPort: 3000,
-    },
+    settings: testSettings({ logLevel: 'debug', writeJournal: journalPath }),
     clock: fakeClock(1_700_000_000_000),
     log: recordingLog({}, records),
     // No network in this suite: any handler that gets as far as a request fails

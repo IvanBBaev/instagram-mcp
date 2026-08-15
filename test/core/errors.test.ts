@@ -105,6 +105,11 @@ test('status fallback when the code is absent: 401->auth, 403->permission, 429->
 });
 
 test('status fallback: any 5xx -> upstream; unrecognized status -> upstream (default)', () => {
+  // Note for anyone mutation-testing this file: the explicit 5xx rule and the
+  // rule-4 default both answer `upstream`, so the band's boundaries are not
+  // observable through `kind` — no test can distinguish `>= 500` from `> 500`.
+  // The rule stays because it states the intent at the point of decision; if the
+  // default ever stops being `upstream`, this line is what keeps 5xx correct.
   assert.equal(mapGraphError(500, envelope({ message: 'boom' })).kind, 'upstream');
   assert.equal(mapGraphError(503, envelope({ message: 'boom' })).kind, 'upstream');
   assert.equal(mapGraphError(418, envelope({ message: 'teapot' })).kind, 'upstream');
@@ -180,6 +185,17 @@ test('non-numeric code/subcode are ignored (treated as absent)', () => {
   assert.equal(err.code, undefined);
   assert.equal(err.subcode, undefined);
   assert.equal(err.kind, 'permission'); // falls through to the 403 status rule
+
+  // Numeric but not finite is the same case. `JSON.parse` cannot produce these,
+  // but `body` is typed `unknown` and this is the only place that decides what
+  // lands on the error — a `NaN` code would serialize to `null` in the log line
+  // and read as "Meta sent no code" while the guard says otherwise.
+  const nonFinite = mapGraphError(403, {
+    error: { message: 'x', code: Number.NaN, error_subcode: Number.POSITIVE_INFINITY },
+  });
+  assert.equal(nonFinite.code, undefined);
+  assert.equal(nonFinite.subcode, undefined);
+  assert.equal(nonFinite.kind, 'permission');
 });
 
 // --- toInstagramError -------------------------------------------------------
@@ -229,4 +245,68 @@ test('toInstagramError uses a thrown string as the (scrubbed) message', () => {
   const err = toInstagramError(`leaked ${token} here`);
   assert.equal(err.message.includes(token), false);
   assert.ok(err.message.includes('[redacted]'));
+});
+
+test('an Error with a blank message falls back to its name, then to "Unknown error"', () => {
+  // `new Error()` with no argument has `message === ''`, and libraries that
+  // subclass without calling `super(msg)` produce the same thing. Surfacing the
+  // empty string would give the operator a tool failure with no text at all, so
+  // the name is the next-best label — and a blank name has to bottom out too.
+  const named = new Error('');
+  assert.equal(named.name, 'Error');
+  assert.equal(toInstagramError(named).message, 'Error');
+
+  const anonymous = new Error('');
+  anonymous.name = '   ';
+  assert.equal(toInstagramError(anonymous).message, 'Unknown error');
+});
+
+// --- precedence, isolated from the status fallback ---------------------------
+//
+// Most classification tests above pair a code with the status Meta really sends
+// alongside it — 190 with 401, the permission band with 403. That is realistic,
+// but it means the status rule would produce the same answer on its own, so the
+// code rules are not actually under test there. These pin the code rules at a
+// status that classifies differently, which is what makes them assertions about
+// precedence rather than coincidences.
+
+test('the code decides even when the HTTP status would say something else', () => {
+  // 400 is the neutral status: it matches no fallback rule and lands on the
+  // `upstream` default, so anything but `upstream` here came from the code.
+  assert.equal(mapGraphError(400, envelope({ code: 190 })).kind, 'auth');
+  assert.equal(mapGraphError(400, envelope({ code: 10 })).kind, 'permission');
+
+  // And the reverse direction: an explicit transient code must not be upgraded
+  // by a status that disagrees. `error.code` is documented as the more specific
+  // signal (§3); the status is labelled "when the code is absent/unrecognized".
+  for (const code of [1, 2, 9007]) {
+    assert.equal(mapGraphError(401, envelope({ code })).kind, 'upstream', `code ${code} vs 401`);
+    assert.equal(mapGraphError(403, envelope({ code })).kind, 'upstream', `code ${code} vs 403`);
+  }
+  assert.equal(mapGraphError(429, envelope({ code: 100 })).kind, 'validation');
+});
+
+test('the permission band is exactly 200-299, both ends included', () => {
+  // Asserted at status 400 so the 403 rule cannot supply the same answer. The
+  // band is a Meta convention, not a range someone picked: 199 and 300 are other
+  // things entirely, and widening it would silently relabel unrelated failures
+  // as "you are missing a scope" — the one message that sends an operator off
+  // to re-run the whole permission review.
+  for (const code of [10, 200, 201, 250, 298, 299]) {
+    assert.equal(mapGraphError(400, envelope({ code })).kind, 'permission', `code ${code}`);
+  }
+  for (const code of [199, 300, 301]) {
+    assert.notEqual(mapGraphError(400, envelope({ code })).kind, 'permission', `code ${code}`);
+  }
+});
+
+test('every token-shaped substring in a message is stripped, not just the first', () => {
+  // The strip is defense-in-depth for the message that gets surfaced to the
+  // model. Meta echoes the offending input back in `error.message`, so a request
+  // that carried a token twice (a URL plus its retry) comes back with two — and
+  // a non-global regex would return one masked and one in the clear.
+  const a = `EAA${'A'.repeat(30)}`;
+  const b = `IGQ${'B'.repeat(30)}`;
+  const err = mapGraphError(400, envelope({ message: `first ${a} second ${b} end` }));
+  assert.equal(err.message, 'first [redacted] second [redacted] end');
 });

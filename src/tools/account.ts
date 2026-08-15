@@ -190,6 +190,14 @@ const tokenStatusTool = defineTool({
     }
 
     // Path A (ig-login): no debug_token endpoint — expiry is unknown (CC-AUTH-7).
+    //
+    // Equivalent-mutant note: `refreshAfterDays` (and `nowMs`) cannot change the
+    // answer here. `summarizeTokenExpiry` returns on its FIRST statement when
+    // `expiresAtSec` is undefined, before either value is read, and Path A always
+    // passes undefined. Replacing the threshold with any constant is unobservable
+    // through the result, the request traffic or the logs — do not contort a test
+    // (or introduce a mock that only watches an argument) into "killing" it. Both
+    // fields stay because the shape is the function's contract, not this branch's.
     const expiry = summarizeTokenExpiry({
       expiresAtSec: undefined,
       nowMs: clock.now(),

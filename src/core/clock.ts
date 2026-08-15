@@ -32,6 +32,9 @@ export const systemClock: Clock = {
           clearTimeout(timer);
           reject(abortError(signal));
         },
+        // `abort` fires at most once per controller, so this cannot change the
+        // observable result — it is here so the listener is collectable with the
+        // signal instead of outliving this promise on a long-lived signal.
         { once: true },
       );
     }),

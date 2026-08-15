@@ -444,9 +444,16 @@ export async function runPostImage(
       return album.id;
     }
     const imageUrl = imageUrls[0];
+    /* c8 ignore start -- unreachable: a narrowing guard for `noUncheckedIndexedAccess`.
+       This closure only runs when there is no `resumeContainerId` (see
+       `runPublishFlow`), and that path already threw on `imageUrls.length < 1`
+       above, so index 0 is always populated. Kept as a throw rather than a
+       non-null assertion so a future refactor that breaks the invariant fails
+       loudly instead of posting `undefined` to Graph. */
     if (imageUrl === undefined) {
       throw new InstagramError('No imageUrl to create a container from.', { kind: 'validation' });
     }
+    /* c8 ignore stop */
     const container = await createMediaContainer(ctx.req, {
       igId: igIdOf(ctx),
       imageUrl,

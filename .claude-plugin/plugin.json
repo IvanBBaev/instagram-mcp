@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "instagram-mcp-ai",
   "displayName": "Instagram MCP",
-  "version": "0.0.1",
+  "version": "0.7.0",
   "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
   "author": {
     "name": "Ivan Baev",
@@ -26,7 +26,7 @@
     "instagram": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "instagram-mcp-ai@0.0.1"],
+      "args": ["-y", "instagram-mcp-ai@0.7.0"],
       "env": {
         "IG_ACCESS_TOKEN": "${user_config.IG_ACCESS_TOKEN}"
       }

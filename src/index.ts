@@ -40,7 +40,7 @@ import { allTools } from './tools/index.js';
 
 /** Mirrors package.json — the identity advertised to MCP clients. */
 const SERVER_NAME = 'instagram-mcp-ai';
-const SERVER_VERSION = '0.0.1';
+const SERVER_VERSION = '0.7.0';
 
 const MIN_NODE_MAJOR = 22;
 

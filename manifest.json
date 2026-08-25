@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "instagram-mcp-ai",
   "display_name": "Instagram MCP",
-  "version": "0.0.1",
+  "version": "0.7.0",
   "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
   "long_description": "instagram-mcp-ai exposes Instagram professional-account (Business/Creator) operations — content publishing, media management, comment moderation, and insights — as safe, well-annotated Model Context Protocol tools. It talks only to official Meta Graph API endpoints (graph.instagram.com, graph.facebook.com), keeps credentials in the OS keychain via Claude Desktop's user configuration, and defaults writes to a preview (plan-and-apply) mode so the model never mutates your account without explicit consent.",
   "author": {

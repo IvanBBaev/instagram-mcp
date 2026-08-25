@@ -6,12 +6,12 @@
     "url": "https://github.com/IvanBBaev/instagram-mcp",
     "source": "github"
   },
-  "version": "0.0.1",
+  "version": "0.7.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "instagram-mcp-ai",
-      "version": "0.0.1",
+      "version": "0.7.0",
       "transport": {
         "type": "stdio"
       },

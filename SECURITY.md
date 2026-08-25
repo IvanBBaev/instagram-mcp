@@ -15,10 +15,10 @@ published release receives security fixes until the API stabilizes at `1.0.0`.
 |---|---|
 | Latest published `0.x` release | Yes |
 | Older `0.x` releases | No — upgrade to the latest |
-| `0.0.1` name-reservation stub (no functionality) | No |
 
-Nothing beyond the `0.0.1` stub is published yet; this table becomes active with
-the first functional release.
+The first published release is `0.7.0` (2026-08-25). The `0.0.1` that appeared in
+the manifests before that tag was a pre-release placeholder and was never
+published to any channel.
 
 ## Reporting a vulnerability
 

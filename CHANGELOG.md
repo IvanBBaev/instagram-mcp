@@ -7,12 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing has been released yet on any channel. `instagram-mcp-ai` is **not present
-on npm at all** — the name has not been reserved, no MCP-registry entry has been
-submitted, no MCPB bundle has been built, and no git tag has been cut. The
-`0.0.1` in the manifests is a pre-release placeholder, not a published version.
-This section is the running inventory of what exists in the source tree and will
-constitute the first published release.
+Nothing yet.
+
+## [0.7.0] — 2026-08-25
+
+First published release. `0.7.0` rather than `0.1.0` because the feature surface
+is complete — all 28 tools across five packages, both auth paths, four
+distribution manifests — and what separates it from `1.0.0` is field validation
+against live accounts, not missing functionality. The `0.0.1` that appeared in
+the manifests before this tag was a pre-release placeholder and was never
+published to any channel.
+
+npm is the only channel published by this tag. The MCP-registry submission, the
+MCPB bundle and the Claude Code plugin listing are separate manual steps (see
+`docs/release-checklist.md`); their manifests carry `0.7.0` so they are ready to
+submit, but carrying the version is not the same as being listed.
 
 ### Added
 
@@ -57,21 +66,22 @@ constitute the first published release.
   advisories in the runtime dependency tree (`--omit=dev`), with dev-only
   advisories surfaced informationally by `npm run audit:dev`.
 
-### Known issues
+### Fixed
 
-- A **moderate** path-traversal advisory
+- The **moderate** path-traversal advisory
   ([GHSA-frvp-7c67-39w9](https://github.com/advisories/GHSA-frvp-7c67-39w9)) in
   `@hono/node-server`, reached transitively through `@modelcontextprotocol/sdk`,
-  is outstanding in the runtime dependency tree. It is below the `high` audit
-  gate. `@modelcontextprotocol/sdk@1.30.0` requires a patched `@hono/node-server`
-  and is already within the declared `^1.0.0` range, so refreshing the lockfile
-  resolves it. To be cleared before the first publish.
+  is cleared: the lockfile now resolves a patched version, and
+  `npm audit --omit=dev` reports zero advisories in the runtime tree.
 
-[Unreleased]: https://github.com/IvanBBaev/instagram-mcp/commits/main
+### Known limitations
 
-<!--
-  Link-reference stub for the first published release. When cutting it, replace the
-  Unreleased link above with a compare against the new tag and uncomment the line
-  below (see docs/release-checklist.md).
--->
-<!-- [0.1.0]: https://github.com/IvanBBaev/instagram-mcp/releases/tag/v0.1.0 -->
+- No tool has been exercised against a live Instagram account by CI. The suite is
+  fully offline by construction — every test injects its transport and a
+  `globalThis.fetch` guard fails the test if a mutant reaches the network — so
+  what is proven is behaviour against recorded Graph shapes, not against Meta's
+  live responses. Live-probe scripts exist (`scripts/live-probe.mjs`) but are
+  operator-run.
+
+[Unreleased]: https://github.com/IvanBBaev/instagram-mcp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/IvanBBaev/instagram-mcp/releases/tag/v0.7.0

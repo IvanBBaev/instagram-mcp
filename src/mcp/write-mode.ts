@@ -109,6 +109,16 @@ function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | u
       account: ctx.profile.name,
       authPath: ctx.profile.authPath,
       summary: intent.summary,
+      // Equivalent-mutant note: comparing `targetId` against `null` instead of
+      // `undefined` here cannot be observed. The parameter is typed
+      // `string | undefined`, so the two guards differ only in the `undefined`
+      // case, where the mutant spreads `{ targetId: undefined }`;
+      // `redactJournalEntry` returns an undefined property value unchanged (see
+      // `redactValue` in core/redact.ts) and `JSON.stringify` then drops
+      // undefined-valued keys, so the bytes appended to the journal are
+      // byte-identical either way. Nothing in the result, the request traffic or
+      // the log stream can tell the two apart — do not contort a test into
+      // "killing" it.
       ...(targetId !== undefined ? { targetId } : {}),
       destructive: intent.destructive === true,
     };
@@ -296,6 +306,13 @@ export function buildConfirmPrompt(intent: WriteIntent, ctx: ToolContext): Confi
   if (intent.details !== undefined) {
     let rendered: string;
     try {
+      // Equivalent-mutant note: `??` and `||` select identically on this
+      // expression. `intent.details` is a `Record<string, unknown>`, so
+      // `JSON.stringify` returns either a non-empty rendering (`{}` at minimum)
+      // or `undefined` (a `toJSON` that returns nothing); it can never produce
+      // `''`, `0`, `NaN` or `false`, which are the only values the two operators
+      // disagree about. The prompt text is the same in both cases — do not
+      // contort a test into "killing" it.
       rendered = JSON.stringify(intent.details) ?? '(details omitted)';
     } catch {
       rendered = '(details omitted — not serializable)';
@@ -370,7 +387,16 @@ async function confirmWithHuman(
   return { approved: false, reason };
 }
 
-/** Human-readable tail for each refusal reason. */
+/**
+ * Human-readable tail for each refusal reason.
+ *
+ * Equivalent-mutant note: removing `Object.freeze` here cannot be observed. The
+ * table is module-private (never exported, never handed to a caller), its type
+ * is already `Readonly`, and no code path in this module assigns to it — the
+ * freeze is defence-in-depth against a future in-module edit, not behaviour. No
+ * result payload, request or log line differs between the frozen and unfrozen
+ * object, so do not contort a test into "killing" it.
+ */
 const REFUSAL_NOTE: Readonly<Record<RefusalReason, string>> = Object.freeze({
   declined: 'Nothing was sent to Instagram. Re-run and approve the prompt to perform it.',
   cancelled: 'Nothing was sent to Instagram. Re-run and approve the prompt to perform it.',

@@ -51,6 +51,19 @@ function fakeFetch(body: unknown, init: { status?: number; text?: string } = {})
   return { fetchImpl, urls };
 }
 
+/**
+ * Hard safety rail for this file: nothing here may open a socket. Both seams in
+ * this module fall back to something ambient when their injection is missing —
+ * `createTokenExchange` to the platform `fetch`, `refreshToken` to a default
+ * exchange built on it — so a regression that drops an injected transport would
+ * otherwise send a real long-lived token to Meta straight from the test suite.
+ * Replacing the global turns that into a loud, offline failure instead.
+ */
+const NETWORK_FORBIDDEN = 'refresh tests must never reach the real network';
+globalThis.fetch = () => {
+  throw new Error(NETWORK_FORBIDDEN);
+};
+
 const DAY = 86_400_000;
 // Fixed, arbitrary clock. Chosen a whole number of seconds for clean expiry math.
 const NOW_MS = 1_700_000_000_000;
@@ -133,7 +146,17 @@ test('refreshToken fb-login without appId/appSecret throws InstagramError kind v
 
   await assert.rejects(
     () => refreshToken({ authPath: 'fb-login', accessToken: 'FBold', nowMs: NOW_MS, exchange }),
-    (e: unknown) => e instanceof InstagramError && e.kind === 'validation',
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      assert.equal(e.kind, 'validation');
+      // The message is the whole diagnostic: `refresh` prints it and exits, with
+      // no report to read afterwards. It has to name BOTH settings, because the
+      // operator's next move is to add IG_APP_ID and IG_APP_SECRET to the env
+      // file — a generic "refresh failed" sends them re-running `login` instead.
+      assert.match(e.message, /appId/);
+      assert.match(e.message, /appSecret/);
+      return true;
+    },
   );
   // Validation happens before any network call.
   assert.equal(calls.length, 0);
@@ -168,7 +191,15 @@ test('refreshToken rejects an empty accessToken before calling out', async () =>
 
   await assert.rejects(
     () => refreshToken({ authPath: 'ig-login', accessToken: '', nowMs: NOW_MS, exchange }),
-    (e: unknown) => e instanceof InstagramError && e.kind === 'validation',
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      assert.equal(e.kind, 'validation');
+      // An empty token means the profile resolved but IG_ACCESS_TOKEN did not.
+      // Naming the parameter is what separates that from "Meta refused us": one
+      // is a two-second env-file fix, the other is a full re-login.
+      assert.match(e.message, /accessToken/);
+      return true;
+    },
   );
   assert.equal(calls.length, 0);
 });
@@ -328,7 +359,17 @@ test('default transport maps a Graph error body to the matching InstagramError k
     // The real status travels with the error: kind alone would still read "auth"
     // if the seam mapped every response as HTTP 200, and the operator would lose
     // the one field that says whether Meta refused the call or never saw it.
-    (e: unknown) => e instanceof InstagramError && e.kind === 'auth' && e.status === 400,
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      assert.equal(e.kind, 'auth');
+      assert.equal(e.status, 400);
+      // This response carries neither an `x-fb-trace-id` header nor a body id,
+      // so the field must stay ABSENT. An empty string is worse than nothing:
+      // it prints as a plausible id in the line the operator forwards to Meta
+      // support, and it satisfies every `if (fbtraceId)` check downstream.
+      assert.equal(e.fbtraceId, undefined);
+      return true;
+    },
   );
 });
 
@@ -417,6 +458,36 @@ test('the injected timeout bounds the exchange rather than the 30 s default', as
   );
 });
 
+test('a timeoutMs of 0 is honoured instead of being replaced by the 30 s default', async () => {
+  // Zero is a real instruction — "do not wait at all" — and it is the value a
+  // falsy-check default silently discards. The composition root feeds this from
+  // IG_TIMEOUT_MS, so the defect is an operator who set an aggressive budget,
+  // watched `refresh` hang for thirty seconds on a black-holed OAuth endpoint,
+  // and concluded the setting does nothing.
+  const fetchImpl: typeof fetch = (_input, init) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        resolve(new Response(JSON.stringify({ access_token: 'IGnew' }), { status: 200 }));
+      }, 50);
+      init?.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new Error('aborted by the exchange timeout'));
+      });
+    });
+
+  await assert.rejects(
+    () =>
+      refreshToken({
+        authPath: 'ig-login',
+        accessToken: 'IGold',
+        nowMs: NOW_MS,
+        exchange: createTokenExchange({ fetchImpl, timeoutMs: 0 }),
+      }),
+    (e: unknown) =>
+      e instanceof InstagramError && /aborted by the exchange timeout/.test(e.message),
+  );
+});
+
 test('default transport maps a transport failure to an InstagramError, never a raw TypeError', async () => {
   // A dropped socket rejects out of `fetch`. The domain layer only ever handles
   // InstagramError, so the seam must not leak the platform error type.
@@ -433,6 +504,10 @@ test('default transport maps a transport failure to an InstagramError, never a r
     (e: unknown) => {
       assert.ok(e instanceof InstagramError);
       assert.match(e.message, /fetch failed/);
+      // A dropped socket is `upstream` — the kind is what tells the operator
+      // whether to look at their config or at the network. Classifying it as
+      // `validation` sends them auditing IG_APP_ID over a transient outage.
+      assert.equal(e.kind, 'upstream');
       // The exchange URL carries the token in its query string. A message built
       // from it would put the secret into every log sink the error reaches, and
       // `stripTokens` would not catch it — that guard only knows the EAA…/IGQ…
@@ -499,7 +574,15 @@ test('default transport maps a body-read failure to an InstagramError', async ()
         nowMs: NOW_MS,
         exchange: createTokenExchange({ fetchImpl }),
       }),
-    (e: unknown) => e instanceof InstagramError,
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      // Same reasoning as the transport failure above: a body that dies in
+      // flight is an upstream fault, not a bad parameter. `refresh` is the
+      // command an operator runs when nothing else works — misfiling this as
+      // `validation` has them rewriting a credential file that is fine.
+      assert.equal(e.kind, 'upstream');
+      return true;
+    },
   );
 });
 
@@ -524,6 +607,31 @@ test('an empty 200 body is rejected upstream rather than persisted as an empty t
       // working on an object shape instead of a string that happens to have no
       // `access_token` property.
       assert.deepEqual(e.cause, {});
+      return true;
+    },
+  );
+});
+
+test('a whitespace-only body is surfaced verbatim, not normalised to an empty object', async () => {
+  // The exact bytes are the only evidence of WHO answered. An empty 200 is Meta
+  // saying nothing; a body of blanks is something in between (a proxy, a captive
+  // portal, a load balancer health page) answering instead of Meta. `cause` is
+  // all the operator gets in the log, so normalising the two together erases the
+  // difference between "retry the refresh" and "you are not talking to Meta".
+  const { fetchImpl } = fakeFetch(null, { status: 200, text: '   ' });
+
+  await assert.rejects(
+    () =>
+      refreshToken({
+        authPath: 'ig-login',
+        accessToken: 'IGold',
+        nowMs: NOW_MS,
+        exchange: createTokenExchange({ fetchImpl }),
+      }),
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      assert.equal(e.kind, 'upstream');
+      assert.equal(e.cause, '   ');
       return true;
     },
   );
@@ -561,6 +669,35 @@ test('a non-numeric expires_in yields no expiry instead of string arithmetic', a
   assert.equal(res.expiresAtSec, undefined);
 });
 
+test('an expires_in of 0 records an expiry of "now", never "no expiry at all"', async () => {
+  // Zero is what Meta returns for a token that is already dead, and it is the
+  // one numeric value a truthiness check drops. Dropping it does not produce a
+  // conservative result, it produces the OPPOSITE one: the caller persists a
+  // credential with no expiry metadata, `token_status` then reports the expiry
+  // as unknown forever, and `needsRefresh` returns false for it every time. The
+  // operator learns the token is dead from the next failing tool call.
+  const { exchange } = fakeExchange({ access_token: 'IGnew', expires_in: 0 });
+
+  const res = await refreshToken({
+    authPath: 'ig-login',
+    accessToken: 'IGold',
+    nowMs: NOW_MS,
+    exchange,
+  });
+
+  assert.equal(res.expiresAtSec, Math.floor(NOW_MS / 1000));
+  // And that computed expiry has to read as "expired", not as "never expires" —
+  // the two are one line apart in `summarizeTokenExpiry` (0 means never).
+  assert.equal(
+    summarizeTokenExpiry({
+      expiresAtSec: res.expiresAtSec,
+      nowMs: NOW_MS,
+      refreshAfterDays: DEFAULT_SETTINGS.refreshAfterDays,
+    }).state,
+    'expired',
+  );
+});
+
 test('refreshToken rejects an unknown auth path instead of guessing a host', async () => {
   // `authPath` reaches here from persisted config, which a hand-edit can widen
   // past the union. Guessing would send the app secret to the wrong host.
@@ -580,6 +717,33 @@ test('refreshToken rejects an unknown auth path instead of guessing a host', asy
   assert.equal(calls.length, 0, 'nothing may leave the process on an unknown path');
 });
 
+test('an ig-prefixed but unrecognised auth path is refused, not matched by prefix', async () => {
+  // `ig-basic-display` was a real Instagram auth path, and configs written in
+  // that era still carry the name. Matching on a prefix would quietly route such
+  // a profile through the ig-login refresh: Meta rejects the grant, the operator
+  // gets an OAuth error about a token they never touched, and the config keeps
+  // its unsupported value because nothing ever said the path was unknown. The
+  // union is closed on purpose — an unknown member fails loudly and offline.
+  const { exchange, calls } = fakeExchange({ access_token: 'X' });
+
+  await assert.rejects(
+    () =>
+      refreshToken({
+        authPath: 'ig-basic-display' as AuthPath,
+        accessToken: 'IGold',
+        nowMs: NOW_MS,
+        exchange,
+      }),
+    (e: unknown) => {
+      assert.ok(e instanceof InstagramError);
+      assert.equal(e.kind, 'validation');
+      assert.match(e.message, /ig-basic-display/);
+      return true;
+    },
+  );
+  assert.equal(calls.length, 0, 'an unsupported ig-* path must not reach the exchange');
+});
+
 test('refreshToken falls back to the wall clock when nowMs is omitted', async () => {
   const { exchange } = fakeExchange({ access_token: 'IGnew', expires_in: 5_184_000 });
   const before = Math.floor(Date.now() / 1000);
@@ -592,6 +756,24 @@ test('refreshToken falls back to the wall clock when nowMs is omitted', async ()
     result.expiresAtSec >= before + 5_184_000 && result.expiresAtSec <= after + 5_184_000,
     `expiry ${result.expiresAtSec} is not anchored to the current wall clock`,
   );
+});
+
+test('a clock pinned at the unix epoch is honoured, not swapped for wall time', async () => {
+  // `nowMs: 0` is a legitimate fixed clock — it is what a fixture replay or a
+  // zeroed test clock hands over — and it is exactly the value a falsy-check
+  // default throws away. The damage is silent: the expiry the caller persists
+  // would be anchored to real time while every other field came from the
+  // fixture, so the recorded credential could never be reproduced or replayed.
+  const { exchange } = fakeExchange({ access_token: 'IGnew', expires_in: 5_184_000 });
+
+  const res = await refreshToken({
+    authPath: 'ig-login',
+    accessToken: 'IGold',
+    nowMs: 0,
+    exchange,
+  });
+
+  assert.equal(res.expiresAtSec, 5_184_000);
 });
 
 test('needsRefresh is true once the token is within the threshold', () => {
@@ -639,4 +821,33 @@ test('needsRefresh includes the threshold day itself and stops one day past it',
   // comparison with the wrong strictness satisfies either edge on its own.
   assert.equal(needsRefresh({ state: 'valid', daysLeft: 10 }, 10), true);
   assert.equal(needsRefresh({ state: 'valid', daysLeft: 11 }, 10), false);
+});
+
+test('needsRefresh uses the threshold it is given, not a built-in cadence', () => {
+  // IG_REFRESH_AFTER_DAYS is the operator's only lever over refresh cadence, and
+  // a hardcoded threshold would keep answering plausibly while ignoring it. Both
+  // failure directions are real: a fixed value below the setting lets an
+  // ig-login token die inside the window they thought they had configured, and
+  // one above it re-exchanges a healthy token on every run. Several thresholds
+  // are exercised precisely because a single one is what a constant imitates.
+  const shipped = DEFAULT_SETTINGS.refreshAfterDays;
+  assert.equal(shipped, 45, 'the shipped cadence is the one this test pins against');
+
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 30 }, shipped), true);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 30 }, 3), false);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 3 }, 3), true);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 4 }, 3), false);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 46 }, shipped), false);
+});
+
+test('needsRefresh compares against the threshold itself, not the next whole day', () => {
+  // `daysLeft` is floored by `summarizeTokenExpiry`, but the signature takes any
+  // number and the summary is accepted structurally — a caller computing the
+  // remaining days directly passes a fraction. `< threshold + 1` (or a rounding
+  // step) would then treat "10.5 days left" as inside a 10-day threshold and
+  // re-exchange the token a full day early on every run, rewriting the
+  // credential file each time for a token that is still comfortably in date.
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 10.5 }, 10), false);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 10.0 }, 10), true);
+  assert.equal(needsRefresh({ state: 'valid', daysLeft: 9.5 }, 10), true);
 });

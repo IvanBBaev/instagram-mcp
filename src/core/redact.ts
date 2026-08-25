@@ -31,6 +31,14 @@ const CIRCULAR = '[Circular]';
  * Key-name test (case-insensitive substring): the value of any object key whose
  * name contains one of these is masked wholesale. Mirrors docs/security.md §2
  * and the secret env vars in docs/architecture.md §12.
+ *
+ * Equivalent-mutant note: adding the `m` flag here is unobservable. `m` only
+ * changes what `^` and `$` mean, and this pattern is unanchored, so no input can
+ * tell the two apart. The `i` flag, by contrast, is load-bearing and pinned.
+ * The vocabulary is underscore-spelled; the hyphenated header forms
+ * (`app-secret`, `client-secret`) are deliberately out of scope — see the
+ * "matches as a substring" test for why that is safe for this server's own
+ * request builder and where it stops being safe.
  */
 const SECRET_KEY_PATTERN = /access_token|appsecret_proof|app_secret|client_secret|authorization/i;
 
@@ -41,6 +49,14 @@ const SECRET_KEY_PATTERN = /access_token|appsecret_proof|app_secret|client_secre
  *  - `appsecret_proof` is a 64-char hex HMAC-SHA256 with no distinguishing prefix.
  * The length thresholds are set high enough that ordinary words (e.g. `IGNORE`)
  * cannot match; over-redaction is preferred to under-redaction here.
+ *
+ * Order matters: each pattern runs over the output of the previous one, and
+ * substituting the marker introduces word boundaries that the `\b`-bounded proof
+ * pattern needs. See the "token-first" test.
+ *
+ * Equivalent-mutant note: adding the `m` flag to the proof pattern is
+ * unobservable — it is unanchored, so `m` changes nothing. Its `g` and `i` flags
+ * and both `\b`s are load-bearing and pinned by tests.
  */
 const TOKEN_SHAPE_PATTERNS: readonly RegExp[] = [
   /EAA[A-Za-z0-9_-]{20,}/g,
@@ -98,7 +114,19 @@ export function createRedactor(opts?: RedactorOptions): (value: unknown) => unkn
   };
 }
 
-/** Mask exact registered secrets, then token-shape patterns, inside one string. */
+/**
+ * Mask exact registered secrets, then token-shape patterns, inside one string.
+ *
+ * Each round matches against `out`, not against `input`: the marker is spliced
+ * into the text, so a registered secret can straddle it and exist only in the
+ * partially-masked string.
+ *
+ * Equivalent-mutant note: the `out.includes(secret)` test is a fast path, not a
+ * guard. `split(needle).join(marker)` on a string that does not contain `needle`
+ * returns the string unchanged, and no secret can be empty
+ * ({@link MIN_REGISTERED_SECRET_LENGTH} rejects short registrations), so dropping
+ * the test cannot change any output.
+ */
 function redactString(input: string, secrets: readonly string[]): string {
   let out = input;
   for (const secret of secrets) {
@@ -111,7 +139,19 @@ function redactString(input: string, secrets: readonly string[]): string {
   return out;
 }
 
-/** Deep-clone `value`, masking secrets; `seen` guards against reference cycles. */
+/**
+ * Deep-clone `value`, masking secrets; `seen` guards against reference cycles.
+ *
+ * `seen` is the path being walked, not every node ever visited — it unwinds in
+ * the `finally`, so a node reachable twice is redacted twice rather than reported
+ * as `[Circular]`, and one set is threaded through arrays and objects alike.
+ *
+ * Equivalent-mutant note: `val !== null && val !== undefined` and `val != null`
+ * are the same predicate (loose equality against `null` is true for exactly
+ * `null` and `undefined`), so the spelling cannot be observed from any input.
+ * The guard itself is load-bearing and pinned: without it a secret-named key
+ * whose value is `null` would be reported as a masked secret that never existed.
+ */
 function redactValue(value: unknown, secrets: readonly string[], seen: WeakSet<object>): unknown {
   if (typeof value === 'string') return redactString(value, secrets);
   if (value === null || typeof value !== 'object') return value;

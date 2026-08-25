@@ -117,6 +117,12 @@ const listMediaTool = defineTool({
     paging: z.object({ after: z.string().optional(), truncated: z.boolean() }).passthrough(),
     note: z.string().optional(),
   },
+  // Equivalent-mutant note: below, `args.fetchAll ?? false` and
+  // `args.fetchAll || false` cannot be told apart. The schema types this
+  // argument `boolean | undefined`, and `??` and `||` differ only on the
+  // falsy-but-defined values `??` keeps — of those, only `false` is in the
+  // domain, and it maps to `false` either way. `??` is still the honest
+  // operator: it says the default applies to "absent", not to "falsy".
   logFields: (args) => ({
     limit: args.limit,
     fetchAll: args.fetchAll ?? false,
@@ -128,6 +134,14 @@ const listMediaTool = defineTool({
       maxItems: ctx.settings.maxItems,
       limit: args.limit,
       after: args.after,
+      // Equivalent-mutant note: two mutants of this line are unobservable.
+      // `args.fetchAll || false` coincides with `??` for the same reason as in
+      // logFields above. Dropping the coalesce entirely (`fetchAll:
+      // args.fetchAll`) is also equivalent *today*, because `PageParams.fetchAll`
+      // is optional and `listMedia` branches on `if (!params.fetchAll)`, which
+      // treats `undefined` and `false` identically. The explicit `false` is kept
+      // so the default lives here, in the tool that documents it, rather than
+      // depending on a falsy check one layer down.
       fetchAll: args.fetchAll ?? false,
     });
 

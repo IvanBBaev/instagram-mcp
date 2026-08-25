@@ -160,6 +160,14 @@ export function selectPackages(
   // would accept inherited keys like `constructor` / `toString` and hand the
   // profile branch a non-array value instead of failing with the clear
   // "unknown package" validation error below.
+  // Equivalent-mutant note: dropping `!selection.includes(',')` cannot change
+  // the result. It only matters for a selection that DOES contain a comma, and
+  // such a string is never `'all'` and can never be an own key of
+  // PACKAGE_PROFILES (`core` / `reader` / `publisher`), so the remaining
+  // disjunction is already false for every comma-bearing input. The clause is
+  // kept because it states the intent — a list is a list — and would still hold
+  // if a profile name ever gained a comma; do not contort a test into
+  // "killing" it.
   const usesProfile =
     !selection.includes(',') && (lower === 'all' || Object.hasOwn(PACKAGE_PROFILES, lower));
   if (usesProfile) {
@@ -358,6 +366,13 @@ const accountField = z
  * The `(none)` fallback is defensive only: {@link registerOne} always folds the
  * injected `account` selector into the shape, so a registered tool's key list
  * is never empty even for a tool that declares no inputs of its own.
+ *
+ * Equivalent-mutant note: swapping `||` for `??` here is unobservable.
+ * `Array.prototype.join` always returns a string, so the right operand is only
+ * reachable for the empty-string result of an empty key list — and that list is
+ * never empty, as the paragraph above explains. `??` therefore selects the same
+ * branch as `||` for every input this function can actually receive; do not
+ * contort a test into "killing" it.
  */
 /* c8 ignore next 3 -- the `(none)` arm is unreachable while `account` is injected. */
 function validArgList(validKeys: string[]): string {
@@ -493,6 +508,13 @@ function registerOne(
     //    `errorResult()` envelope on the paths where it *can* fire.
     const parsed = strictSchema.safeParse(rawArgs);
     if (!parsed.success) {
+      // Equivalent-mutant note: dropping `cause: parsed.error` below is not
+      // observable. The error object never leaves this expression — it is
+      // handed straight to `errorResult`, which renders only `kind` and
+      // `message` into the text and the structured payload and is documented
+      // never to render a cause. Nothing logs it either: this branch returns
+      // before the handler runs. The cause is carried for a debugger attached
+      // to a live process; do not contort a test into "killing" it.
       return errorResult(
         new InstagramError(validationMessage(spec, parsed.error, validKeys), {
           kind: 'validation',
@@ -504,17 +526,43 @@ function registerOne(
 
     // 2. Resolve the profile inside the active-account context so nested code
     //    (currentAccount()) sees the right account.
+    //    Equivalent-mutant note: `??` cannot be distinguished from `||` here.
+    //    The two operators differ only on a falsy-but-not-nullish left side, and
+    //    the only such value for a string is `''`. `args` is `parsed.data`, so
+    //    `account` has already passed `accountField` (`z.string().min(1)`) —
+    //    `''` fails that parse and returns above, at the `!parsed.success`
+    //    branch, before this line runs. The injected selector also wins the
+    //    shape merge (`{ ...spec.input, account: accountField }`), so no spec
+    //    can loosen it. Nothing can reach this expression with an empty string;
+    //    do not contort a test into "killing" it.
     const name = args.account ?? deps.defaultProfileName;
     return withAccount(name, async () => {
       const log = deps.log.child({ tool: spec.name, account: name });
       // 2a. One structured line per invocation, from the spec's own `logFields`
       //     declaration. Never throws; see logInvocation.
+      //     Equivalent-mutant note: moving this call inside the `try` below is
+      //     not observable. The only thing the `try` adds is the catch that maps
+      //     a throw to `errorResult`, and `logInvocation` is total — it wraps
+      //     the `logFields` call, the redactor and the sink, and its inner catch
+      //     swallows even a sink that throws while reporting the first failure
+      //     (that containment is itself pinned by four tests). Relative order
+      //     against `resolveProfile` is unchanged either way, so no observer —
+      //     the sink, the result, or the account context — can tell the two
+      //     placements apart; do not contort a test into "killing" it.
       logInvocation(spec, args, log, redact);
       try {
         const profile = resolveProfile(deps.profiles, name);
 
         // 3. Call-time capability guard (defense in depth — filtering already
         //    excluded a mismatched tool at registration).
+        //    Equivalent-mutant note: the `' or '` separator below cannot be
+        //    distinguished from `', '`. It is only visible with two or more
+        //    entries in `spec.paths`, and `AuthPath` is the closed two-member
+        //    union `'ig-login' | 'fb-login'` — a two-entry `paths` therefore
+        //    contains every possible `profile.authPath`, so this branch is
+        //    unreachable whenever more than one path is listed. Only the
+        //    single-entry case can reach the message, and `join` emits no
+        //    separator for it; do not contort a test into "killing" it.
         if (spec.paths !== undefined && !spec.paths.includes(profile.authPath)) {
           return errorResult(
             new InstagramError(

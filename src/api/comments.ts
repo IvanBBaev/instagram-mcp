@@ -109,7 +109,20 @@ interface RawCommentDetail extends RawComment {
   media?: { id: string; media_type?: string; permalink?: string };
 }
 
-/** Flatten Graph's inline `replies` edge to a plain (recursive) array. */
+/**
+ * Flatten Graph's inline `replies` edge to a plain (recursive) array.
+ *
+ * Three Graph answers stay three domain answers: no `replies` key means "not
+ * disclosed" (CC-DATA-2) and stays absent; `{ data: [] }` means "read, and there
+ * are none" and becomes `[]`; `{}` is the first case in the second's clothes and
+ * must not leak the envelope into a field typed as an array.
+ *
+ * Equivalent-mutant note: routing the recursive call through
+ * {@link normalizeCommentDetail} changes NO output — the two bodies are
+ * identical up to their declared parameter/return types, and both copy whatever
+ * keys the payload actually carries. See the note on that function; no
+ * assertion over the returned value can separate the two.
+ */
 function normalizeComment(raw: RawComment): Comment {
   const { replies, ...rest } = raw;
   const comment: Comment = { ...rest };
@@ -127,6 +140,12 @@ function normalizeComment(raw: RawComment): Comment {
  * only widens `Comment` with optional fields, so the narrower return type still
  * assigns and the swap even compiles. No assertion over the returned value can
  * separate the two — do not contort a test into "killing" it.
+ *
+ * The same equivalence covers every other place the two normalizers can be
+ * swapped: delegating this whole body to {@link normalizeComment}, mapping the
+ * reply array through this function instead, and calling {@link normalizeComment}
+ * at the `getComment` call site below. All four produce byte-identical output for
+ * every possible payload; they differ only in which types the seam declares.
  *
  * The second function earns its place by keeping the types honest at the seam:
  * `replies` is `Comment[]`, because the reply field set never asks for

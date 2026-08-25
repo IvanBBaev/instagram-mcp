@@ -56,6 +56,11 @@ export async function createMediaContainer(
   params: CreateContainerParams,
 ): Promise<{ id: string }> {
   const p: Record<string, string | number | boolean | undefined> = {};
+  // Equivalent-mutant note: every arm below is guarded by an exact `!== undefined`
+  // test, so a `??` fallback on the right-hand side (`params.mediaType ?? 'IMAGE'`,
+  // `params.caption ?? ''`, …) is unreachable and cannot change a single request.
+  // Defaults for these fields deliberately do not live here: they belong at the
+  // tool layer, where they show up in the preview an operator approves.
   if (params.mediaType !== undefined) p.media_type = params.mediaType;
   if (params.imageUrl !== undefined) p.image_url = params.imageUrl;
   if (params.videoUrl !== undefined) p.video_url = params.videoUrl;

@@ -121,6 +121,16 @@ const hashtagMediaOutput = z
 
 const businessMediaOutput = hashtagMediaOutput;
 
+// Equivalent-mutant note: swapping `.passthrough()` for `.strict()` on
+// `businessOutput` below is not observable from anywhere. `instagram_discover_business`
+// declares `output: businessOutput.shape`, and `.shape` yields only the raw
+// key -> schema map; the unknown-keys mode lives on the wrapper and is dropped
+// there. `mcp/registry.ts` then hands that raw shape to the SDK unchanged
+// (`outputSchema` deliberately stays a raw shape), so nothing downstream can
+// ever see this setting. Worth knowing rather than "fixing" blind: unlike
+// `budgetOutput` and `hashtagMediaOutput`, which are embedded as schemas and do
+// keep their passthrough, CC-DATA-7 (additive Meta fields survive structured
+// output) has no effect at the top level of this one tool's result.
 const businessOutput = z
   .object({
     id: z.string().optional(),

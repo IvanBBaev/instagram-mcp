@@ -68,6 +68,15 @@ const commentDetailOutput = z
       .optional(),
     replies: z.array(commentOutput).optional(),
   })
+  // Equivalent-mutant note: this outer `.passthrough()` cannot be observed —
+  // flipping it to `.strict()` changes nothing anywhere. `commentDetailOutput` is
+  // module-private and its only use is `commentDetailOutput.shape` (get_comment's
+  // `output`), and the registry hands that raw shape to the SDK rather than this
+  // object (src/mcp/registry.ts, `config.outputSchema = spec.output`). The
+  // object-level `unknownKeys` setting is therefore never consulted: nothing
+  // parses through this schema, so no result, request or log line can differ. It
+  // is kept for symmetry with the sibling schemas and to stay correct if a future
+  // caller does parse through it. Do not contort a test into 'killing' it.
   .passthrough();
 
 const taggedMediaOutput = z
@@ -97,6 +106,14 @@ function commentToRecord(c: Comment): Record<string, unknown> {
   return rec;
 }
 
+// Equivalent-mutant note: calling `commentToRecord` here instead is
+// unobservable. The two bodies are byte-identical, and the extra `CommentDetail`
+// fields (`hidden`, `parent_id`, `media`) are carried by the `{ ...c }` spread
+// rather than by any per-field code, so both functions emit exactly the same
+// record for the same input — same fenced fields, same untouched fields, same key
+// order. Only the static parameter type differs, and that has no runtime effect.
+// The separate function exists so the detail shape can diverge later (e.g. if
+// `media.caption` ever needs fencing). Do not contort a test into 'killing' it.
 function commentDetailToRecord(c: CommentDetail): Record<string, unknown> {
   const rec: Record<string, unknown> = { ...c };
   if (c.text !== undefined) rec.text = fence(c.text);
@@ -269,6 +286,15 @@ const listTaggedMediaTool = defineTool({
     hasCursor: args.after !== undefined,
   }),
   handler: async (args, ctx) => {
+    // Equivalent-mutant note: `??` and `||` cannot be told apart here. They differ
+    // only for a falsy-but-defined `accountId`, and the sole falsy string is `''`,
+    // which no `ResolvedProfile` can carry: every path that populates it runs the
+    // value through `clean()` (src/core/config.ts) or the equivalent trim in
+    // src/cli/login.ts, and those turn empty/whitespace input into `undefined`
+    // before a profile object exists. The distinguishing input is unreachable, and
+    // manufacturing a profile with `accountId: ''` would only pin the malformed
+    // path `//tags` as expected behaviour — worse than the mutant.
+    // Do not contort a test into 'killing' it.
     const igId = ctx.profile.accountId ?? 'me';
     const page = await listTaggedMedia(ctx.req, {
       igId,

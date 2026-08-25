@@ -98,6 +98,13 @@ export async function listLinkedAccounts(req: IgRequestFn): Promise<LinkedAccoun
     params: { fields: 'name,instagram_business_account{id,username}' },
     host: 'graph.facebook.com',
   });
+  // Equivalent-mutant note: `??` and `||` cannot be told apart on this line.
+  // `data` is either a JSON array — always truthy, so both operators pass it
+  // through, empty or not — or an absent/null key, which both replace with `[]`.
+  // Graph has no third form for a list edge, so the falsy-but-not-nullish values
+  // the two operators disagree about (`0`, `''`, `false`, `NaN`) never arrive.
+  // `??` is kept because it states the narrower intent: substitute for a MISSING
+  // edge, never for a legitimately empty one.
   return (res.data ?? []).map((page) => ({
     pageId: page.id,
     pageName: page.name,
@@ -150,6 +157,13 @@ export async function debugToken(
     params: { input_token: params.inputToken },
     host: 'graph.facebook.com',
   });
+  // Equivalent-mutant note: `??` and `||` are indistinguishable here too, and
+  // for a stronger reason than at the list edge above. `d` is only ever read
+  // through optional property accesses, so any falsy-but-not-nullish stand-in a
+  // `||` would substitute for (`0`, `''`, `false`, `NaN`) yields `undefined` for
+  // all seven fields — character-for-character the same summary `{}` produces.
+  // No input, well-formed or malformed, separates the two. `??` is kept because
+  // the guard is about a MISSING `data` wrapper, not about a falsy one.
   const d = wire.data ?? {};
   return {
     isValid: d.is_valid,

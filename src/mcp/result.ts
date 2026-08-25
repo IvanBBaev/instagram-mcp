@@ -85,6 +85,15 @@ export function errorResult(err: unknown): ToolResult {
  * delimiters bound the data exactly once.
  */
 export function fence(untrusted: string): string {
+  // Equivalent-mutant note: swapping the order of the two defang passes is not
+  // observable, so there is no test to write for it. Neither delimiter is a
+  // substring of the other, and they cannot overlap — both start with `[` and
+  // both end with `]`, so no proper suffix of one is a prefix of the other.
+  // Neither replacement reintroduces a delimiter either: `[ /UNTRUSTED]` does
+  // not contain FENCE_OPEN, and `[ UNTRUSTED source: …]` does not contain
+  // FENCE_CLOSE. Neither pass can therefore create or destroy an occurrence of
+  // the other's pattern, and the two sets of split boundaries are independent,
+  // so both orders emit byte-identical output for every input.
   const neutralized = untrusted
     .split(FENCE_CLOSE)
     .join(FENCE_CLOSE_DEFANGED)

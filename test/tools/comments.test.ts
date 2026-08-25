@@ -625,3 +625,408 @@ test('an applied create_comment journals the new comment id as the target', asyn
   assert.equal(rec.targetId, 'comment-1');
   assert.notEqual(rec.targetId, 'M1', 'the media is the container, not the thing created');
 });
+
+// --- input schemas: what the registry accepts before a handler runs ---------
+
+test('list_comments bounds every input the caller controls', () => {
+  // The registry parses caller args with this shape and nothing else stands
+  // between a model-supplied value and the Graph path. An empty media id builds
+  // `//comments` — a read against whatever node the token resolves to instead of
+  // the post — an empty cursor is not a cursor, and Graph rejects a page size
+  // outside 1–100 outright, so a wider bound only spends a call to earn a 400.
+  // `fetchAll` has to stay omissible, or the cheap single-page read is unaskable.
+  const shape = z.object(tool('instagram_list_comments').input).strict();
+
+  assert.equal(shape.safeParse({ mediaId: 'M1' }).success, true, 'media id alone is enough');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 100 }).success, true, 'Graph page cap');
+  assert.equal(shape.safeParse({ mediaId: '' }).success, false, 'an empty media id is not an id');
+  assert.equal(shape.safeParse({ mediaId: 'M1', after: '' }).success, false, 'empty cursor');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 0 }).success, false, 'zero page size');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 101 }).success, false, 'over the cap');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 2.5 }).success, false, 'fractional page');
+});
+
+test('get_comment and list_tagged_media bound their own inputs the same way', () => {
+  // Each tool declares its own copy of these constraints, so each one can drift
+  // on its own: an empty comment id turns a targeted read into a request for
+  // whatever `/` resolves to, and a limit above Graph's cap is a guaranteed 400
+  // that still costs a call against the account's rate-limit budget.
+  const get = z.object(tool('instagram_get_comment').input).strict();
+  assert.equal(get.safeParse({ commentId: 'C1' }).success, true);
+  assert.equal(get.safeParse({ commentId: '' }).success, false, 'an empty comment id');
+
+  const tagged = z.object(tool('instagram_list_tagged_media').input).strict();
+  assert.equal(tagged.safeParse({ limit: 100 }).success, true);
+  assert.equal(tagged.safeParse({ limit: 101 }).success, false, 'over the Graph page cap');
+  assert.equal(tagged.safeParse({ after: '' }).success, false, 'empty cursor');
+});
+
+test('write tools take apply as an optional boolean, and the toggle demands a direction', () => {
+  // `apply` is the consent flag. It has to be omissible or preview-by-default is
+  // unaskable, and it has to be a boolean — typed as a string, the value "false"
+  // arrives truthy and the gate reads a refusal as consent. `enabled` is the
+  // mirror image: with no direction supplied the toggle has to invent one, and
+  // inventing `true` re-opens comments on a post someone deliberately closed.
+  const writes = [
+    'instagram_reply_to_comment',
+    'instagram_create_comment',
+    'instagram_hide_comment',
+    'instagram_unhide_comment',
+    'instagram_delete_comment',
+    'instagram_set_comments_enabled',
+  ];
+  for (const name of writes) {
+    const applyShape = tool(name).input.apply;
+    assert.ok(applyShape, `${name} declares apply`);
+    assert.equal(applyShape.safeParse(undefined).success, true, `${name}: apply is optional`);
+    assert.equal(applyShape.safeParse(true).success, true, `${name}: apply is a boolean`);
+    assert.equal(applyShape.safeParse('true').success, false, `${name}: apply rejects a string`);
+  }
+
+  const toggle = z.object(tool('instagram_set_comments_enabled').input).strict();
+  assert.equal(toggle.safeParse({ mediaId: 'M1', enabled: false }).success, true);
+  assert.equal(toggle.safeParse({ mediaId: 'M1' }).success, false, 'no direction, no write');
+});
+
+// --- output schemas: what a client validates structuredContent against ------
+
+test('the list_comments output schema keeps every field the handler emits, plus unknown ones', () => {
+  // The registry publishes this shape as the tool's outputSchema, so an MCP client
+  // validates real results against it: whatever the schema drops is stripped or
+  // rejected before the model ever sees it. A comment node without an id is not
+  // addressable by any moderation tool, `text` is the field Meta most often omits
+  // (CC-DATA-2), a forgotten `note` hides the pager's give-up, and Meta adds edge
+  // fields without notice (CC-DATA-7) — which must widen the answer, not fail it.
+  const shape = z.object(tool('instagram_list_comments').output ?? {});
+
+  const parsed = shape.parse({
+    items: [{ id: 'c1', text: fence('hi'), username: fence('bob'), is_reply: false }],
+    paging: { truncated: true, after: 'A1', total_count: 12 },
+    note: 'the walk gave up',
+  }) as {
+    items: Array<Record<string, unknown>>;
+    paging: Record<string, unknown>;
+    note?: string;
+  };
+  assert.equal(parsed.items[0]?.is_reply, false, 'an additive field on a comment survives');
+  assert.equal(parsed.paging.total_count, 12, 'and on paging too');
+  assert.equal(parsed.note, 'the walk gave up', 'the give-up reason reaches the client');
+
+  assert.equal(
+    shape.safeParse({ items: [{ id: 'c1' }], paging: { truncated: false } }).success,
+    true,
+    'id alone is enough — every other comment field is optional',
+  );
+  assert.equal(
+    shape.safeParse({ items: [{ text: fence('anon') }], paging: { truncated: false } }).success,
+    false,
+    'a comment node with no id is rejected',
+  );
+  assert.equal(
+    shape.safeParse({ items: [], paging: {} }).success,
+    false,
+    'paging must always state whether the read was truncated',
+  );
+});
+
+test('the get_comment output schema carries moderation state, thread context and unknown fields', () => {
+  // Drop `parent_id` and a reply is indistinguishable from a top-level comment,
+  // so a model moderating a thread cannot tell what it is answering or what it
+  // would be deleting the context of. Close the nested `media` object and any
+  // field Meta adds there fails the whole read rather than riding along.
+  const shape = z.object(tool('instagram_get_comment').output ?? {});
+
+  const parsed = shape.parse({
+    id: 'C1',
+    text: fence('a comment'),
+    hidden: true,
+    parent_id: 'P1',
+    media: { id: 'M1', media_type: 'IMAGE', owner: { id: '999' } },
+    replies: [{ id: 'r1', text: fence('sub') }],
+  }) as {
+    hidden?: boolean;
+    parent_id?: string;
+    media?: Record<string, unknown>;
+    replies?: unknown[];
+  };
+  assert.equal(parsed.hidden, true, 'whether the comment is already hidden');
+  assert.equal(parsed.parent_id, 'P1', 'and which comment it hangs under');
+  assert.deepEqual(parsed.media?.owner, { id: '999' }, 'unknown nested media fields survive');
+  assert.equal(parsed.replies?.length, 1);
+});
+
+test('the list_tagged_media output schema keeps caption-less posts, the tagger, and unknown fields', () => {
+  // Tagged posts are routinely caption-less, so requiring `caption` fails exactly
+  // the reads the schema is meant to describe. `username` is the point of the
+  // /tags edge — who tagged this account: stripped from the schema, the model
+  // gets a list of media ids with nobody to attribute, reply to or report.
+  const shape = z.object(tool('instagram_list_tagged_media').output ?? {});
+
+  const parsed = shape.parse({
+    items: [{ id: 't1', username: fence('friend'), thumbnail_url: 'https://cdn/t1.jpg' }],
+    paging: { truncated: false },
+  }) as { items: Array<Record<string, unknown>> };
+  assert.equal(parsed.items[0]?.username, fence('friend'), 'the tagger survives');
+  assert.equal(parsed.items[0]?.thumbnail_url, 'https://cdn/t1.jpg', 'and an additive field');
+  assert.equal(
+    shape.safeParse({ items: [{ id: 't1', username: 42 }], paging: { truncated: false } }).success,
+    false,
+    'the tagger is a declared string, not an untyped key riding through passthrough',
+  );
+  assert.equal(
+    shape.safeParse({ items: ['t1'], paging: { truncated: false } }).success,
+    false,
+    'items are media objects, not bare ids',
+  );
+});
+
+// --- log fields: the audit trail for each call ------------------------------
+
+test('the read tools log which object was read and how wide the read was', () => {
+  // These lines are what an operator matches against a rate-limit incident or a
+  // "why did the model see that comment?" question. Logging the cursor where the
+  // media id belongs makes the entry point at a position instead of a post, and a
+  // full-walk read logged as a single page hides the one call that spent up to
+  // MAX_PAGES of the shared quota. `fetchAll` states false rather than nothing.
+  const list = tool('instagram_list_comments').logFields;
+  assert.ok(list);
+  assert.deepEqual(list({ mediaId: 'M1', limit: 5, after: 'CUR', fetchAll: true }), {
+    mediaId: 'M1',
+    limit: 5,
+    fetchAll: true,
+    hasCursor: true,
+  });
+  assert.deepEqual(list({ mediaId: 'M1' }), {
+    mediaId: 'M1',
+    limit: undefined,
+    fetchAll: false,
+    hasCursor: false,
+  });
+
+  const get = tool('instagram_get_comment').logFields;
+  assert.ok(get);
+  assert.deepEqual(get({ commentId: 'C1' }), { commentId: 'C1' });
+});
+
+test('every write tool logs its target and a stated apply decision', () => {
+  // The write log is the only record of an *attempted* mutation — the journal
+  // only ever receives the ones that ran. `apply` defaulting to true would make
+  // an audit read every preview as a performed write, so the count of writes an
+  // operator reconstructs from logs is wrong in the dangerous direction; and a
+  // toggle entry with no `enabled` says commenting on a post was changed without
+  // saying which way.
+  const cases: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    [
+      'instagram_reply_to_comment',
+      { commentId: 'C1', message: 'hi' },
+      { commentId: 'C1', apply: false },
+    ],
+    ['instagram_create_comment', { mediaId: 'M1', message: 'hi' }, { mediaId: 'M1', apply: false }],
+    ['instagram_hide_comment', { commentId: 'C1' }, { commentId: 'C1', apply: false }],
+    ['instagram_unhide_comment', { commentId: 'C1' }, { commentId: 'C1', apply: false }],
+    ['instagram_delete_comment', { commentId: 'C1' }, { commentId: 'C1', apply: false }],
+    [
+      'instagram_set_comments_enabled',
+      { mediaId: 'M1', enabled: false },
+      { mediaId: 'M1', enabled: false, apply: false },
+    ],
+  ];
+  for (const [name, args, expected] of cases) {
+    const fn = tool(name).logFields;
+    assert.ok(fn, `${name} declares logFields`);
+    assert.deepEqual(fn(args), expected, `${name} logs a preview as a preview`);
+    assert.equal(fn({ ...args, apply: true }).apply, true, `${name} logs an applied write`);
+  }
+});
+
+// --- handler wiring: what actually reaches Graph ----------------------------
+
+test('both listings forward the caller cursor and never confuse it with the object id', async () => {
+  // `after` and the object id address different things: one is a position inside
+  // an edge, the other is the post (or the account). A cursor that reaches the
+  // path reads a node that is not the post at all; a cursor that never reaches
+  // the query makes every "next page" call return page one, so a model walking a
+  // busy thread loops over the same comments until it gives up or runs the
+  // account into its rate limit.
+  const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
+  await tool('instagram_list_comments').handler({ mediaId: 'M1', after: 'CUR' }, makeCtx(req));
+  assert.equal(calls[0]?.path, '/M1/comments', 'the media id builds the path');
+  assert.equal(calls[0]?.params?.after, 'CUR', 'and the cursor rides in the query');
+
+  const { req: req2, calls: calls2 } = fakeReq(() => ({ data: [], paging: {} }));
+  await tool('instagram_list_tagged_media').handler({ after: 'TCUR' }, makeCtx(req2));
+  assert.equal(calls2[0]?.path, '/999/tags');
+  assert.equal(calls2[0]?.params?.after, 'TCUR');
+});
+
+test('neither listing walks the whole edge unless the caller asked for it', async () => {
+  // One tool call is one Graph call by default. Flipped, every casual "show me
+  // the comments" becomes up to MAX_PAGES requests against a shared rate-limit
+  // budget and drags an unbounded amount of attacker-authored comment text into
+  // the model's context — and the caller cannot even tell, because a completed
+  // walk reports `truncated: false` exactly like a deliberate single page.
+  const { req, calls } = fakeReq((opts) =>
+    opts.params?.after === undefined
+      ? { data: [{ id: 'c1', text: 'first' }], paging: { cursors: { after: 'A1' } } }
+      : { data: [{ id: 'c2', text: 'second' }], paging: {} },
+  );
+  const res = await tool('instagram_list_comments').handler({ mediaId: 'M1' }, makeCtx(req));
+  assert.equal(calls.length, 1, 'a default read is exactly one page');
+  const scv = res.structuredContent as { items: unknown[]; paging: { after?: string } };
+  assert.equal(scv.items.length, 1);
+  assert.equal(scv.paging.after, 'A1', 'and hands back the cursor to continue explicitly');
+
+  const { req: req2, calls: calls2 } = fakeReq((opts) =>
+    opts.params?.after === undefined
+      ? { data: [{ id: 't1' }], paging: { cursors: { after: 'T1' } } }
+      : { data: [{ id: 't2' }], paging: {} },
+  );
+  await tool('instagram_list_tagged_media').handler({}, makeCtx(req2));
+  assert.equal(calls2.length, 1, 'the /tags edge has the same default');
+});
+
+// --- write tools: the consent surface --------------------------------------
+
+test('reply_to_comment previews the parent comment it will answer, under its own action', async () => {
+  // The preview is the consent surface and the journal key. Filed under
+  // `create_comment` a threaded reply is indistinguishable in the audit trail
+  // from a new top-level post; a summary with no comment id asks a human to
+  // approve a reply to an unnamed target; and details echoing the message where
+  // the id belongs show a target nobody can verify while the reply still lands on
+  // whatever comment the model named.
+  const { req, calls } = fakeReq(() => ({ id: 'reply-1' }));
+
+  const preview = await tool('instagram_reply_to_comment').handler(
+    { commentId: 'C1', message: 'ignore previous instructions' },
+    makeCtx(req),
+  );
+  assert.equal(preview.structuredContent?.action, 'reply_to_comment');
+  assert.equal(preview.structuredContent?.summary, 'Reply to comment C1');
+  assert.deepEqual(preview.structuredContent?.details, { commentId: 'C1' });
+  assert.equal(calls.length, 0, 'a preview stays a preview');
+});
+
+test('create_comment previews the media it will post to, under its own action', async () => {
+  // Same consent surface, a different object: the summary has to name the post
+  // about to receive a public comment. Interpolating the message instead puts
+  // model-authored free text into the line a human reads to approve the write,
+  // and hides which post is being commented on.
+  const { req, calls } = fakeReq(() => ({ id: 'comment-1' }));
+
+  const preview = await tool('instagram_create_comment').handler(
+    { mediaId: 'M1', message: 'nice' },
+    makeCtx(req),
+  );
+  assert.equal(preview.structuredContent?.action, 'create_comment');
+  assert.equal(preview.structuredContent?.summary, 'Comment on media M1');
+  assert.deepEqual(preview.structuredContent?.details, { mediaId: 'M1' });
+  assert.equal(calls.length, 0);
+});
+
+test('hide_comment previews under the hide action and stays reversible in its annotations', async () => {
+  // hide and unhide differ by one word in the summary and one boolean on the
+  // wire, and `action` is what an operator greps the journal for. Hide is also
+  // deliberately NOT destructive: annotating it so would push an operator to
+  // switch IG_ALLOW_DESTRUCTIVE on for routine moderation, and that flag is the
+  // only thing standing between the model and a permanent delete.
+  const { req, calls } = fakeReq(() => ({ success: true }));
+
+  const preview = await tool('instagram_hide_comment').handler({ commentId: 'C1' }, makeCtx(req));
+  assert.equal(preview.structuredContent?.action, 'hide_comment');
+  assert.deepEqual(preview.structuredContent?.details, { commentId: 'C1' });
+  assert.equal(calls.length, 0);
+
+  for (const name of [
+    'instagram_hide_comment',
+    'instagram_unhide_comment',
+    'instagram_set_comments_enabled',
+    'instagram_reply_to_comment',
+    'instagram_create_comment',
+  ]) {
+    assert.notEqual(tool(name).annotations.destructiveHint, true, `${name} is reversible`);
+  }
+});
+
+test('set_comments_enabled previews the direction it is about to apply', async () => {
+  // `details` is the machine-readable half of the consent surface and the half
+  // the journal keeps. Without `enabled`, both the approval prompt and the audit
+  // entry record that commenting on the post was changed without recording
+  // whether it was opened or closed — the one bit the write is about.
+  const { req } = fakeReq(() => ({ success: true }));
+
+  const preview = await tool('instagram_set_comments_enabled').handler(
+    { mediaId: 'M1', enabled: false },
+    makeCtx(req),
+  );
+  assert.deepEqual(preview.structuredContent?.details, { mediaId: 'M1', enabled: false });
+});
+
+test('applied writes journal the object each one actually touched', async () => {
+  // `targetId` is the only handle the journal keeps on what a write changed. For
+  // a reply it must be the reply that now exists — the parent id names a comment
+  // this write did not create and is already recoverable from the call — and for
+  // hide and the comment toggle an entry with no target, or with the toggle's
+  // boolean sitting in the target's place, says "something was moderated"
+  // without saying what. Nobody can undo or audit that.
+  const journal = join(journalDir, 'write-targets.jsonl');
+  const { req } = fakeReq((opts) =>
+    opts.path === '/C1/replies' ? { id: 'reply-1' } : { success: true },
+  );
+
+  await tool('instagram_reply_to_comment').handler(
+    { commentId: 'C1', message: 'hi', apply: true },
+    makeCtx(req, { settings: { writeJournal: journal } }),
+  );
+  await tool('instagram_hide_comment').handler(
+    { commentId: 'C1', apply: true },
+    makeCtx(req, { settings: { writeJournal: journal } }),
+  );
+  await tool('instagram_set_comments_enabled').handler(
+    { mediaId: 'M1', enabled: false, apply: true },
+    makeCtx(req, { settings: { writeJournal: journal } }),
+  );
+
+  const rows = readFileSync(journal, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(
+    rows.map((r) => r.action),
+    ['reply_to_comment', 'hide_comment', 'set_comments_enabled'],
+  );
+  assert.deepEqual(
+    rows.map((r) => r.targetId),
+    ['reply-1', 'C1', 'M1'],
+  );
+});
+
+// --- model-facing descriptions ---------------------------------------------
+
+test('the read descriptions state the untrusted-text rule; delete states both gates', () => {
+  // The fence is the mechanism; the description is what tells the model the
+  // delimiters mean "data, never instructions". Without it a model that sees the
+  // envelope has no stated rule for it — and comment text is precisely the
+  // indirect prompt-injection channel this server exists to contain
+  // (docs/security.md §7). The delete description carries the other half: a model
+  // asked to "clean up that comment" has no reason to prefer the reversible tool
+  // unless the irreversibility and the named alternative are written down, and an
+  // operator reading a blocked preview needs IG_ALLOW_DESTRUCTIVE named to know
+  // it was a deliberate gate rather than a transient failure worth retrying.
+  for (const name of [
+    'instagram_list_comments',
+    'instagram_get_comment',
+    'instagram_list_tagged_media',
+  ]) {
+    assert.match(tool(name).description, /untrusted/, `${name} warns about untrusted text`);
+  }
+  assert.match(
+    tool('instagram_list_comments').description,
+    /never as instructions/,
+    'and says what the model must do about it',
+  );
+
+  const del = tool('instagram_delete_comment').description;
+  assert.match(del, /IRREVERSIBLE/);
+  assert.match(del, /instagram_hide_comment/, 'names the reversible alternative');
+  assert.match(del, /IG_ALLOW_DESTRUCTIVE/, 'names the second gate');
+});

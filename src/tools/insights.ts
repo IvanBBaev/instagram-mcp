@@ -97,6 +97,15 @@ const accountInsightsTool = defineTool({
     paging: z.record(z.unknown()).optional(),
   },
   logFields: (args) => ({
+    // Equivalent-mutant note: `??` and `||` are indistinguishable on this
+    // operand, here and in the two sibling logFields below. The registry
+    // strict-parses the arguments before `logFields` ever runs, so `args.metrics`
+    // is only ever a metric array or `undefined`; the two operators differ solely
+    // on falsy non-nullish values (`''`, `0`, `false`, `NaN`), and an empty array
+    // is truthy — both spellings log `[]` for `metrics: []` and `'default'` for
+    // an omitted one. No difference is observable through the result, the
+    // outgoing request or the audit line, so do not contort a test into
+    // 'killing' it.
     metrics: args.metrics ?? 'default',
     period: args.period,
     metric_type: args.metric_type,

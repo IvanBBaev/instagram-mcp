@@ -169,6 +169,13 @@ export async function fetchPagedEdge<TRaw, T>(
   // AND hides the overflow. The `Math.max(0, …)` clamp is defensive only — every
   // cap <= 0 behaves identically against a length — and mirrors the same
   // expression in `api/discovery.ts`, where a negative cap WOULD reach Graph.
+  //
+  // Equivalent-mutant note: dropping the `Math.max(0, …)` is not observable from
+  // here, for exactly that reason — `items.length` starts at 0 and only grows, so
+  // every `length >= cap` below answers identically for a cap of 0 and for any
+  // negative cap (and a NaN cap survives the clamp unchanged). It is kept because
+  // it is what makes the three `>=` comparisons safe, and because the next caller
+  // to forward this cap to Graph as `limit` gets a valid value for free.
   const cap = Math.max(0, Math.floor(params.maxItems));
   const items: T[] = [];
   let cursor = params.after;
@@ -192,15 +199,30 @@ export async function fetchPagedEdge<TRaw, T>(
     }
     pageIndex += 1;
 
+    // Equivalent-mutant note: `??` and `||` cannot be told apart on this line.
+    // `data` is either an array — always truthy, so both operators keep it, empty
+    // or not — or an absent/null key, which both replace. `??` is used because it
+    // states the intent exactly: substitute for a MISSING edge, never for a
+    // legitimately empty one.
     const data = page.data ?? [];
     let overflowed = false;
     let added = 0;
     for (const item of data) {
+      // Equivalent-mutant note: `===` would behave identically here. `items`
+      // starts empty, grows by exactly one per iteration, and is re-checked
+      // before every push, so it lands ON the cap and can never step past it.
+      // `>=` is the property this guard actually relies on rather than a
+      // restatement of that invariant, and it is the form that still holds if a
+      // negative cap ever reaches this line.
       if (items.length >= cap) {
         overflowed = true;
         break;
       }
       items.push(normalize(item));
+      // Equivalent-mutant note: `added` is only ever compared against 0 (the
+      // no-progress guard below), so the direction it counts in is not
+      // observable — every non-zero total behaves alike. It counts up because it
+      // is a count.
       added += 1;
     }
     const nextAfter = page.paging?.cursors?.after;
@@ -211,6 +233,9 @@ export async function fetchPagedEdge<TRaw, T>(
       if (overflowed) truncated = true;
       break;
     }
+    // Equivalent-mutant note: `===` is again indistinguishable, because the item
+    // loop above cannot push past the cap — but `>=` is the condition this branch
+    // depends on ("we have all we are allowed to keep"), not a coincidence of it.
     if (items.length >= cap) {
       // Capped: truncated only when more data genuinely remains (CC-DATA-4).
       if (overflowed || nextAfter !== undefined) {
@@ -228,6 +253,10 @@ export async function fetchPagedEdge<TRaw, T>(
       note =
         'a page returned no items while more remained (filtered or deleted) — resume from `after`';
     } else if (pageIndex >= MAX_PAGES) {
+      // Equivalent-mutant note: `pageIndex` rises by exactly one per page and the
+      // walk breaks the moment this fires, so it can never overshoot MAX_PAGES —
+      // `===` would agree. `>=` is written because this is a ceiling, not a
+      // checkpoint: it must hold for every page at or beyond the limit.
       note = `stopped after ${MAX_PAGES} pages (per-call page ceiling) — resume from \`after\``;
     }
     if (note !== undefined) {
@@ -308,5 +337,8 @@ export async function getMediaChildren(
     path: `/${params.mediaId}/children`,
     params: { fields: CHILD_FIELDS },
   });
+  // Equivalent-mutant note: as in the paged walk, `??` and `||` are
+  // indistinguishable — a present `data` is an array and therefore truthy, and
+  // both operators substitute `[]` for a missing or null edge.
   return res.data ?? [];
 }

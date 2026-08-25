@@ -3,7 +3,7 @@
  * {@link IgRequestFn} that records the outgoing {@link IgRequestOptions} and
  * returns canned Graph payloads — no network, no fetch stub needed.
  */
-import { test } from 'node:test';
+import { after as afterAll, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InstagramError } from '../../src/core/types.js';
 import type { IgRequestFn, IgRequestOptions } from '../../src/core/types.js';
@@ -13,6 +13,34 @@ import {
   listLinkedAccounts,
   summarizeTokenExpiry,
 } from '../../src/api/account.js';
+
+/**
+ * The only seam this layer may use is the injected {@link IgRequestFn}, and
+ * every test below hands it a fake. Poisoning the global transport makes that
+ * structural rather than conventional: this package reads the operated account
+ * and introspects the access token, so code that reached for `fetch` directly —
+ * or a helper that quietly fell back to it — would ship the operator's live
+ * credential to Meta from a test run. It dies offline here instead. Restored in
+ * `after()` so nothing leaks into another test file.
+ */
+const realFetch = globalThis.fetch;
+globalThis.fetch = () => {
+  throw new Error('api/account unit tests must never touch the network');
+};
+afterAll(() => {
+  globalThis.fetch = realFetch;
+});
+
+/**
+ * The exact profile field set this layer must ask Graph for, pinned
+ * character-for-character and deliberately duplicated from the source rather
+ * than imported. Graph answers with exactly the fields it was asked for, so a
+ * field that quietly falls out of the selection is not an error anywhere: the
+ * call succeeds, `get_account` renders, and the operator simply sees a blank
+ * follower count or a missing bio and concludes the account has none.
+ */
+const ACCOUNT_FIELDS =
+  'username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count';
 
 /** Build a fake request seam that records calls and returns `responder(opts)`. */
 function stubReq(responder: (opts: IgRequestOptions) => unknown): {
@@ -45,15 +73,19 @@ test('getAccount requests the documented field set and maps snake_case → camel
   const profile = await getAccount(req, { igId: '178414' });
 
   assert.equal(calls.length, 1);
-  const opts = calls[0]!;
-  assert.equal(opts.method, 'GET');
-  assert.equal(opts.path, '/178414');
-  assert.equal(
-    opts.params?.fields,
-    'username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count',
-  );
-  // No explicit host — the active auth provider's default is used.
-  assert.equal(opts.host, undefined);
+  // The WHOLE options object is pinned, not method/path/params one field at a
+  // time. `host`, `idempotent` and `body` are optional, so adding one is
+  // invisible to the compiler and to every per-field assertion — yet each is a
+  // real incident: an explicit `host` would send the access token (and, on
+  // Path B, the `appsecret_proof` derived from the app secret) to a host the
+  // operator never configured, `idempotent: false` would silently switch off
+  // retry on 429/5xx for a plain read, and a `body` on a GET would make the
+  // client attach a form payload to a read.
+  assert.deepEqual(calls[0], {
+    method: 'GET',
+    path: '/178414',
+    params: { fields: ACCOUNT_FIELDS },
+  });
 
   assert.deepEqual(profile, {
     id: '178414',
@@ -69,15 +101,42 @@ test('getAccount requests the documented field set and maps snake_case → camel
 });
 
 test('getAccount tolerates omitted fields (CC-DATA-2)', async () => {
+  // Every absent field stays absent — none of them may acquire a fabricated
+  // default. A `?? 0` on a count is the worst of these: Meta omits
+  // `followers_count` / `media_count` when the metric is unavailable, and a
+  // reported 0 is indistinguishable from a real zero. The operator reads "0
+  // followers" or "0 posts" for a healthy account and concludes the account was
+  // wiped, or the model reports a collapse in reach that never happened.
   const { req, calls } = stubReq(() => ({ id: '999' }));
 
   const profile = await getAccount(req, { igId: 'me' });
 
   assert.equal(calls[0]!.path, '/me');
-  assert.equal(profile.id, '999');
-  assert.equal(profile.username, undefined);
-  assert.equal(profile.biography, undefined);
-  assert.equal(profile.followersCount, undefined);
+  assert.deepEqual(profile, {
+    id: '999',
+    username: undefined,
+    name: undefined,
+    biography: undefined,
+    website: undefined,
+    profilePictureUrl: undefined,
+    followersCount: undefined,
+    followsCount: undefined,
+    mediaCount: undefined,
+  });
+});
+
+test('getAccount sends an empty igId as-is instead of falling back to `me`', async () => {
+  // `igId` comes from `IG_ACCOUNT_ID` (via the tool layer's `accountId ?? 'me'`),
+  // and an empty value there means the operator's config is broken. Substituting
+  // `me` for it turns that broken config into a successful read of whichever
+  // account owns the token — the operator sees plausible numbers, never learns
+  // the configured id was ignored, and cannot tell the two accounts apart from
+  // the response. A request for `/` fails loudly at Graph, which is the point.
+  const { req, calls } = stubReq(() => ({ id: '178414' }));
+
+  await getAccount(req, { igId: '' });
+
+  assert.equal(calls[0]!.path, '/');
 });
 
 test('getAccount percent-encodes igId so a crafted id cannot forge a second path segment', async () => {
@@ -107,11 +166,18 @@ test('listLinkedAccounts hits /me/accounts on graph.facebook.com and maps rows',
 
   const linked = await listLinkedAccounts(req);
 
-  const opts = calls[0]!;
-  assert.equal(opts.method, 'GET');
-  assert.equal(opts.path, '/me/accounts');
-  assert.equal(opts.host, 'graph.facebook.com');
-  assert.equal(opts.params?.fields, 'name,instagram_business_account{id,username}');
+  // Whole-shape pin again. Two things here are load-bearing beyond method/path:
+  // the host MUST stay graph.facebook.com — the Page graph only exists there, and
+  // the tool's `paths: ['fb-login']` capability guard is written on the assumption
+  // that this call agrees with it; and no `idempotent: false` may creep in, or a
+  // 429 during the login flow stops being retried and the operator is told they
+  // have no linked Pages. A `body` on this GET would be equally silent.
+  assert.deepEqual(calls[0], {
+    method: 'GET',
+    path: '/me/accounts',
+    params: { fields: 'name,instagram_business_account{id,username}' },
+    host: 'graph.facebook.com',
+  });
 
   assert.deepEqual(linked, [
     { pageId: 'page1', pageName: 'Acme Page', igId: 'ig1', igUsername: 'acme' },
@@ -164,11 +230,20 @@ test('debugToken parses the { data } envelope on graph.facebook.com', async () =
 
   const info = await debugToken(req, { inputToken: 'EAAsecret' });
 
-  const opts = calls[0]!;
-  assert.equal(opts.method, 'GET');
-  assert.equal(opts.path, '/debug_token');
-  assert.equal(opts.host, 'graph.facebook.com');
-  assert.equal(opts.params?.input_token, 'EAAsecret');
+  // This is the one call in the package that carries a credential in the query
+  // string, so its shape is pinned whole. The token must travel as `input_token`
+  // and nowhere else: an extra `access_token` key here would put the inspected
+  // token in the slot the auth provider owns, and a `body` would move a secret
+  // into a request body that the client only builds for writes. The host must
+  // stay graph.facebook.com — `debug_token` exists nowhere else, and dropping the
+  // pin would ship the token to graph.instagram.com on Path A. `idempotent` stays
+  // unset so this read keeps its default retry behaviour.
+  assert.deepEqual(calls[0], {
+    method: 'GET',
+    path: '/debug_token',
+    params: { input_token: 'EAAsecret' },
+    host: 'graph.facebook.com',
+  });
 
   assert.deepEqual(info, {
     isValid: true,
@@ -279,6 +354,123 @@ test('summarizeTokenExpiry: a token expiring exactly now is expired and still re
     daysLeft: 0,
     warning: `Token expired at ${expiresAt}; run the \`login\` CLI to obtain a new one.`,
   });
+});
+
+test('summarizeTokenExpiry: an expired token reports whole days elapsed, rounded down', () => {
+  // `daysLeft` goes negative once the token is dead, and it must keep rounding
+  // DOWN there rather than toward zero: the number is how long the credential has
+  // been unusable, and truncation under-reports every partial day by one. An
+  // operator reconciling "publishing broke on the 6th" against a report that says
+  // the token has been dead for 5 days concludes the outage has another cause and
+  // keeps looking, instead of rotating the credential.
+  const now = 100 * DAY;
+  const expiresAtMs = now - 5 * DAY - DAY / 2;
+  const expiresAt = new Date(expiresAtMs).toISOString();
+
+  const s = summarizeTokenExpiry({
+    expiresAtSec: expiresAtMs / 1000,
+    nowMs: now,
+    refreshAfterDays: 45,
+  });
+
+  assert.deepEqual(s, {
+    state: 'expired',
+    expiresAt,
+    daysLeft: -6,
+    warning: `Token expired at ${expiresAt}; run the \`login\` CLI to obtain a new one.`,
+  });
+});
+
+test('summarizeTokenExpiry: a negative expiry is expired, never "never expires"', () => {
+  // Only the exact value `0` carries `debug_token`'s "never expires" meaning. A
+  // negative `expires_at` is corrupt input — a clock-skewed or hand-edited
+  // credential record — and folding it into the never-expires branch is the most
+  // dangerous possible misreading: `doctor` would report a permanent token,
+  // suppress every refresh warning for good, and the operator would find out only
+  // when publishing starts failing with no prior signal.
+  const expiresAt = new Date(-DAY).toISOString();
+
+  const s = summarizeTokenExpiry({ expiresAtSec: -86_400, nowMs: 0, refreshAfterDays: 45 });
+
+  assert.deepEqual(s, {
+    state: 'expired',
+    expiresAt,
+    daysLeft: -1,
+    warning: `Token expired at ${expiresAt}; run the \`login\` CLI to obtain a new one.`,
+  });
+});
+
+test('summarizeTokenExpiry: a token with hours left is expiring_soon, not expired', () => {
+  // Expiry is decided on the instant, not on the day count. A token valid for
+  // another twelve hours rounds to `daysLeft: 0`, and treating that 0 as "already
+  // expired" declares a working credential dead: `doctor` fails, the operator
+  // burns a rotation, and — worse — a still-publishable account looks broken
+  // during exactly the window when the last posts before expiry matter most.
+  const now = 100 * DAY;
+  const expiresAtMs = now + DAY / 2;
+  const expiresAt = new Date(expiresAtMs).toISOString();
+
+  const s = summarizeTokenExpiry({
+    expiresAtSec: expiresAtMs / 1000,
+    nowMs: now,
+    refreshAfterDays: 45,
+  });
+
+  assert.deepEqual(s, {
+    state: 'expiring_soon',
+    expiresAt,
+    daysLeft: 0,
+    warning: `Token expires at ${expiresAt} (~0 day(s) left); run the \`refresh\` or \`login\` CLI.`,
+  });
+});
+
+test('summarizeTokenExpiry: one day past the threshold is still plain valid', () => {
+  // The warning boundary is inclusive but must not creep outward. A threshold
+  // that fires a day early is not harmless: `token_status` is what the model
+  // reads before deciding what to do next, and a standing "expires soon, run the
+  // refresh CLI" on a token with a month and a half of runway trains both the
+  // operator and the model to ignore the warning — so the one that matters, 45
+  // days later, is ignored too.
+  const now = 100 * DAY;
+  const expiresAtMs = now + 46 * DAY;
+
+  const s = summarizeTokenExpiry({
+    expiresAtSec: expiresAtMs / 1000,
+    nowMs: now,
+    refreshAfterDays: 45,
+  });
+
+  assert.deepEqual(s, {
+    state: 'valid',
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    daysLeft: 46,
+  });
+});
+
+test('summarizeTokenExpiry: the warning threshold is the caller-supplied one, not a fixed 45', () => {
+  // `refreshAfterDays` is operator policy (`IG_REFRESH_AFTER_DAYS`) and the whole
+  // point of it is that rotation cadence differs per deployment. Pinning the
+  // comparison to the default value silently ignores that setting in BOTH
+  // directions: a team that rotates weekly gets no warning until day 45 — long
+  // after their own window closed — and a team that asked for 90 days of notice
+  // gets none until it is far too late to schedule the change.
+  const now = 100 * DAY;
+
+  const tight = summarizeTokenExpiry({
+    expiresAtSec: (now + 10 * DAY) / 1000,
+    nowMs: now,
+    refreshAfterDays: 7,
+  });
+  assert.equal(tight.state, 'valid');
+  assert.equal(tight.warning, undefined);
+
+  const generous = summarizeTokenExpiry({
+    expiresAtSec: (now + 60 * DAY) / 1000,
+    nowMs: now,
+    refreshAfterDays: 90,
+  });
+  assert.equal(generous.state, 'expiring_soon');
+  assert.ok(generous.warning?.includes('~60 day(s) left'));
 });
 
 test('InstagramError from req propagates unchanged through the api layer', async () => {

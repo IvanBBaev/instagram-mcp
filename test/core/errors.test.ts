@@ -310,3 +310,40 @@ test('every token-shaped substring in a message is stripped, not just the first'
   const err = mapGraphError(400, envelope({ message: `first ${a} second ${b} end` }));
   assert.equal(err.message, 'first [redacted] second [redacted] end');
 });
+
+// --- InstagramError itself (src/core/types.ts) ------------------------------
+
+test('the error names itself, so it stays identifiable once the class is gone', () => {
+  // `isInstagramError` is an `instanceof` check, and `instanceof` is exactly what
+  // does not survive a boundary: a stack trace written to the stderr log, a
+  // crash report, a `String(err)` interpolated into an MCP error frame. On the
+  // other side of any of those, `name` is the only thing left that separates a
+  // mapped Graph failure from an arbitrary JS bug — it is what an operator greps
+  // for, and what tells them to go read docs/operations.md rather than a
+  // stack. Pinned on the rendered forms too, since those are what actually ship.
+  const err = new InstagramError('token expired', { kind: 'auth', status: 401 });
+  assert.equal(err.name, 'InstagramError');
+  assert.equal(String(err), 'InstagramError: token expired');
+  assert.ok(err.stack?.startsWith('InstagramError: token expired'));
+});
+
+test('an error with no cause carries no cause property at all, not an undefined one', () => {
+  // `new Error(msg, { cause: undefined })` is not the same as `new Error(msg)`:
+  // the options form installs an OWN `cause` property whose value is undefined,
+  // so `'cause' in err` flips from false to true. That distinction is the one
+  // every error renderer keys on — `util.inspect` (and therefore anything that
+  // console-logs the error) prints a trailing `[cause]: undefined` block, and
+  // serializers that walk `while ('cause' in e)` step into a dead end instead of
+  // stopping. The result is a diagnostic that claims there was an underlying
+  // failure to look at when there was none.
+  const bare = new InstagramError('validation failed', { kind: 'validation' });
+  assert.equal('cause' in bare, false);
+  assert.deepEqual(Object.getOwnPropertyNames(bare).includes('cause'), false);
+
+  // The other direction: a real cause must still be chained, or the mutation is
+  // "killed" by an assertion that would also pass on an error that drops causes.
+  const root = new Error('socket hang up');
+  const chained = new InstagramError('upstream failed', { kind: 'upstream', cause: root });
+  assert.equal('cause' in chained, true);
+  assert.equal(chained.cause, root);
+});

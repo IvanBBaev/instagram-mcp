@@ -41,6 +41,12 @@ export async function searchHashtag(
     params: { user_id: params.igId, q: params.query },
     host: 'graph.facebook.com',
   });
+  // Equivalent-mutant note: swapping `??` for `||` here (and at the matching
+  // `res.data ?? []` in getHashtagMedia) is not observable. The two differ only
+  // for a value that is falsy but NOT nullish — `0`, `''`, `false`, `NaN` — and
+  // `data` arrives as a JSON array or not at all; Graph has no third form for it.
+  // `??` is kept because it states the narrower intent: only a MISSING array is
+  // defaulted, a present-but-empty one is passed through as itself.
   return res.data ?? [];
 }
 
@@ -120,6 +126,16 @@ export async function getHashtagMedia(
   req: IgRequestFn,
   params: HashtagMediaParams,
 ): Promise<PagedHashtagMedia> {
+  // Equivalent-mutant note: dropping the `Math.floor` here changes no observable
+  // behaviour. `cap` reaches exactly two consumers and both are blind to a
+  // fraction. For a fractional cap `f` with `Math.floor(f) === n`, an integer
+  // page length L satisfies `L > n` exactly when `L > f`, because no integer lies
+  // strictly between n and f — so `data.length > cap` is unchanged; and
+  // `Array.prototype.slice` applies ToIntegerOrInfinity, which truncates f to n
+  // anyway. Negative and NaN inputs are already flattened by the `Math.max`. The
+  // floor stays because it makes the intent explicit and because the identical
+  // expression in `discoverBusiness` IS observable — there the value is
+  // interpolated into `media.limit(<cap>)` and Graph reads the text literally.
   const cap = Math.max(0, Math.floor(params.maxItems));
   const edgePath = params.edge === 'top' ? 'top_media' : 'recent_media';
   const res = await req<GraphListResponse<HashtagMediaItem>>({

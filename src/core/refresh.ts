@@ -107,6 +107,12 @@ function parseBody(text: string): unknown {
 export function createTokenExchange(
   deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): TokenExchangeFn {
+  // Equivalent-mutant note: `??` vs `||` is unobservable on `fetchImpl` — the
+  // only value a caller can supply besides a function is `undefined` (or `null`
+  // from JS), and both operators fall back on both. `timeoutMs` below is the
+  // opposite case and is pinned by a test: `0` is a legitimate budget that `||`
+  // would silently promote to 30 s. Do not contort a test into "killing" this
+  // one by casting a non-function transport through the seam.
   const doFetch = deps.fetchImpl ?? globalThis.fetch;
   const timeoutMs = deps.timeoutMs ?? EXCHANGE_TIMEOUT_MS;
 
@@ -218,6 +224,11 @@ export async function refreshToken(params: RefreshParams): Promise<RefreshResult
     });
   }
 
+  // Equivalent-mutant note: as with `deps.fetchImpl` in `createTokenExchange`,
+  // `??` vs `||` cannot be observed here — a `TokenExchangeFn` is never falsy,
+  // so `undefined` is the only value that reaches the fallback either way. The
+  // `??` stays because "only an absent transport is defaulted" is the intent;
+  // do not contort a test into "killing" it.
   const exchange = params.exchange ?? createTokenExchange();
   const wire = await exchange<TokenExchangeWire>({ host, path, params: query });
 
@@ -252,6 +263,13 @@ export function needsRefresh(
   thresholdDays: number,
 ): boolean {
   if (summary.state === 'never') return false;
+  // Equivalent-mutant note: folding this guard into the comparison below as
+  // `(summary.daysLeft ?? Number.MAX_SAFE_INTEGER) <= thresholdDays` produces
+  // the identical answer for every reachable threshold — "infinitely many days
+  // left" never satisfies `<=`, which is the same `false` the guard returns. It
+  // stays explicit because the unknown-expiry rule is a documented decision
+  // (CC-AUTH-7), not a side effect of a sentinel; do not contort a test into
+  // "killing" it.
   if (summary.daysLeft === undefined) return false;
   return summary.daysLeft <= thresholdDays;
 }

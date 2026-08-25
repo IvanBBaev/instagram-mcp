@@ -156,6 +156,16 @@ export function imageUrlFormatWarning(url: string): string | undefined {
   } catch {
     return undefined;
   }
+  // The extension is read from the RAW path — percent-escapes are not decoded, so
+  // `/pic%2Epng` has no extension here. That is deliberate: this is a hint, never
+  // proof, and the absence of a warning must not be read as "the URL is a JPEG".
+  //
+  // Caller-order dependency (undocumented until now): every caller in
+  // `src/tools/publishing.ts` runs `assertHttpsUrl` BEFORE this function, and an
+  // `https:` pathname always begins with `/`. So in production `dot === 0` cannot
+  // happen and `dot === -1` only means "path with no dot". The guard is written for
+  // the general case because this function is exported and pure; validate in the
+  // other order and both branches become reachable with attacker-chosen schemes.
   const dot = pathname.lastIndexOf('.');
   if (dot === -1) return undefined;
   const ext = pathname.slice(dot + 1).toLowerCase();

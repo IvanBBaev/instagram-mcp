@@ -76,14 +76,17 @@ interface Recorded {
   msg: string;
   fields?: Record<string, unknown>;
 }
-function recordingLog(): { log: Logger; warns: Recorded[]; debugs: Recorded[] } {
+function recordingLog(): { log: Logger; warns: Recorded[]; debugs: Recorded[]; infos: Recorded[] } {
   const warns: Recorded[] = [];
   const debugs: Recorded[] = [];
+  const infos: Recorded[] = [];
   const log: Logger = {
     debug(msg, fields) {
       debugs.push({ msg, fields });
     },
-    info() {},
+    info(msg, fields) {
+      infos.push({ msg, fields });
+    },
     warn(msg, fields) {
       warns.push({ msg, fields });
     },
@@ -92,7 +95,7 @@ function recordingLog(): { log: Logger; warns: Recorded[]; debugs: Recorded[] } 
       return log;
     },
   };
-  return { log, warns, debugs };
+  return { log, warns, debugs, infos };
 }
 
 function ctxWith(
@@ -570,12 +573,15 @@ test('elicitation: capability present + the human cancels -> refused with reason
 
 test('elicitation: accept without an explicit confirm:true is a refusal (fail closed)', async () => {
   // The form was submitted but the box was left unchecked, or the client sent
-  // no content at all. Neither is consent.
+  // no content at all. Neither is consent. `confirm: 1` is the loose-equality
+  // trap specifically: a client that serializes booleans as numbers must not be
+  // able to buy consent with a truthy value the human never typed.
   for (const answer of [
     { action: 'accept' } as ConfirmAnswer,
     { action: 'accept', content: {} } as ConfirmAnswer,
     { action: 'accept', content: { confirm: false } } as ConfirmAnswer,
     { action: 'accept', content: { confirm: 'true' } } as ConfirmAnswer,
+    { action: 'accept', content: { confirm: 1 } } as ConfirmAnswer,
   ]) {
     const { confirmer } = fakeConfirmer({ answer });
     let ran = false;
@@ -616,7 +622,10 @@ test('elicitation: a transport error is NOT consent — the write is refused and
   assert.equal(res.structuredContent?.reason, 'unavailable');
   assert.equal(warns.length, 1, 'the operator is told the confirmation could not be obtained');
   assert.equal(warns[0]!.fields?.action, 'publish_media');
-  assert.match(String(warns[0]!.fields?.error), /timed out/);
+  // The error's own message, verbatim — no `Error: ` prefix from stringifying
+  // the object. The operator greps this line to tell a timeout apart from a
+  // protocol error, and a wrapped prefix is what makes those greps miss.
+  assert.equal(warns[0]!.fields?.error, 'MCP error -32001: Request timed out');
 });
 
 test('elicitation: a throwing capability probe fails closed without asking', async () => {
@@ -1255,4 +1264,398 @@ test('the journal masks token-shaped text even for a secret that was never regis
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- the journal record identifies WHO performed the write ------------------
+
+test('the journal records the account and the credential path as separate facts', async () => {
+  // They answer two different forensic questions after an unwanted write: which
+  // profile the model selected, and which credential kind actually signed the
+  // call. A record where one field carries the other's value cannot tell the
+  // operator which token to revoke — and `authPath` is the only field naming
+  // the login that has to be re-run after a revocation.
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-who-'));
+  const path = join(dir, 'writes.jsonl');
+  try {
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({
+        settings: { writeJournal: path },
+        profile: { name: 'brand-b', authPath: 'fb-login', accessToken: 'tok' },
+      }),
+      performOk('pub-1'),
+    );
+
+    const rec = JSON.parse(readFileSync(path, 'utf8').trim()) as Record<string, unknown>;
+    assert.equal(rec.account, 'brand-b', 'the selected profile is named');
+    assert.equal(rec.authPath, 'fb-login', 'and so is the credential that signed the call');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a journal I/O failure reports the real errno, not one the gate inflicted', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('errno strings for a file-as-directory are POSIX-specific');
+    return;
+  }
+  // Two separate guarantees in one line of code. First, `existsSync` before
+  // `mkdirSync` keeps the gate from manufacturing its own EEXIST and burying the
+  // real reason the append failed — the operator debugging a dead audit trail
+  // needs "ENOTDIR" (their IG_WRITE_JOURNAL points into a file), not a mkdir
+  // error about a path that plainly exists. Second, the warning carries
+  // `err.message`, not `String(err)`: a leading `Error: ` prefix breaks the
+  // greps and log-shipping filters operators build on this line.
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-errno-'));
+  const filePath = join(dir, 'not-a-dir');
+  writeFileSync(filePath, 'x');
+  const { log, warns } = recordingLog();
+  try {
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({ log, settings: { writeJournal: join(filePath, 'writes.jsonl') } }),
+      performOk('still-ok'),
+    );
+
+    assert.equal(warns.length, 1);
+    const logged = warns[0]?.fields?.error;
+    assert.equal(typeof logged, 'string');
+    const message = typeof logged === 'string' ? logged : '';
+    assert.match(message, /ENOTDIR/, 'the real append failure, not a self-inflicted EEXIST');
+    assert.equal(message.startsWith('Error'), false, "the Error object's own message, unwrapped");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- what the human actually reads in the dialog ----------------------------
+
+test('prompt: a control character becomes a space, so two words cannot be glued together', () => {
+  // Deleting control characters instead of replacing them lets an upstream
+  // string collapse `delete<NUL>comment` into a single token — the human reads
+  // an action name that is not the action being performed.
+  const prompt = buildConfirmPrompt({ action: 'delete\u0000comment', summary: 'x' }, ctxWith());
+  assert.ok(prompt.message.includes('Action:      delete comment\n'), 'the NUL became a space');
+});
+
+test('prompt: padding and repeated whitespace are flattened before the framing is built', () => {
+  // The framing is column-aligned; surviving padding shifts the value out of its
+  // column and lets a caller-supplied action name pose as a different line.
+  const prompt = buildConfirmPrompt(
+    { action: '   publish   media \t\t now   ', summary: 'x' },
+    ctxWith(),
+  );
+  assert.ok(prompt.message.includes('Action:      publish media now\n'), 'flattened and trimmed');
+});
+
+test('prompt: a framing field exactly at the cap is shown whole, with no ellipsis', () => {
+  // The cap is a flood guard, not a truncator: an id or action name that is
+  // exactly 200 characters is legitimate, and appending a "…" to a complete
+  // value tells the human the dialog is hiding something it is not.
+  const exact = 'a'.repeat(200);
+  const prompt = buildConfirmPrompt({ action: exact, summary: 'x' }, ctxWith());
+  assert.ok(prompt.message.includes(`Action:      ${exact}\n`), 'rendered in full');
+  assert.equal(prompt.message.includes('…'), false, 'and not marked as cut');
+});
+
+test('prompt: the description keeps its own budget, not the framing-field cap', () => {
+  // The fenced blob is the only place the human sees WHAT is being written — a
+  // caption, a comment body. Capping it at the 200-character framing budget
+  // would hide the tail of the text being approved while still showing the
+  // approve button, which is exactly the "approved something I never read"
+  // failure docs/security.md §7 exists to prevent.
+  const prompt = buildConfirmPrompt(
+    {
+      action: 'publish_media',
+      summary: `Publish ${'S'.repeat(700)}`,
+      details: { note: 'D'.repeat(400) },
+    },
+    ctxWith(),
+  );
+  assert.ok(prompt.message.includes('S'.repeat(700)), 'the summary keeps its 800-char budget');
+  assert.ok(prompt.message.includes('D'.repeat(400)), 'so do the rendered details');
+});
+
+test('prompt: a credential below the redaction floor does not shred the dialog', () => {
+  // `redactSecrets` is a substring replace. With no length floor, a one- or
+  // two-character token would blank out ordinary words everywhere in the
+  // message — the human would be asked to approve an unreadable prompt, which
+  // is worse than the leak the floor is protecting against.
+  const shortToken: ResolvedProfile = { name: 'default', authPath: 'ig-login', accessToken: 'a' };
+  const prompt = buildConfirmPrompt(intent, ctxWith({ profile: shortToken }));
+  assert.ok(
+    prompt.message.includes('Instagram MCP — confirm a write to Instagram.'),
+    'the framing survives a one-character "secret"',
+  );
+  assert.equal(prompt.message.includes('[redacted]'), false, 'nothing was masked');
+});
+
+test('prompt: every documented id key names the target, including numeric ids', () => {
+  // Each key is the id a different write tool puts in `details`. If one key is
+  // not consulted, that tool's prompt says "(none — this call creates new
+  // content)" for a call that in fact deletes or edits an existing object: the
+  // human approves an untargeted write. Graph also returns ids as JSON numbers,
+  // so a string-only check silently loses the target for those callers.
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ['targetId', { targetId: 'T-1' }, 'T-1'],
+    ['commentId', { commentId: 'C-2' }, 'C-2'],
+    ['mediaId', { mediaId: 'M-3' }, 'M-3'],
+    ['creationId', { creationId: 'R-4' }, 'R-4'],
+    ['creation_id', { creation_id: 'R-5' }, 'R-5'],
+    ['resume_container_id', { resume_container_id: 'U-6' }, 'U-6'],
+    ['containerId', { containerId: 'N-7' }, 'N-7'],
+    ['container_id', { container_id: 'N-8' }, 'N-8'],
+    ['id', { id: '42' }, '42'],
+    ['a numeric id', { mediaId: 17841400000 }, '17841400000'],
+  ];
+  for (const [what, details, expected] of cases) {
+    const prompt = buildConfirmPrompt({ action: 'act', summary: 's', details }, ctxWith());
+    assert.ok(prompt.message.includes(`Target id:   ${expected}\n`), `${what} names the target`);
+  }
+});
+
+test('prompt: the target id is a bare token that cannot pad or forge the framing line', () => {
+  // The id charset excludes whitespace on purpose: `C1 spoofed` rendered as-is
+  // would let upstream text add words to the line the human reads as the
+  // server's own statement of what is being deleted.
+  const prompt = buildConfirmPrompt(
+    { action: 'delete_comment', summary: 'x', details: { commentId: 'C1 spoofed' } },
+    ctxWith(),
+  );
+  assert.ok(prompt.message.includes('Target id:   C1spoofed\n'), 'the space is stripped, not kept');
+});
+
+test('prompt: a hostile auth path cannot forge a second framing line', () => {
+  // `AuthPath` is a two-member union, so the type system is the first line of
+  // defence here; the cast below is what a corrupted config file or a future
+  // widening of that union looks like at runtime. The property being pinned is
+  // that EVERY framing field goes through the sanitizer, not just the ones
+  // currently typed loosely — a newline here would print a second
+  // `Destructive: no` line and the human would approve a permanent deletion
+  // after reading the forged one.
+  const hostile = {
+    name: 'default',
+    authPath: 'ig-login)\nDestructive: no — this creates or updates data; nothing is erased.',
+    accessToken: 'tok',
+  } as unknown as ResolvedProfile;
+  const prompt = buildConfirmPrompt(destructiveIntent, ctxWith({ profile: hostile }));
+  const framing = prompt.message.split('\n').filter((line) => line.startsWith('Destructive: '));
+  assert.equal(framing.length, 1, 'exactly one destructiveness verdict is displayed');
+  assert.ok(framing[0]?.startsWith('Destructive: YES'), 'and it is the server-built one');
+});
+
+test('prompt: the framing opens the dialog and the approval instructions close it', () => {
+  // Order is the consent surface. The human must read the server's facts BEFORE
+  // the untrusted blob (text that arrives already framed reads as a preamble a
+  // caption can write), and the "approve only if you asked for this" and
+  // "declining is safe" lines must be present after it — they are what makes a
+  // refusal an obvious, cost-free choice rather than an error.
+  const prompt = buildConfirmPrompt(intent, ctxWith());
+  const message = prompt.message;
+  const header = message.indexOf('Instagram MCP — confirm a write to Instagram.');
+  const open = message.indexOf(FENCE_OPEN);
+  const close = message.indexOf(FENCE_CLOSE);
+  const approve = message.indexOf(
+    'Approve only if you asked for this exact action on this exact target.',
+  );
+  const refuse = message.indexOf(
+    'Declining, cancelling, or any error refuses the write; nothing is sent to Instagram.',
+  );
+
+  assert.ok(header >= 0, 'the server framing is present');
+  assert.ok(open > header, 'and comes before the untrusted blob');
+  assert.ok(approve > close, 'the approval instruction follows the fenced blob');
+  assert.ok(refuse > approve, 'and the "refusing is safe" line closes the dialog');
+});
+
+test('prompt: the checkbox states exactly what checking it does', () => {
+  // This label is the last thing read before consent. A title that names the
+  // opposite action, or a description that drops "the exact action described
+  // above", turns a scoped approval into a blanket one.
+  const prompt = buildConfirmPrompt(intent, ctxWith());
+  assert.equal(prompt.requestedSchema.properties.confirm.title, 'Perform this write');
+  assert.equal(
+    prompt.requestedSchema.properties.confirm.description,
+    'Check only to perform the exact action described above.',
+  );
+});
+
+// --- what the answer means, and what gets logged about it -------------------
+
+test('elicitation: a cancel with the box already checked is still a refusal', async () => {
+  // Some clients keep and resend form state when the human dismisses the
+  // dialog. Consent is `accept` AND `confirm === true`; reading anything that
+  // is merely "not a decline" as an accept turns closing a window into
+  // approving a write.
+  const { confirmer } = fakeConfirmer({
+    answer: { action: 'cancel', content: { confirm: true } },
+  });
+  let ran = false;
+  const res = await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer }), () => {
+    ran = true;
+    return Promise.resolve({ result: json({ published: 'x' }) });
+  });
+
+  assert.equal(ran, false, 'a dismissed dialog must not perform the write');
+  assert.equal(res.structuredContent?.mode, 'refused');
+  assert.equal(res.structuredContent?.reason, 'cancelled');
+});
+
+test('elicitation: an approval is logged at info, naming the action approved', async () => {
+  // The journal records what the server did; this line records that a HUMAN
+  // said yes, at the default log level. Without it — or logged at debug, below
+  // that level — an operator auditing a disputed write cannot distinguish a
+  // confirmed write from one performed by a client that never asked.
+  const { confirmer } = fakeConfirmer({ answer: { action: 'accept', content: { confirm: true } } });
+  const { log, infos } = recordingLog();
+
+  await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
+
+  const approved = infos.filter((entry) => entry.msg === 'write confirmed by the operator');
+  assert.equal(approved.length, 1, 'the approval is visible at the default level');
+  assert.equal(approved[0]?.fields?.action, 'publish_media', 'and names the action, not its prose');
+});
+
+test('elicitation: a refusal is logged with the answer the human actually gave', async () => {
+  // `answer` and `reason` are deliberately different fields: "cancel" (the
+  // dialog was dismissed) and "cancelled" (how the gate classified it) let an
+  // operator tell a client that is auto-dismissing prompts apart from a human
+  // who keeps declining. Collapsing them loses that signal entirely.
+  const { confirmer } = fakeConfirmer({ answer: { action: 'cancel' } });
+  const { log, infos } = recordingLog();
+
+  await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
+
+  const refused = infos.filter((entry) => entry.msg === 'write refused at the confirmation prompt');
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0]?.fields?.action, 'publish_media');
+  assert.equal(refused[0]?.fields?.answer, 'cancel', 'the raw client answer');
+  assert.equal(refused[0]?.fields?.reason, 'cancelled', "and the gate's verdict, separately");
+});
+
+test('elicitation: a broken capability probe is warned about with the action and raw message', async () => {
+  // The probe is local code, so a throw means our own seam is broken. The
+  // warning is the operator's only clue that every write is now being refused;
+  // it has to name the action and carry the underlying message unwrapped.
+  const { confirmer } = fakeConfirmer({ supportedThrows: true });
+  const { log, warns } = recordingLog();
+
+  await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
+
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0]?.fields?.action, 'publish_media', 'the action, not its summary');
+  assert.equal(warns[0]?.fields?.error, 'capability probe exploded', 'unwrapped, no Error prefix');
+});
+
+test('the refusal note explains the specific reason the write did not happen', async () => {
+  // The note is what the model relays to the user. "Declined" tells them to
+  // re-run and approve; "unavailable" tells them their client is broken and no
+  // amount of approving will help. Flattening every refusal into the declined
+  // wording sends the user into a retry loop against a dead elicitation channel
+  // — and each retry is another chance to approve something by reflex.
+  const declined = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: fakeConfirmer({ answer: { action: 'decline' } }).confirmer }),
+    performOk(),
+  );
+  assert.equal(
+    declined.structuredContent?.note,
+    'Refused at the human confirmation prompt (declined). Nothing was sent to Instagram. ' +
+      'Re-run and approve the prompt to perform it.',
+  );
+
+  const cancelled = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: fakeConfirmer({ answer: { action: 'cancel' } }).confirmer }),
+    performOk(),
+  );
+  assert.equal(
+    cancelled.structuredContent?.note,
+    'Refused at the human confirmation prompt (cancelled). Nothing was sent to Instagram. ' +
+      'Re-run and approve the prompt to perform it.',
+  );
+
+  const unavailable = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: fakeConfirmer({ rejectWith: new Error('timed out') }).confirmer }),
+    performOk(),
+  );
+  assert.equal(
+    unavailable.structuredContent?.note,
+    'Refused at the human confirmation prompt (unavailable). Nothing was sent to Instagram. ' +
+      'The client advertises elicitation but the confirmation request failed or timed out; ' +
+      'the write is refused rather than performed unconfirmed.',
+  );
+});
+
+// --- the preview payload is the model's only description of the write -------
+
+test('preview: the payload restates the caller-supplied summary and details verbatim', async () => {
+  // A preview exists so the model can show the user what WOULD happen before
+  // asking for apply:true. Substituting the action verb for the prose summary,
+  // or dropping the details, means the next turn's "yes, do it" is consent to a
+  // description the user never saw.
+  const res = await withWriteGate(intent, {}, ctxWith(), performOk());
+  assert.equal(res.structuredContent?.summary, 'Publish container 42');
+  assert.deepEqual(res.structuredContent?.details, { id: '42' });
+
+  const bare = await withWriteGate(
+    { action: 'publish_media', summary: 'Publish the pending container' },
+    {},
+    ctxWith(),
+    performOk(),
+  );
+  assert.equal(
+    'details' in (bare.structuredContent ?? {}),
+    false,
+    'a detail-free intent omits the key instead of declaring undefined details',
+  );
+});
+
+test('preview: the note names the exact flag and the exact action needed to apply', async () => {
+  // The note is the instruction the model follows next. Naming the wrong env
+  // value (IG_WRITE_MODE=preview) sends the operator to change a setting that
+  // does nothing, and dropping the action name makes a preview of a delete
+  // indistinguishable from a preview of a publish in the transcript.
+  const res = await withWriteGate(intent, {}, ctxWith(), performOk());
+  assert.equal(
+    res.structuredContent?.note,
+    'Preview only. Re-run with apply:true (or set IG_WRITE_MODE=apply) to perform this ' +
+      'publish_media.',
+  );
+});
+
+test('the destructive block names the action and the exact flag that unblocks it', async () => {
+  // This is the message an operator acts on to unblock a deletion. Telling them
+  // to set IG_ALLOW_DESTRUCTIVE=false, or dropping "then re-run with apply:true",
+  // pushes them to widen the wrong control and retry blindly until something
+  // works — the opposite of a deliberate, informed opt-in.
+  const res = await withWriteGate(destructiveIntent, { apply: true }, ctxWith(), performOk());
+  assert.equal(res.structuredContent?.mode, 'preview');
+  assert.equal(
+    res.structuredContent?.note,
+    'Destructive delete_comment blocked. Set IG_ALLOW_DESTRUCTIVE=true to permit it, then ' +
+      're-run with apply:true.',
+  );
+});
+
+test('apply is a boolean gate: the string "false" is a refusal, not consent', async () => {
+  // Type-level weakening is the realistic attack on this line. `apply` crosses a
+  // JSON boundary, and if the schema ever loosens (or a caller hand-builds the
+  // args) a truthiness test reads the literal string "false" — an explicit
+  // refusal — as consent and performs the write.
+  const args = { apply: 'false' } as unknown as { apply?: boolean };
+  let ran = false;
+  const res = await withWriteGate(intent, args, ctxWith(), () => {
+    ran = true;
+    return Promise.resolve({ result: json({ published: 'x' }) });
+  });
+
+  assert.equal(ran, false, 'a non-boolean apply must never perform the write');
+  assert.equal(res.structuredContent?.mode, 'preview');
 });

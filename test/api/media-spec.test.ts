@@ -5,7 +5,7 @@
  * media_type enum. These encode the SSRF reality — only structural checks are
  * possible before Instagram fetches the URL.
  */
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InstagramError } from '../../src/core/types.js';
 import {
@@ -25,6 +25,26 @@ import {
   MAX_HASHTAGS,
   MAX_MENTIONS,
 } from '../../src/api/media-spec.js';
+
+// --- Hermetic guard ---------------------------------------------------------
+
+/**
+ * This module's whole reason to exist is that the server never fetches a
+ * user-supplied media URL (SSRF policy — docs/security.md): it decides on the
+ * URL *string*, never on what is behind it. A module-level trap makes that
+ * structural rather than a claim in a comment — if any validator here ever grew
+ * a "let me just HEAD the URL to check the format" shortcut, it would be handed
+ * an attacker-chosen URL and would die offline with a named error instead of
+ * quietly turning this process into a request proxy.
+ */
+const realFetch = globalThis.fetch;
+const offlineFetch: typeof fetch = () => {
+  throw new Error('offline: media-spec validators must never fetch a user-supplied URL');
+};
+globalThis.fetch = offlineFetch;
+after(() => {
+  globalThis.fetch = realFetch;
+});
 
 // --- caption analysis -------------------------------------------------------
 
@@ -194,6 +214,65 @@ test('analyzeCaption counts @mentions of capitalised handles', () => {
   });
 });
 
+test('a lone # or @ is punctuation, not a token', () => {
+  // Captions in this product are written by a model and read by a human, and prose
+  // like "call me @ 5pm" is ordinary. If a bare sigil (or a sigil followed by a space)
+  // were counted, every such caption would drift toward the 30/20 caps from noise
+  // alone: the server would start refusing captions Instagram publishes happily, the
+  // refusal names a number the operator cannot reconcile with what they can see, and
+  // there is no override — the post simply does not go out.
+  assert.deepEqual(analyzeCaption('call me @ 5pm # ready'), {
+    codePoints: 21,
+    hashtags: 0,
+    mentions: 0,
+  });
+});
+
+test('analyzeCaption counts handles that begin with a digit, dot, or underscore', () => {
+  // `@_night`, `@2026`, `@.tag` are all handles Instagram issues. A mention pattern
+  // that drops any one class member under-counts silently — the 20-mention guard stops
+  // guarding for exactly the captions that use those handles, so a caption Meta will
+  // reject sails through the free client check and burns one of the day's publishes.
+  // The trailing "@ home" additionally pins that an empty match is never a mention.
+  assert.deepEqual(analyzeCaption('@_night @2026 @.tag @b and mail me @ home'), {
+    codePoints: 41,
+    hashtags: 0,
+    mentions: 4,
+  });
+});
+
+test('the caption is measured exactly as it will be sent, whitespace included', () => {
+  // Nothing trims the caption between here and the Graph request, so the length this
+  // guard measures must be the length Meta receives. Measure a trimmed copy and a
+  // caption that is 2200 visible characters plus padding passes the check and is then
+  // refused at container-create — the one failure mode this whole module exists to
+  // prevent, and the one that costs a publish slot to discover.
+  assert.equal(analyzeCaption('  hi  ').codePoints, 6);
+  assert.throws(
+    () => assertCaptionWithinLimits(` ${'x'.repeat(2200)}`),
+    (e: unknown) =>
+      e instanceof InstagramError &&
+      e.kind === 'validation' &&
+      e.message === 'Caption exceeds 2200 characters (got 2201).',
+  );
+});
+
+test('a caption that breaks several limits is refused for its length first', () => {
+  // The three checks run in a fixed order and the operator only ever sees the first
+  // failure. Length is the one that cannot be fixed by deleting a few tags, so it has
+  // to be reported first; reorder them and a 2408-character caption comes back as a
+  // hashtag complaint, the operator trims tags, resubmits, and is refused again — a
+  // loop that costs a round trip each time and never names the real problem.
+  const tags = Array.from({ length: 31 }, (_v, i) => `#tag${i}`).join(' ');
+  assert.throws(
+    () => assertCaptionWithinLimits(`${'x'.repeat(2201)} ${tags}`),
+    (e: unknown) =>
+      e instanceof InstagramError &&
+      e.kind === 'validation' &&
+      e.message === 'Caption exceeds 2200 characters (got 2408).',
+  );
+});
+
 // --- URL validation ---------------------------------------------------------
 
 test('isHttpsUrl accepts https and rejects http, ftp, and garbage', () => {
@@ -213,6 +292,34 @@ test('assertHttpsUrl throws (validation) naming the field on a non-https URL', (
 
 test('assertHttpsUrl passes for a well-formed https URL', () => {
   assert.doesNotThrow(() => assertHttpsUrl('https://example.com/a.jpg', 'imageUrl'));
+});
+
+test('isHttpsUrl parses the URL instead of matching an "https://" prefix', () => {
+  // The scheme check is the SSRF control (docs/security.md): the server never fetches
+  // these URLs, so "is it https" is decided here once and trusted downstream. A textual
+  // prefix test and a parse disagree in both directions — `HTTPS://` is a perfectly
+  // valid https URL that a prefix test rejects, and a string can start with `https://`
+  // while parsing to something else entirely. Deciding scheme by substring is how a
+  // scheme check gets bypassed, so the parse is pinned here explicitly.
+  assert.equal(isHttpsUrl('HTTPS://cdn.example.com/a.jpg'), true);
+  assert.equal(isHttpsUrl('https:/cdn.example.com/a.jpg'), true);
+  assert.equal(isHttpsUrl('https://'), false);
+});
+
+test('assertHttpsUrl refuses with the exact https-only wording', () => {
+  // This sentence is the entire explanation an operator gets for a refused publish,
+  // and it has to say https — a message that asks for `http://` would send them to
+  // downgrade a working URL, i.e. the server would be instructing the operator to
+  // hand Meta an insecure URL. The field name is what tells them WHICH of imageUrl /
+  // videoUrl / coverUrl was wrong.
+  assert.throws(
+    () => assertHttpsUrl('http://cdn.example.com/a.jpg', 'imageUrl'),
+    (e: unknown) =>
+      e instanceof InstagramError &&
+      e.kind === 'validation' &&
+      e.message ===
+        'imageUrl must be a well-formed https:// URL (Instagram fetches media over HTTPS).',
+  );
 });
 
 test('imageUrlFormatWarning warns on a clearly non-JPEG extension but not on jpg/jpeg', () => {
@@ -269,6 +376,27 @@ test('imageUrlFormatWarning reads the extension after the LAST dot, not the firs
     expectedFormatWarning('png'),
   );
   assert.equal(imageUrlFormatWarning('https://cdn.example.com/photos/summer.v2.jpg'), undefined);
+});
+
+test('the format hint decides on the parsed path, including a path that is only an extension', () => {
+  // `imageUrlFormatWarning` is exported and pure, and nothing in its signature says it
+  // may only be handed an https URL — the scheme guard that makes that true today lives
+  // in the CALLER (src/tools/publishing.ts runs assertHttpsUrl first). An https path
+  // always starts with "/", so these two shapes are only reachable through some other
+  // scheme; they are pinned so the two dot guards keep the meaning they have now and a
+  // future caller that validates in the other order does not silently change the hint.
+  assert.equal(imageUrlFormatWarning('data:png'), undefined);
+  assert.equal(imageUrlFormatWarning('data:.png'), expectedFormatWarning('png'));
+});
+
+test('the format hint reads the raw path and does not decode percent-escapes', () => {
+  // The hint is advisory by design — format is unverifiable until Instagram fetches the
+  // URL — so it deliberately does not reconstruct what the path "really" means. Pinned
+  // because the opposite reading is tempting and would quietly change what an operator
+  // sees in the preview they approve: an escaped `%2E` stays a literal, not a dot, and
+  // the absence of a warning must never be read as proof the image is a JPEG.
+  assert.equal(imageUrlFormatWarning('https://cdn.example.com/pic%2Epng'), undefined);
+  assert.equal(imageUrlFormatWarning('https://cdn.example.com/pic%2Ejpg'), undefined);
 });
 
 test('httpsUrlSchema rejects every non-https URL with its exact message', () => {
@@ -356,4 +484,50 @@ test('userTagSchema bounds BOTH coordinates to 0–1, not just x', () => {
   assert.equal(userTagSchema.safeParse({ username: 'alice', y: 1.5 }).success, false);
   assert.equal(userTagSchema.safeParse({ username: 'alice', y: -0.1 }).success, false);
   assert.equal(userTagSchema.safeParse({ username: 'alice', x: -0.1 }).success, false);
+});
+
+test('containerMediaTypeSchema is exact-case and never coerces an unrecognised value', () => {
+  // The parsed value is forwarded verbatim as the Graph `media_type` param. Accepting a
+  // near-miss spelling means the container is created with a media_type Meta does not
+  // know — a publish slot spent on an opaque upstream error. Coercing one (a zod
+  // `.catch` default, say) is worse: an unrecognised media_type would become REELS, and
+  // the operator's approved preview would no longer describe what was actually posted.
+  for (const bad of ['reels', 'Reels', 'stories', 'carousel', 'REEL', 'CAROUSEL_ALBUM', '']) {
+    assert.equal(
+      containerMediaTypeSchema.safeParse(bad).success,
+      false,
+      `"${bad}" must be rejected`,
+    );
+  }
+});
+
+test('userTagSchema requires the username key and accepts a one-character handle', () => {
+  // Instagram handles can be a single character, so a minimum of two would refuse a
+  // legitimate tag with a message about a username the operator can plainly see is
+  // there. The mirror case matters more: if `username` were optional, a tag with only
+  // coordinates would validate and reach Meta as a user_tags entry with no user in it.
+  assert.equal(userTagSchema.safeParse({ username: 'a' }).success, true);
+  assert.equal(userTagSchema.safeParse({}).success, false);
+  assert.equal(userTagSchema.safeParse({ x: 0.5, y: 0.5 }).success, false);
+});
+
+test('userTagSchema keeps both coordinates and strips unknown keys', () => {
+  // The parse output is what gets JSON.stringify-ed into the Graph `user_tags` param,
+  // so this shape is the wire format. Dropping x or y places every tag at Meta's
+  // default position — the tags are on the post but on the wrong part of the picture,
+  // and nothing errors. Passing unknown keys through is the opposite leak: whatever
+  // extra fields arrived in the tool call would be forwarded to Meta unreviewed.
+  assert.deepEqual(userTagSchema.parse({ username: 'alice', x: 0.25, y: 0.75, note: 'drop me' }), {
+    username: 'alice',
+    x: 0.25,
+    y: 0.75,
+  });
+});
+
+test('userTagSchema rejects NaN coordinates', () => {
+  // NaN passes any `>= 0 && <= 1` reasoning by being false on both sides, and
+  // `JSON.stringify(NaN)` is `null` — so a NaN coordinate would reach Graph as
+  // `{"x":null}` rather than being refused here with a message naming the field.
+  assert.equal(userTagSchema.safeParse({ username: 'alice', x: Number.NaN }).success, false);
+  assert.equal(userTagSchema.safeParse({ username: 'alice', y: Number.NaN }).success, false);
 });

@@ -39,6 +39,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { allTools } from '../../src/tools/index.js';
 import { testSettings } from '../helpers/settings.js';
+import { currentAccount } from '../../src/core/config.js';
+import type { Clock } from '../../src/core/clock.js';
 
 // --- Shared fakes ----------------------------------------------------------
 
@@ -222,6 +224,25 @@ test('buildManifest throws on a spec whose package tag is not a string at all', 
   }
 });
 
+test('the empty-package error names the offending TOOL and says what to fix', () => {
+  // This throws at composition time, before any transport is up, so the thrown
+  // message is the only artefact the operator (or an embedder shipping its own
+  // specs) ever sees. Naming the *package* instead of the tool prints the empty
+  // value that is already known to be wrong and leaves them grepping the whole
+  // surface for it; dropping the instruction leaves them a diagnosis with no
+  // fix. The stakes are not cosmetic: an untagged tool would otherwise land
+  // under a `""` package that no profile can select and no `IG_PACKAGES_DENY`
+  // entry can name — permanently unreachable rather than loudly broken.
+  assert.throws(
+    () => buildManifest([spec({ name: 'instagram_x', package: '   ' })]),
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.message ===
+        "Tool 'instagram_x' has an empty package tag; " +
+          'every ToolSpec must declare a non-empty package.',
+  );
+});
+
 // --- selectPackages --------------------------------------------------------
 
 const v1Manifest: PackageManifest[] = buildManifest(allTools);
@@ -280,6 +301,69 @@ test('selectPackages: a name that is merely a PREFIX of a real package is still 
       isInstagramError(err) &&
       err.kind === 'validation' &&
       /unknown package 'med'/.test(err.message),
+  );
+});
+
+test('selectPackages: a one-character package name is validated, never filtered away', () => {
+  // The token filter drops empty entries so `a,,b` is tolerated — but it must
+  // not drop *short* ones. A name silently discarded before validation would
+  // leave `IG_TOOL_PACKAGES=m` with an empty name list and therefore an empty
+  // active set: the server would start with zero tools and no error at all,
+  // which reads to the operator as a broken build rather than a typo.
+  assert.throws(
+    () => selectPackages(v1Manifest, { IG_TOOL_PACKAGES: 'm' }),
+    (err: unknown) =>
+      isInstagramError(err) && err.kind === 'validation' && /unknown package 'm'/.test(err.message),
+  );
+});
+
+test('selectPackages: the unknown-package error quotes the bad NAME, not the whole selection', () => {
+  // Deployments set long explicit lists. Echoing the entire selection back
+  // ("unknown package 'media,bogus,insights'") tells the operator only that
+  // something in it is wrong and makes them bisect by hand; the one name that
+  // failed is the whole value of the message.
+  assert.throws(
+    () => selectPackages(v1Manifest, { IG_TOOL_PACKAGES: 'media,bogus,insights' }),
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.message.startsWith("IG_TOOL_PACKAGES names unknown package 'bogus';"),
+  );
+});
+
+test('selectPackages: IG_PACKAGES_READONLY can never WIDEN the active surface', () => {
+  // The read-only list is a restriction, never a selector. If marking a package
+  // read-only also activated it, `IG_TOOL_PACKAGES=reader` plus a defensive
+  // `IG_PACKAGES_READONLY=publishing` would hand the model publishing tools
+  // that the reader profile deliberately excludes — the operator's extra
+  // precaution would be what opened the surface.
+  const { active, readonly } = selectPackages(v1Manifest, {
+    IG_TOOL_PACKAGES: 'reader',
+    IG_PACKAGES_READONLY: 'publishing',
+  });
+  assert.deepEqual(
+    [...active].sort(),
+    ['account', 'comments', 'discovery', 'insights', 'media'],
+    'publishing must stay out of the active set',
+  );
+  assert.equal(active.has('publishing'), false);
+  assert.ok(readonly.has('publishing'), 'the name is still carried as read-only');
+});
+
+test('selectPackages: a denied package never lingers in the read-only set either', () => {
+  // The two sets are returned together and read together: `registerTools` looks
+  // up `readonly` per *active* package. Marking a package read-only after deny
+  // has removed it leaves the two views disagreeing about what is deployed —
+  // and any consumer that reports the read-only surface (docs generators, the
+  // startup log) would list a package that is not registered at all.
+  const { active, readonly } = selectPackages(v1Manifest, {
+    IG_TOOL_PACKAGES: 'reader',
+    IG_PACKAGES_DENY: 'comments',
+  });
+  assert.deepEqual([...active].sort(), ['account', 'discovery', 'insights', 'media']);
+  assert.deepEqual(
+    [...readonly].sort(),
+    ['account', 'discovery', 'insights', 'media'],
+    'the read-only set never names a package the deny list removed',
   );
 });
 
@@ -609,10 +693,14 @@ test('account selector is injected and the registered schema is CLOSED, not a ra
   const failure = schema.safeParse({ bogus: 1, alsoBogus: 2 });
   assert.equal(failure.success, false);
   const message = failure.success ? '' : (failure.error.issues[0]?.message ?? '');
-  assert.ok(message.includes('bogus'), 'names the unknown keys');
-  assert.ok(message.includes('alsoBogus'), 'names every unknown key');
-  assert.ok(message.includes('fields'), 'lists the valid keys');
-  assert.ok(message.includes('account'), 'lists the injected account selector');
+  // Pinned whole rather than by substring: the model reads this list to build
+  // its retry, and `[bogusalsoBogus]` (a lost separator) reads as one made-up
+  // argument name, so the model "fixes" a key that was never sent and calls
+  // again with the same two unknown ones.
+  assert.equal(
+    message,
+    'unknown argument(s) [bogus, alsoBogus]; valid arguments: fields, account.',
+  );
 });
 
 test('strict re-validation rejects an unknown argument at call time (CC-CFG-6)', async () => {
@@ -1068,10 +1156,18 @@ test('serverConfirmer: ask() sends a bounded form elicitation and returns the an
 });
 
 test('serverConfirmer: ask() on a server that cannot elicit rejects (never a silent accept)', async () => {
+  // The message is pinned because it is what the operator sees when a write is
+  // refused for lack of a confirmation channel. Calling it a *read* would send
+  // them looking at the wrong half of the config: the fix is the write-mode env
+  // flags (or a client that supports form elicitation), and nothing about reads
+  // is gated here at all.
   const { server } = fakeServer();
   await assert.rejects(
     () => serverConfirmer(server).ask(samplePrompt),
-    (err: unknown) => isInstagramError(err) && err.kind === 'permission',
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.kind === 'permission' &&
+      err.message === 'The connected client cannot be asked to confirm this write.',
   );
 });
 
@@ -1310,7 +1406,11 @@ test('logFields: a throwing logFields does NOT fail the tool call; it degrades t
   assert.equal(invoked(records).length, 0);
   const warns = records.filter((r) => r.level === 'warn');
   assert.equal(warns.length, 1);
-  assert.ok(warns[0]!.msg.includes('log fields could not be built'));
+  // Pinned whole: this line is emitted on a request that *succeeded*, and the
+  // second half is the part that says so. Without it an operator reading the
+  // log sees a warning against a tool call and cannot tell whether the caller
+  // got a result — which is exactly the ambiguity F6 asked us to remove.
+  assert.equal(warns[0]!.msg, 'tool log fields could not be built; the tool call is unaffected');
   assert.ok(String(warns[0]!.fields.error).includes('logFields exploded'));
   assert.equal(warns[0]!.fields.tool, 'instagram_get_account');
 });
@@ -1450,4 +1550,693 @@ test('logFields: a logFields that throws a bare string names the value it threw'
   const warns = records.filter((r) => r.level === 'warn');
   assert.equal(warns.length, 1);
   assert.equal(warns[0]!.fields.error, 'logFields threw a string');
+});
+
+// --- the profile tables are the published contract -------------------------
+
+test('PACKAGE_PROFILES pins the exact package list of every profile', () => {
+  // The profile names are the operator-facing API (README + docs/architecture
+  // §3): `IG_TOOL_PACKAGES=publisher` is how a deployment says "this server may
+  // post, but must not read analytics or search hashtags". Silently adding a
+  // package to a profile widens what a model can call on every deployment that
+  // already opted into that name, and silently dropping one takes a documented
+  // capability away without any error the operator would see. Both are pinned
+  // here by exact member name, not by count.
+  assert.deepEqual(PACKAGE_PROFILES, {
+    core: ['account', 'media', 'publishing', 'comments', 'insights'],
+    reader: ['account', 'media', 'insights', 'comments', 'discovery'],
+    publisher: ['account', 'media', 'publishing', 'comments'],
+  });
+  // Frozen so no importer (a plugin, an embedder, a test) can widen a profile
+  // at runtime: mutating the table would change the tool surface of every
+  // server started afterwards in the same process.
+  assert.ok(Object.isFrozen(PACKAGE_PROFILES), 'the profile table must stay frozen');
+});
+
+test('IG_TOOL_PACKAGES=publisher registers exactly the documented 21-tool surface', () => {
+  // fb-login so the Path-B-only tools (instagram_list_linked_accounts) survive
+  // D1 filtering; publisher is the profile a posting deployment runs with.
+  const { deps } = makeDeps({
+    tools: allTools,
+    profiles: [fbProfile],
+    env: { IG_TOOL_PACKAGES: 'publisher' },
+  });
+  const { registered } = registerTools(deps);
+
+  assert.deepEqual(
+    [...registered].sort(),
+    [
+      'instagram_create_comment',
+      'instagram_create_media_container',
+      'instagram_delete_comment',
+      'instagram_get_account',
+      'instagram_get_comment',
+      'instagram_get_container_status',
+      'instagram_get_media',
+      'instagram_get_publishing_limit',
+      'instagram_hide_comment',
+      'instagram_list_comments',
+      'instagram_list_linked_accounts',
+      'instagram_list_media',
+      'instagram_list_tagged_media',
+      'instagram_post_image',
+      'instagram_post_reel',
+      'instagram_post_story',
+      'instagram_publish_media',
+      'instagram_reply_to_comment',
+      'instagram_set_comments_enabled',
+      'instagram_token_status',
+      'instagram_unhide_comment',
+    ],
+    'publisher exposes exactly these 21 tools (README table)',
+  );
+  // The two packages the profile deliberately withholds: analytics and the
+  // third-party discovery surface a publishing deployment has no business
+  // reaching.
+  for (const name of [
+    'instagram_get_account_insights',
+    'instagram_get_media_insights',
+    'instagram_get_audience_demographics',
+    'instagram_get_online_followers',
+    'instagram_discover_business',
+    'instagram_search_hashtag',
+    'instagram_get_hashtag_media',
+  ]) {
+    assert.equal(registered.includes(name), false, `publisher must not expose '${name}'`);
+  }
+});
+
+// --- env parsing tolerances -------------------------------------------------
+
+test('selectPackages: IG_TOOL_PACKAGES tolerates padding and empty list entries', () => {
+  // Env vars arrive from shell files, Docker `--env-file`, and MCP client JSON,
+  // all of which routinely leave a trailing space or a trailing comma. A
+  // padded profile name that fell through to the explicit-list branch would
+  // abort startup with "unknown package 'reader'", and a blank value that no
+  // longer resolved to `core` would start a server with NO tools at all —
+  // both are outages produced by whitespace.
+  const padded = selectPackages(v1Manifest, { IG_TOOL_PACKAGES: '  reader  ' });
+  assert.deepEqual([...padded.active].sort(), [
+    'account',
+    'comments',
+    'discovery',
+    'insights',
+    'media',
+  ]);
+  assert.deepEqual(
+    [...padded.readonly].sort(),
+    ['account', 'comments', 'discovery', 'insights', 'media'],
+    'a padded reader is still the read-only boundary, not just a package list',
+  );
+
+  const blank = selectPackages(v1Manifest, { IG_TOOL_PACKAGES: '   ' });
+  assert.deepEqual([...blank.active].sort(), [
+    'account',
+    'comments',
+    'insights',
+    'media',
+    'publishing',
+  ]);
+
+  const holes = selectPackages(v1Manifest, { IG_TOOL_PACKAGES: 'media,,insights,' });
+  assert.deepEqual([...holes.active].sort(), ['insights', 'media']);
+});
+
+test('selectPackages: the unknown-package error lists the available packages sorted', () => {
+  // The manifest is only sorted because `buildManifest` sorts it; an embedder
+  // may call `selectPackages` with a hand-built list. This message is the
+  // operator's only clue at startup, so it is pinned whole: a scrambled list
+  // reads as noise, and the profile hint is what tells them `core|reader|
+  // publisher|all` exist at all.
+  const unsorted: PackageManifest[] = [
+    { name: 'media', tools: [] },
+    { name: 'account', tools: [] },
+    { name: 'publishing', tools: [] },
+  ];
+  assert.throws(
+    () => selectPackages(unsorted, { IG_TOOL_PACKAGES: 'bogus' }),
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.kind === 'validation' &&
+      err.message ===
+        "IG_TOOL_PACKAGES names unknown package 'bogus'; available packages: " +
+          'account, media, publishing (or use a profile: core | reader | publisher | all).',
+  );
+});
+
+// --- rejection messages are read by the model, so pin them whole -----------
+
+test('the wrapper names the unknown argument AND the full valid-argument list', async () => {
+  // This message is what a model reads after a bad call, and it is the only
+  // way it learns the closed argument set (CC-CFG-6 rejects unknown args
+  // instead of dropping them). Dropping the key list, dropping the valid list,
+  // or falling into the generic branch all leave the model guessing and it
+  // retries the same call. The `validation` kind is what marks the failure as
+  // the caller's to fix rather than an upstream outage.
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { mediaId: z.string(), fields: z.string().optional() },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 'x', bogus: 1 });
+
+  const message =
+    "Unknown argument(s) [bogus] for tool 'instagram_get_media'; " +
+    'valid arguments: mediaId, fields, account.';
+  assert.equal(res.isError, true);
+  assert.equal(res.content[0]?.text, `Instagram error (validation): ${message}`);
+  assert.deepEqual(res.structuredContent, { error: { kind: 'validation', message } });
+});
+
+test('the wrapper lists SEVERAL unknown arguments as a separated list, not one blob', async () => {
+  // Models routinely send more than one invented argument in a single call.
+  // Rendering them without a separator produces a single token that matches no
+  // argument the model actually sent, so it cannot map the rejection back onto
+  // its own call and retries with the same keys. The separator is the only
+  // thing that makes the list machine-readable.
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { mediaId: z.string(), fields: z.string().optional() },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 'x', bogus: 1, alsoBogus: 2 });
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (validation): Unknown argument(s) [bogus, alsoBogus] ' +
+      "for tool 'instagram_get_media'; valid arguments: mediaId, fields, account.",
+  );
+});
+
+test('the wrapper fallback renders every failed field with its dotted path', async () => {
+  // A tool with a nested object argument fails per field. `a.b` is the path
+  // syntax the caller can act on; a comma would read as two separate fields,
+  // and dropping zod's own message leaves a list of field names with no reason
+  // attached. Multiple issues are separated by `; ` precisely because the
+  // paths and messages already contain commas.
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { filter: z.object({ since: z.string() }), limit: z.number() },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ filter: { since: 5 }, limit: 'x' });
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
+      'filter.since: Expected string, received number; ' +
+      'limit: Expected number, received string.',
+  );
+});
+
+// --- the log payload is a record, or it is nothing -------------------------
+
+/**
+ * A logger that keeps the **raw** second argument of every record instead of
+ * merging it, so a test can tell `{}` from `null` and from an array — the
+ * merging {@link recordingLog} cannot, because `{...null}` and `{...{}}` are
+ * both `{}`.
+ */
+function rawFieldLog(): { log: Logger; lines: { msg: string; fields: unknown }[] } {
+  const lines: { msg: string; fields: unknown }[] = [];
+  const make = (): Logger => ({
+    debug: (msg, fields) => lines.push({ msg, fields }),
+    info: (msg, fields) => lines.push({ msg, fields }),
+    warn: (msg, fields) => lines.push({ msg, fields }),
+    error: (msg, fields) => lines.push({ msg, fields }),
+    child: () => make(),
+  });
+  return { log: make(), lines };
+}
+
+test('logFields: an array payload never reaches the log sink as fields', async () => {
+  // `logFields` is spec-supplied code typed loosely enough to return an array
+  // (a list of ids, say). An array handed to a structured sink serializes as
+  // `{"0":…,"1":…}` — index-keyed junk that buries the tool/account bindings
+  // and, for a JSON-lines sink, produces a record shape no query can read.
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ['first', 'second'] as unknown as Record<string, unknown>,
+  });
+  const { log, lines } = rawFieldLog();
+  const { deps, calls } = makeDeps({ tools: [t], log, redact: (v) => v });
+  registerTools(deps);
+
+  await calls[0]!.cb({});
+
+  const line = lines.find((l) => l.msg === 'tool invoked');
+  assert.ok(line, 'the invocation is still recorded');
+  assert.deepEqual(line.fields, {}, 'an array payload degrades to no fields at all');
+});
+
+test('logFields: a redactor that returns null yields empty fields, never null', async () => {
+  // `redact` is an injected seam returning `unknown`; a scrubber that decides
+  // the whole payload is unsafe may legitimately return null. Passing null
+  // through as the fields object makes the sink dereference it — a logging
+  // failure in the one place that promises never to fail the tool call.
+  const t = spec({ name: 'instagram_get_account', logFields: () => ({ mediaId: '17841' }) });
+  const { log, lines } = rawFieldLog();
+  const { deps, calls } = makeDeps({ tools: [t], log, redact: () => null });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined);
+  const line = lines.find((l) => l.msg === 'tool invoked');
+  assert.ok(line, 'the invocation is still recorded');
+  assert.deepEqual(line.fields, {}, 'null is not a record and must not be forwarded');
+});
+
+test('logFields: only a plain record is ever handed to the redactor', async () => {
+  // The redactor is the F6 control: it walks a record looking for registered
+  // secrets. Handing it a raw non-record (a string a spec returned by mistake)
+  // is outside its contract — a scrubber that assumes an object may throw,
+  // and one that stringifies may echo the very value it was meant to mask.
+  const seen: unknown[] = [];
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => 'not-a-record' as unknown as Record<string, unknown>,
+  });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log: noopLog,
+    redact: (value) => {
+      seen.push(value);
+      return {};
+    },
+  });
+  registerTools(deps);
+
+  await calls[0]!.cb({});
+
+  assert.deepEqual(seen, [{}], 'the redactor only ever sees a record');
+});
+
+test('logFields: the degradation warning reports the redacted MESSAGE of the error', async () => {
+  // Two properties in one line. (1) The warning goes through the redactor: a
+  // `logFields` that throws while interpolating a token would otherwise print
+  // that token into the operator's log — the exact leak F6 exists to prevent.
+  // (2) It reports `err.message`, not `String(err)`: the `Error: ` class
+  // prefix is noise, and a custom Error subclass would put its own class name
+  // in front of the only part an operator can act on.
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => {
+      throw new Error('boom');
+    },
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log,
+    redact: (value) => `<${String(value)}>`,
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined, 'a logging failure never fails the request');
+  const warns = records.filter((r) => r.level === 'warn');
+  assert.equal(warns.length, 1);
+  assert.equal(warns[0]!.fields.error, '<boom>');
+});
+
+// --- registerOne: the injected seams reach the handler unchanged -----------
+
+test('registerOne: a spec cannot shadow the injected account selector', () => {
+  // `account` is the framework's multi-account selector: its value is what the
+  // registry feeds to `withAccount`/`resolveProfile` to pick which credentials
+  // the call runs under. A tool that declared its own `account` (an IG account
+  // *id*, say) would take that slot over, and the registry would resolve a
+  // profile from a value the tool author chose — a call could then execute
+  // against different credentials than the caller named. The framework field
+  // must win, whatever a spec declares.
+  const t = spec({ name: 'instagram_get_account', input: { account: z.number() } });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const schema = calls[0]!.config.inputSchema;
+  assert.ok(schema, 'a schema is registered');
+  assert.equal(schema.safeParse({ account: 'work' }).success, true, 'a profile NAME is accepted');
+  assert.equal(schema.safeParse({ account: 5 }).success, false, 'the spec type must not win');
+});
+
+test('registerOne: the SDK gets the spec title, which is not the tool name', () => {
+  // `title` is the human label a client shows in its tool picker; `name` is the
+  // wire identifier. Collapsing one into the other turns every picker entry
+  // into `instagram_get_media` and loses the only human-readable label the
+  // frozen ToolSpec contract carries.
+  const t = spec({ name: 'instagram_get_media', title: 'Get a media object' });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  assert.equal(calls[0]!.name, 'instagram_get_media');
+  assert.equal(calls[0]!.config.title, 'Get a media object');
+});
+
+test('registerOne: a call with no account arg uses the CONFIGURED default profile', async () => {
+  // The default profile name comes from `IG_ACTIVE_PROFILE` and is frequently
+  // not literally "default" — a deployment naming its profile `work` is the
+  // normal multi-account setup. Hardcoding the fallback would make every
+  // account-less call resolve a profile that does not exist (an error result
+  // on every tool) or, worse, a *different* configured profile.
+  const work: ResolvedProfile = { name: 'work', authPath: 'ig-login', accessToken: 'tok-work' };
+  let seenProfile: ResolvedProfile | undefined;
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: (_args, ctx) => {
+      seenProfile = ctx.profile;
+      return text('ok');
+    },
+  });
+  const { deps, calls, seen } = makeDeps({
+    tools: [t],
+    profiles: [work],
+    defaultProfileName: 'work',
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined);
+  assert.equal(seenProfile?.name, 'work');
+  assert.deepEqual(
+    seen.map((p) => p.name),
+    ['work'],
+    'the request seam is built for the configured default profile',
+  );
+});
+
+test('registerOne: ambient currentAccount() is the account of THIS call', async () => {
+  // `withAccount` is an AsyncLocalStorage: everything nested under the handler
+  // (config lookups, the write journal, log enrichment) reads the account from
+  // it rather than being passed one. If the ambient value were the default
+  // profile while the request seam used the named one, a write performed as
+  // `alt` would be journalled and audited as `default` — the audit trail would
+  // name the wrong account.
+  const alt: ResolvedProfile = { name: 'alt', authPath: 'ig-login', accessToken: 'tok-alt' };
+  let ambient: string | undefined;
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => {
+      ambient = currentAccount();
+      return text('ok');
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t], profiles: [igProfile, alt] });
+  registerTools(deps);
+
+  await calls[0]!.cb({ account: 'alt' });
+
+  assert.equal(ambient, 'alt');
+});
+
+test('the call-time capability refusal names the required auth path and is a permission error', async () => {
+  // A tool survives registration when *some* configured profile can run it, so
+  // this refusal is the guard that fires when the caller pairs it with a
+  // profile that cannot. The message has to name the auth path the tool needs,
+  // otherwise the caller's only recovery is to retry the same call; and the
+  // kind has to be `permission`, because `validation` reads as "your arguments
+  // were wrong" and invites exactly that retry.
+  const fb: ResolvedProfile = {
+    name: 'fb',
+    authPath: 'fb-login',
+    accessToken: 'tok',
+    appId: 'app',
+    appSecret: 'secret',
+  };
+  const t = spec({ name: 'instagram_list_linked_accounts', paths: ['fb-login'] });
+  const { deps, calls } = makeDeps({ tools: [t], profiles: [igProfile, fb] });
+  const { registered } = registerTools(deps);
+  assert.deepEqual(registered, ['instagram_list_linked_accounts'], 'D1 keeps the tool registered');
+
+  const res = await calls[0]!.cb({});
+
+  const message =
+    "Tool 'instagram_list_linked_accounts' is not available on the 'ig-login' auth path " +
+    "(profile 'default'); it requires fb-login.";
+  assert.equal(res.isError, true);
+  assert.equal(res.content[0]?.text, `Instagram error (permission): ${message}`);
+  assert.deepEqual(res.structuredContent, { error: { kind: 'permission', message } });
+});
+
+test('the capability refusal names the account the CALLER asked for, not the default', async () => {
+  // Multi-account deployments are the only ones that reach this branch: the
+  // tool survived registration because *some* profile can run it, and the
+  // refusal fires because the `account` the model picked cannot. Reporting the
+  // default profile's name sends the operator to inspect a profile that was
+  // never involved — and it hides the actual fix, which is to pass the other
+  // account. The auth path in the same sentence is the caller's, so the two
+  // halves must agree.
+  const ig2: ResolvedProfile = { name: 'shop', authPath: 'ig-login', accessToken: 'tok2' };
+  const fb: ResolvedProfile = {
+    name: 'fb',
+    authPath: 'fb-login',
+    accessToken: 'tok',
+    appId: 'app',
+    appSecret: 'secret',
+  };
+  const t = spec({ name: 'instagram_list_linked_accounts', paths: ['fb-login'] });
+  const { deps, calls } = makeDeps({ tools: [t], profiles: [fb, ig2], defaultProfileName: 'fb' });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ account: 'shop' });
+
+  const message =
+    "Tool 'instagram_list_linked_accounts' is not available on the 'ig-login' auth path " +
+    "(profile 'shop'); it requires fb-login.";
+  assert.equal(res.isError, true);
+  assert.equal(res.content[0]?.text, `Instagram error (permission): ${message}`);
+});
+
+test('the tool context carries the injected seams themselves, not per-call copies', async () => {
+  // The context is how a handler reaches shared state: `settings` is the object
+  // the composition root owns (write mode, journal path), and `clock` is the
+  // one seam that makes retry/expiry math deterministic. Copying them is not
+  // free — a spread keeps only *own enumerable* properties, so a Clock whose
+  // methods live on a prototype (any class-based implementation, including a
+  // test double) arrives with no `now()` at all, and every time-dependent tool
+  // throws at runtime.
+  class PrototypeClock implements Clock {
+    now(): number {
+      return 4200;
+    }
+    sleep(): Promise<void> {
+      return Promise.resolve();
+    }
+  }
+  const clock = new PrototypeClock();
+  let received: ToolContext | undefined;
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: (_args, ctx) => {
+      received = ctx;
+      return text('ok');
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t], clock, settings: baseSettings });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined);
+  assert.equal(received?.clock, clock, 'the clock seam is threaded, not cloned');
+  assert.equal(received?.clock.now(), 4200, 'a prototype-backed Clock still works');
+  assert.equal(received?.settings, baseSettings, 'the settings object is threaded, not cloned');
+});
+
+test('the handler receives the child logger bound to tool and account', async () => {
+  // Every line a handler emits has to be attributable: `tool` + `account` are
+  // how an operator ties an HTTP request or a journalled write back to the call
+  // that caused it. Handing the handler the unbound root logger silently drops
+  // both bindings from every line the tool itself writes, while the registry's
+  // own invocation line keeps them — so the trace looks complete and is not.
+  const t = spec({
+    name: 'instagram_get_media',
+    handler: (_args, ctx) => {
+      ctx.log.info('handler ran');
+      return text('ok');
+    },
+  });
+  const { log, records } = recordingLog();
+  const { deps, calls } = makeDeps({ tools: [t], log });
+  registerTools(deps);
+
+  await calls[0]!.cb({ account: 'default' });
+
+  const line = records.find((r) => r.msg === 'handler ran');
+  assert.ok(line, 'the handler line reached the sink');
+  assert.deepEqual(line.fields, { tool: 'instagram_get_media', account: 'default' });
+});
+
+test('handler wrapper: an ASYNC rejection is rendered as an isError result', async () => {
+  // Every real handler is async and rejects rather than throwing
+  // synchronously (an await on the Graph client, a write-gate refusal). If the
+  // handler promise were returned without being awaited inside the try, the
+  // rejection would escape the wrapper entirely: `tools/call` would fail at the
+  // transport level instead of returning a readable error, and the model would
+  // see a protocol error rather than the reason.
+  const t = spec({
+    name: 'instagram_get_media',
+    handler: () => Promise.reject(new InstagramError('rate limited', { kind: 'rate_limit' })),
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(res.content[0]?.text, 'Instagram error (rate_limit): rate limited');
+});
+
+test('handler wrapper: the handler receives the VALIDATED args, defaults applied', async () => {
+  // The wrapper parses before it dispatches, and the parse result is what makes
+  // a spec's declared defaults and coercions real. Passing the raw arguments
+  // through instead would hand the handler `undefined` where it declared a
+  // default — the Graph call would then omit a bounded `limit` (or send a
+  // string where a number was declared) with no validation left to catch it.
+  let received: unknown;
+  const t = spec({
+    name: 'instagram_list_media',
+    input: { limit: z.number().default(25) },
+    handler: (args) => {
+      received = args;
+      return text('ok');
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(received, { limit: 25 });
+});
+
+test('handler wrapper: a non-Instagram throw is mapped to an upstream Instagram error', async () => {
+  // Handlers call third-party code; a `TypeError` from a malformed upstream
+  // payload is the realistic case. Mapping it keeps the caller's contract —
+  // one `Instagram error (<kind>): <message>` line plus a structured `error`
+  // payload a client can branch on. Passing the raw value to the result
+  // builder instead collapses every such failure to the opaque "Unexpected
+  // error" with no structuredContent at all, so nothing downstream can tell
+  // one failure from another.
+  const t = spec({
+    name: 'instagram_get_media',
+    handler: () => {
+      throw new TypeError('cannot read properties of undefined');
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): cannot read properties of undefined',
+  );
+  assert.deepEqual(res.structuredContent, {
+    error: { kind: 'upstream', message: 'cannot read properties of undefined' },
+  });
+});
+
+test('registerTools: with no env injected the PROCESS environment is honoured', async () => {
+  // Production never injects `env` — `index.ts` calls `registerTools` without
+  // it, so `process.env` is the only place `IG_TOOL_PACKAGES` /
+  // `IG_PACKAGES_DENY` / `IG_PACKAGES_READONLY` can come from. A fallback that
+  // ignored the process environment would make every deployment fall back to
+  // the `core` default: the operator's package restriction would be read at
+  // startup, logged as applied, and have no effect on what is registered.
+  const saved = process.env.IG_TOOL_PACKAGES;
+  process.env.IG_TOOL_PACKAGES = 'media';
+  try {
+    const media = spec({ name: 'instagram_list_media', package: 'media' });
+    const insights = spec({ name: 'instagram_get_media_insights', package: 'insights' });
+    const { deps } = makeDeps({ tools: [media, insights] });
+    const depsNoEnv: RegisterToolsDeps = { ...deps };
+    delete depsNoEnv.env;
+
+    const { registered } = registerTools(depsNoEnv);
+
+    assert.deepEqual(registered, ['instagram_list_media']);
+  } finally {
+    if (saved === undefined) delete process.env.IG_TOOL_PACKAGES;
+    else process.env.IG_TOOL_PACKAGES = saved;
+  }
+});
+
+test('registerTools returns the manifest it registered from', () => {
+  // The returned manifest is the server's self-description: the composition
+  // root logs it and the docs-sync test compares it against the published
+  // package tables. An empty (or otherwise disconnected) manifest would make
+  // the server report a tool surface it does not have.
+  const media = spec({ name: 'instagram_list_media', package: 'media' });
+  const insights = spec({ name: 'instagram_get_media_insights', package: 'insights' });
+  const { deps } = makeDeps({ tools: [media, insights] });
+
+  const { manifest } = registerTools(deps);
+
+  assert.deepEqual(
+    manifest.map((p) => ({ name: p.name, tools: p.tools.map((t) => t.name) })),
+    [
+      { name: 'insights', tools: ['instagram_get_media_insights'] },
+      { name: 'media', tools: ['instagram_list_media'] },
+    ],
+  );
+});
+
+test('buildManifest keeps the declaration order of the tools inside a package', () => {
+  // Package order is sorted; order *within* a package is the order the specs
+  // were declared, and that is the order tools are registered in and therefore
+  // the order a client lists them in. A model reads that list top-down, so
+  // reversing it silently reorders the surface — and it would make the
+  // registration order stop matching the docs/fixture tables that are
+  // generated from the same declaration order.
+  const first = spec({ name: 'instagram_list_media', package: 'media' });
+  const second = spec({ name: 'instagram_get_media', package: 'media' });
+  const third = spec({ name: 'instagram_set_comments_enabled', package: 'media' });
+
+  const manifest = buildManifest([first, second, third]);
+
+  assert.deepEqual(
+    manifest[0]?.tools.map((t) => t.name),
+    ['instagram_list_media', 'instagram_get_media', 'instagram_set_comments_enabled'],
+  );
+});
+
+test('registerTools registers in declaration order and reports exactly what it registered', () => {
+  // `registered` is both the startup audit line and the order the client lists
+  // tools in, and the two have to be the same list. If registration walked the
+  // specs in one order and the report in another, the log would stop being
+  // evidence of what is actually reachable — which is the one thing an operator
+  // checks after changing IG_TOOL_PACKAGES or IG_PACKAGES_DENY.
+  const tools = [
+    spec({ name: 'instagram_list_media', package: 'media' }),
+    spec({ name: 'instagram_get_media', package: 'media' }),
+    spec({ name: 'instagram_get_account', package: 'account' }),
+  ];
+  const { deps, calls } = makeDeps({ tools, env: { IG_TOOL_PACKAGES: 'all' } });
+  const { registered } = registerTools(deps);
+
+  // Packages sorted (account before media); declaration order kept inside one.
+  assert.deepEqual(registered, [
+    'instagram_get_account',
+    'instagram_list_media',
+    'instagram_get_media',
+  ]);
+  assert.deepEqual(
+    calls.map((c) => c.name),
+    registered,
+    'the reported list is the list that was actually registered',
+  );
 });

@@ -74,6 +74,49 @@ const JOURNAL_FILE_MODE = 0o600;
 const redactJournalEntry = createRedactor();
 
 /**
+ * Render a caught error as a **log-safe** one-line string. Every `catch` in this
+ * module funnels through here, so "no serialization sink in the write gate
+ * bypasses the redactor" is a property of the module rather than a convention
+ * each call site has to remember (docs/security.md §2; QA finding F6).
+ *
+ * An error message is the riskiest string this gate ever emits: the MCP SDK, the
+ * transport and `node:fs` all compose messages out of URLs and paths, and Graph
+ * carries `access_token` in the query string.
+ *
+ * Two passes, both deliberate:
+ *  - {@link redactSecrets} masks the *active profile's* credentials even when
+ *    they were never registered globally — an embedder that never calls
+ *    `registerSecret`, a test double, a profile resolved after start-up.
+ *  - {@link redactJournalEntry} is a real `core/redact.ts` redactor, so it also
+ *    masks every globally registered secret (a *second* profile's token relayed
+ *    by a shared HTTP layer) and any token-shaped substring that belongs to no
+ *    configured profile at all.
+ *
+ * `String(...)` only re-types the redactor's `unknown` return: a redactor handed
+ * a string always returns a string, so it is a no-op at runtime and adds no
+ * branch. Same shape as `logInvocation` in `mcp/registry.ts`.
+ *
+ * Declared before its first caller; {@link redactSecrets} is a hoisted function
+ * declaration further down, next to the prompt builder it also serves.
+ */
+function logSafeError(err: unknown, profile: ResolvedProfile): string {
+  return scrub(err instanceof Error ? err.message : String(err), profile);
+}
+
+/**
+ * The two redaction passes {@link logSafeError} describes, over one string:
+ * the active profile's credentials first, then the global registry and the
+ * token-shape backstop.
+ *
+ * Callers that also truncate MUST scrub first. Both passes match whole values,
+ * so a cap that cuts a secret in half leaves a prefix neither pass recognizes —
+ * 20 of an app secret's 32 hex digits, printed verbatim.
+ */
+function scrub(value: string, profile: ResolvedProfile): string {
+  return String(redactJournalEntry(redactSecrets(value, profile)));
+}
+
+/**
  * Append one applied-write record to the journal.
  *
  * The journal location (`IG_WRITE_JOURNAL`, default
@@ -98,7 +141,12 @@ const redactJournalEntry = createRedactor();
  * The entry is redacted before it is serialized (see {@link redactJournalEntry}),
  * so the journal is inside the same secret boundary as the log stream (F6).
  */
-function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | undefined): void {
+function recordWrite(
+  intent: WriteIntent,
+  ctx: ToolContext,
+  targetId: string | undefined,
+  status: string | undefined,
+): void {
   try {
     const path = ctx.settings.writeJournal;
     const dir = dirname(path);
@@ -109,17 +157,43 @@ function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | u
       account: ctx.profile.name,
       authPath: ctx.profile.authPath,
       summary: intent.summary,
-      // Equivalent-mutant note: comparing `targetId` against `null` instead of
-      // `undefined` here cannot be observed. The parameter is typed
-      // `string | undefined`, so the two guards differ only in the `undefined`
-      // case, where the mutant spreads `{ targetId: undefined }`;
+      // Equivalent-mutant note (covers both optional fields): comparing
+      // `targetId` or `status` against `null` instead of `undefined` here cannot
+      // be observed. Each parameter is typed `string | undefined`, so the two
+      // guards differ only in the `undefined` case, where the mutant spreads
+      // `{ targetId: undefined }` (or `{ status: undefined }`);
       // `redactJournalEntry` returns an undefined property value unchanged (see
       // `redactValue` in core/redact.ts) and `JSON.stringify` then drops
       // undefined-valued keys, so the bytes appended to the journal are
       // byte-identical either way. Nothing in the result, the request traffic or
       // the log stream can tell the two apart — do not contort a test into
       // "killing" it.
+      //
+      // Measured 2026-09-23, each guard on its own, and the measurement confirms
+      // the REASON rather than only the conclusion. The mutant run was the spread
+      // made unconditional, which for a `string | undefined` operand is exactly
+      // what the `!== null` spelling does: `undefined !== null` is true, so it
+      // spreads `{ targetId: undefined }` in the one case the two spellings could
+      // have differed. The whole suite still passes — including "the journal
+      // carries the outcome a perform reports, and only when it reports one",
+      // the one test that asserts the key is ABSENT, which reads the line back
+      // through `JSON.parse`, where a key `JSON.stringify` never wrote cannot be
+      // told from one it dropped. The same channel kills four journal tests on a
+      // one-word change to `account` in this same object, so the survival
+      // measures the suite and not the suite's reach.
       ...(targetId !== undefined ? { targetId } : {}),
+      // The outcome a `perform` reports for a write that did not do the one
+      // thing its `action` names: the publish flow ends as `published`,
+      // `already_published` (resumed, nothing re-sent) or `in_progress` (still
+      // processing at the deadline), and a `publish_media` journal line that
+      // said only "publish_media, target C1" read as a post going live when the
+      // container was in fact already live or not yet. Only writes with more
+      // than one outcome report one; the key is absent, never `undefined`, for
+      // the rest — same idiom as `targetId`. `status` is not a secret-shaped key
+      // (`redactJournalEntry` masks by key name — see `SECRET_KEY_PATTERN` in
+      // core/redact.ts — and this one does not match), so it survives redaction
+      // as written.
+      ...(status !== undefined ? { status } : {}),
       destructive: intent.destructive === true,
     };
     const safe = redactJournalEntry(entry);
@@ -127,7 +201,10 @@ function recordWrite(intent: WriteIntent, ctx: ToolContext, targetId: string | u
   } catch (err) {
     ctx.log.warn('write journal append failed — the applied write was NOT audited', {
       action: intent.action,
-      error: err instanceof Error ? err.message : String(err),
+      // The failure text is composed by `node:fs` out of the configured journal
+      // path, so it is operator-supplied data — redacted like every other sink
+      // in this module (see {@link logSafeError}).
+      error: logSafeError(err, ctx.profile),
     });
   }
 }
@@ -228,22 +305,30 @@ const TARGET_ID_KEYS = [
 /** Shown when the intent names no existing target (a create-style write). */
 const NO_TARGET = '(none — this call creates new content)';
 
-/** Strip control/format characters, collapse whitespace, cap length: one safe line. */
+/**
+ * Strip control/format characters, collapse whitespace, cap length: one safe line.
+ *
+ * The cap counts UTF-16 code units, so it can land between the two halves of a
+ * surrogate pair (an emoji in a caption). The orphaned high surrogate is itself
+ * a `\p{C}` character — exactly what this function exists to remove — so it is
+ * dropped rather than left at the cut.
+ */
 function sanitizeLine(value: string, max = CONFIRM_FIELD_MAX): string {
   const flat = value.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+  return flat.length > max ? `${flat.slice(0, max).replace(/[\uD800-\uDBFF]$/, '')}…` : flat;
 }
 
-/** The id the write targets, sanitized to an id-safe charset, or {@link NO_TARGET}. */
-function targetIdOf(intent: WriteIntent): string {
+/**
+ * The id the write targets, sanitized to an id-safe charset, or {@link NO_TARGET}.
+ * Scrubbed before the length cap, for the reason {@link scrub} gives.
+ */
+function targetIdOf(intent: WriteIntent, profile: ResolvedProfile): string {
   const details = intent.details;
   if (details !== undefined) {
     for (const key of TARGET_ID_KEYS) {
       const value = details[key];
       if (typeof value !== 'string' && typeof value !== 'number') continue;
-      const id = String(value)
-        .replace(/[^A-Za-z0-9_.:-]/g, '')
-        .slice(0, 64);
+      const id = scrub(String(value).replace(/[^A-Za-z0-9_.:-]/g, ''), profile).slice(0, 64);
       if (id !== '') return id;
     }
   }
@@ -257,6 +342,12 @@ function targetIdOf(intent: WriteIntent): string {
  * ever hold a credential — this is the belt-and-braces pass that makes "the
  * confirmation dialog never echoes the access token or app secret" an enforced
  * property rather than an assumption about every present and future call site.
+ *
+ * The first of the two passes in {@link logSafeError} and in
+ * {@link buildConfirmPrompt}: unlike the global registry, it knows the profile in
+ * hand, so it holds even when nothing registered its secrets. It is deliberately
+ * *not* the only pass — on its own it is blind to every credential this profile
+ * does not own (CC-PROC-20).
  */
 function redactSecrets(message: string, profile: ResolvedProfile): string {
   let out = message;
@@ -281,7 +372,18 @@ function redactSecrets(message: string, profile: ResolvedProfile): string {
  *    caption or comment text that came from Instagram; it goes inside the
  *    standard injection fence (`mcp/result.ts`), which defangs forged
  *    delimiters, and is announced as data rather than instructions.
- * 3. **No secrets.** {@link redactSecrets} runs over the finished message.
+ * 3. **No secrets.** The finished message runs through the same two passes as
+ *    {@link logSafeError}, and for the same reason: this prompt is a *second*,
+ *    independent server→client channel — it travels through `elicitInput`, not
+ *    through a tool result, so the registry's `redactResult` wrapper cannot
+ *    cover it by construction (CC-PROC-20). {@link redactSecrets} masks the
+ *    active profile's credentials even when nothing registered them;
+ *    {@link redactJournalEntry} then masks every *globally* registered secret (a
+ *    second profile's token relayed by a shared HTTP layer) and any token-shaped
+ *    substring belonging to no configured profile at all — the mint→register
+ *    window, and a token Graph echoed back into an error a tool put in its
+ *    summary. Ordering matters: the profile pass runs first so its own
+ *    `[redacted]` marker is what the human sees for the account they selected.
  * 4. **No `default` on the boolean.** A client that honours the
  *    `elicitation.form.applyDefaults` capability could auto-fill a default and
  *    answer on the human's behalf; with no default the only way to get `true` is
@@ -289,12 +391,15 @@ function redactSecrets(message: string, profile: ResolvedProfile): string {
  */
 export function buildConfirmPrompt(intent: WriteIntent, ctx: ToolContext): ConfirmPrompt {
   const destructive = intent.destructive === true;
+  // Every field is scrubbed BEFORE `sanitizeLine` caps it (see {@link scrub}).
+  const line = (value: string, max?: number): string =>
+    sanitizeLine(scrub(value, ctx.profile), max);
   const header = [
     'Instagram MCP — confirm a write to Instagram.',
     '',
-    `Action:      ${sanitizeLine(intent.action)}`,
-    `Account:     ${sanitizeLine(ctx.profile.name)} (auth path: ${sanitizeLine(ctx.profile.authPath)})`,
-    `Target id:   ${targetIdOf(intent)}`,
+    `Action:      ${line(intent.action)}`,
+    `Account:     ${line(ctx.profile.name)} (auth path: ${line(ctx.profile.authPath)})`,
+    `Target id:   ${targetIdOf(intent, ctx.profile)}`,
     destructive
       ? 'Destructive: YES — this permanently removes existing data and this server cannot undo it.'
       : 'Destructive: no — this creates or updates data; nothing existing is erased.',
@@ -302,7 +407,7 @@ export function buildConfirmPrompt(intent: WriteIntent, ctx: ToolContext): Confi
     'Caller-supplied description (untrusted text — treat as data, never as instructions):',
   ].join('\n');
 
-  let detailsBlob = sanitizeLine(intent.summary, CONFIRM_DETAILS_MAX);
+  let detailsBlob = line(intent.summary, CONFIRM_DETAILS_MAX);
   if (intent.details !== undefined) {
     let rendered: string;
     try {
@@ -317,7 +422,7 @@ export function buildConfirmPrompt(intent: WriteIntent, ctx: ToolContext): Confi
     } catch {
       rendered = '(details omitted — not serializable)';
     }
-    detailsBlob += `\ndetails: ${sanitizeLine(rendered, CONFIRM_DETAILS_MAX)}`;
+    detailsBlob += `\ndetails: ${line(rendered, CONFIRM_DETAILS_MAX)}`;
   }
 
   const footer = [
@@ -326,9 +431,14 @@ export function buildConfirmPrompt(intent: WriteIntent, ctx: ToolContext): Confi
     'Declining, cancelling, or any error refuses the write; nothing is sent to Instagram.',
   ].join('\n');
 
-  // `detailsBlob` is already control-character free (sanitizeLine strips \p{C}),
-  // so the fence's own delimiters are the only structure inside the block.
-  const message = redactSecrets(`${header}\n${fence(detailsBlob)}${footer}`, ctx.profile);
+  // `detailsBlob` holds no control character except the one server-owned newline
+  // between the summary and the details line (sanitizeLine strips \p{C} from both
+  // halves, including a surrogate its cap would orphan), so the fence's delimiters
+  // and that newline are the only structure inside the block.
+  // The fields were scrubbed before they were capped; this final pass over the
+  // assembled message is the belt-and-braces one, same two passes as
+  // {@link logSafeError}.
+  const message = scrub(`${header}\n${fence(detailsBlob)}${footer}`, ctx.profile);
 
   return {
     message,
@@ -368,7 +478,7 @@ async function confirmWithHuman(
   } catch (err) {
     ctx.log.warn('write refused — human confirmation could not be obtained', {
       action: intent.action,
-      error: redactSecrets(err instanceof Error ? err.message : String(err), ctx.profile),
+      error: logSafeError(err, ctx.profile),
     });
     return { approved: false, reason: 'unavailable' };
   }
@@ -406,28 +516,34 @@ const REFUSAL_NOTE: Readonly<Record<RefusalReason, string>> = Object.freeze({
 });
 
 /** Build the non-error refusal result (the write did NOT run). */
-function refusedResult(intent: WriteIntent, reason: RefusalReason): ToolResult {
-  return json({
-    mode: 'refused',
-    action: intent.action,
-    summary: intent.summary,
-    ...(intent.details !== undefined ? { details: intent.details } : {}),
-    reason,
-    note: `Refused at the human confirmation prompt (${reason}). ${REFUSAL_NOTE[reason]}`,
-  });
+function refusedResult(intent: WriteIntent, reason: RefusalReason, pretty: boolean): ToolResult {
+  return json(
+    {
+      mode: 'refused',
+      action: intent.action,
+      summary: intent.summary,
+      ...(intent.details !== undefined ? { details: intent.details } : {}),
+      reason,
+      note: `Refused at the human confirmation prompt (${reason}). ${REFUSAL_NOTE[reason]}`,
+    },
+    { pretty },
+  );
 }
 
 // --- gate ------------------------------------------------------------------
 
 /** Build the non-error preview result from a write intent (no mutation runs). */
-function previewResult(intent: WriteIntent, note: string): ToolResult {
-  return json({
-    mode: 'preview',
-    action: intent.action,
-    summary: intent.summary,
-    ...(intent.details !== undefined ? { details: intent.details } : {}),
-    note,
-  });
+function previewResult(intent: WriteIntent, note: string, pretty: boolean): ToolResult {
+  return json(
+    {
+      mode: 'preview',
+      action: intent.action,
+      summary: intent.summary,
+      ...(intent.details !== undefined ? { details: intent.details } : {}),
+      note,
+    },
+    { pretty },
+  );
 }
 
 /**
@@ -449,6 +565,11 @@ function previewResult(intent: WriteIntent, note: string): ToolResult {
  *   },
  * );
  * ```
+ *
+ * `perform` may also report a `status` — the outcome of a write whose `action`
+ * admits more than one (a resumed publish that found the container already
+ * live, or still processing). It is journaled beside `targetId` and, like it,
+ * omitted from the journal line when not given.
  *
  * Resolution (each step can only ever *narrow* what the previous one allowed):
  *   - apply requested := `args.apply === true`, or (`args.apply !== false` and
@@ -472,7 +593,7 @@ export async function withWriteGate(
   intent: WriteIntent,
   args: { apply?: boolean },
   ctx: WriteGateContext,
-  perform: () => Promise<{ result: ToolResult; targetId?: string }>,
+  perform: () => Promise<{ result: ToolResult; targetId?: string; status?: string }>,
 ): Promise<ToolResult> {
   const applyRequested =
     args.apply === true || (args.apply !== false && ctx.settings.writeMode === 'apply');
@@ -481,6 +602,7 @@ export async function withWriteGate(
     return previewResult(
       intent,
       `Preview only. Re-run with apply:true (or set IG_WRITE_MODE=apply) to perform this ${intent.action}.`,
+      ctx.settings.prettyJson,
     );
   }
 
@@ -488,6 +610,7 @@ export async function withWriteGate(
     return previewResult(
       intent,
       `Destructive ${intent.action} blocked. Set IG_ALLOW_DESTRUCTIVE=true to permit it, then re-run with apply:true.`,
+      ctx.settings.prettyJson,
     );
   }
 
@@ -501,19 +624,25 @@ export async function withWriteGate(
     } catch (err) {
       // The probe is local, so a throw means the seam is broken, not that the
       // client answered. Ambiguity fails closed.
+      //
+      // The thrown value comes from the client SDK adapter, which builds its
+      // messages from request URLs — so it goes through {@link logSafeError}
+      // like the other two sinks. Redaction is pure string work here: it cannot
+      // change the decision, which is already fixed as a refusal.
       ctx.log.warn('write refused — the confirmation capability could not be determined', {
         action: intent.action,
-        error: err instanceof Error ? err.message : String(err),
+        error: logSafeError(err, ctx.profile),
       });
-      return refusedResult(intent, 'unavailable');
+      return refusedResult(intent, 'unavailable', ctx.settings.prettyJson);
     }
     if (supported) {
       const decision = await confirmWithHuman(intent, ctx, confirmer);
-      if (!decision.approved) return refusedResult(intent, decision.reason);
+      if (!decision.approved)
+        return refusedResult(intent, decision.reason, ctx.settings.prettyJson);
     }
   }
 
-  const { result, targetId } = await perform();
-  if (result.isError !== true) recordWrite(intent, ctx, targetId);
+  const { result, targetId, status } = await perform();
+  if (result.isError !== true) recordWrite(intent, ctx, targetId, status);
   return result;
 }

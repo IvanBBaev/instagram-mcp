@@ -1,5 +1,6 @@
 /**
- * Claude Code plugin gate (`.claude-plugin/`) — the fourth distribution channel.
+ * Claude Code plugin gate (`.claude-plugin/` + `plugins/instagram-mcp-ai/`) — the fourth
+ * distribution channel.
  *
  * Two files make this channel work and they are only useful when they agree.
  * `marketplace.json` is the catalog `/plugin marketplace add IvanBBaev/instagram-mcp`
@@ -113,11 +114,18 @@ function readRepoJson(file: string): Record<string, unknown> {
 // --- The two manifests ------------------------------------------------------
 
 /**
- * `.claude-plugin/` sits at the repo root, so the *marketplace root* — the base every
- * `source` path is resolved against — is the repo root itself.
+ * The catalog's `.claude-plugin/` sits at the repo root, so the *marketplace root* —
+ * the base every `source` path is resolved against — is the repo root itself. The
+ * plugin does NOT live there: it has its own root under `plugins/`, because Claude
+ * Code copies the whole plugin root into its cache and runs `npm ci` there whenever
+ * that root holds a `package.json`. With `"source": "./"` that meant every install
+ * pulled the repo's full dev toolchain (measured: ~88 MB of `node_modules`) for a
+ * plugin that only launches `npx -y instagram-mcp-ai@<version>`.
  */
 const PLUGIN_DIR = '.claude-plugin';
-const PLUGIN_FILE = join(PLUGIN_DIR, 'plugin.json');
+/** The plugin root, relative to the repo root — what the marketplace entry points at. */
+const PLUGIN_ROOT = join('plugins', 'instagram-mcp-ai');
+const PLUGIN_FILE = join(PLUGIN_ROOT, PLUGIN_DIR, 'plugin.json');
 const MARKETPLACE_FILE = join(PLUGIN_DIR, 'marketplace.json');
 
 const plugin = readRepoJson(PLUGIN_FILE);
@@ -404,8 +412,8 @@ test('the marketplace serves this repo, from the directory that holds the manife
   const sourcePath = source as string;
 
   // Relative plugin sources must start with `./` and are resolved against the
-  // marketplace root — the directory that contains `.claude-plugin/`, i.e. the repo
-  // root. A bare "." or an absolute path is not accepted by the schema.
+  // marketplace root — the directory that contains the catalog's `.claude-plugin/`,
+  // i.e. the repo root. A bare "." or an absolute path is not accepted by the schema.
   assert.ok(
     sourcePath.startsWith('./'),
     `${MARKETPLACE_FILE} plugins[0].source must be a repo-relative path starting with "./" ` +
@@ -425,6 +433,30 @@ test('the marketplace serves this repo, from the directory that holds the manife
       `${PLUGIN_DIR}/plugin.json. The marketplace would add cleanly and then fail to install ` +
       'the plugin it advertises.',
   );
+  assert.equal(
+    inside,
+    PLUGIN_ROOT,
+    `${MARKETPLACE_FILE} plugins[0].source must be "./${PLUGIN_ROOT}" — the directory ` +
+      `holding ${PLUGIN_FILE}. Pointing it anywhere else (in particular back at "./", the ` +
+      'repo root) makes Claude Code copy that whole directory into its plugin cache.',
+  );
+});
+
+test('the plugin root carries no package.json, so installing the plugin runs no npm install (CC-PROC-205)', () => {
+  // Claude Code copies the plugin root into ~/.claude/plugins/cache/ and, when that
+  // root holds a package.json, runs `npm ci --ignore-scripts` in the copy (observed
+  // with Claude Code 2.1.280). The server is launched with `npx -y
+  // instagram-mcp-ai@<version>`, so the plugin needs no dependencies of its own; a
+  // package.json here would reinstate an install per user for nothing.
+  const pluginRoot = join(repoRoot, PLUGIN_ROOT);
+  for (const forbidden of ['package.json', 'package-lock.json', 'node_modules']) {
+    assert.ok(
+      !existsSync(join(pluginRoot, forbidden)),
+      `${PLUGIN_ROOT}/${forbidden} must not exist — Claude Code would run an npm install in ` +
+        "every user's plugin cache. The plugin launches the server through npx and needs " +
+        'no dependencies.',
+    );
+  }
 });
 
 test('the marketplace entry and the plugin manifest never disagree on a shared field', () => {

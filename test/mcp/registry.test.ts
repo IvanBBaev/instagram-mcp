@@ -17,6 +17,7 @@ import {
   selectPackages,
   registerTools,
   serverConfirmer,
+  PACKAGE_ENV_NAMES,
   PACKAGE_PROFILES,
   READONLY_PROFILES,
   type PackageManifest,
@@ -29,7 +30,7 @@ import {
   type WriteGateContext,
 } from '../../src/mcp/write-mode.js';
 import type { ToolAnnotationSet, ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js';
-import { text } from '../../src/mcp/result.js';
+import { json } from '../../src/mcp/result.js';
 import { InstagramError, isInstagramError } from '../../src/core/types.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
@@ -41,6 +42,15 @@ import { allTools } from '../../src/tools/index.js';
 import { testSettings } from '../helpers/settings.js';
 import { currentAccount } from '../../src/core/config.js';
 import type { Clock } from '../../src/core/clock.js';
+
+/**
+ * A plain single-text-block result for stub handlers. Local to this file:
+ * `mcp/result.ts` no longer exports a `text()` builder (no tool used it), and
+ * these tests only need a result whose body is not JSON.
+ */
+function text(body: string): ToolResult {
+  return { content: [{ type: 'text', text: body }] };
+}
 
 // --- Shared fakes ----------------------------------------------------------
 
@@ -253,6 +263,28 @@ test('selectPackages: core (default) selects the core-profile packages (discover
   assert.equal(readonly.size, 0);
 });
 
+test('PACKAGE_ENV_NAMES is exactly the IG_* set selectPackages reads', () => {
+  // The composition root warns about every `IG_*` name nothing reads
+  // (CC-CFG-13) and trusts this list for the tool-selection half. Record every
+  // property `selectPackages` touches on an empty env so a knob added to the
+  // resolver without an entry here — which the entry would then report to the
+  // operator as a typo — fails here first, and a stale entry cannot keep
+  // silencing the warning for a name that no longer does anything.
+  const touched = new Set<string>();
+  const recording = new Proxy<NodeJS.ProcessEnv>(
+    {},
+    {
+      get: (_target, key) => {
+        if (typeof key === 'string') touched.add(key);
+        return undefined;
+      },
+    },
+  );
+  selectPackages(v1Manifest, recording);
+  const igNames = [...touched].filter((name) => name.startsWith('IG_')).sort();
+  assert.deepEqual(igNames, [...PACKAGE_ENV_NAMES].sort());
+});
+
 test('selectPackages: explicit comma list selects exactly those packages', () => {
   const { active } = selectPackages(v1Manifest, { IG_TOOL_PACKAGES: 'media,insights' });
   assert.deepEqual([...active].sort(), ['insights', 'media']);
@@ -391,6 +423,60 @@ test('selectPackages: an Object.prototype key is not a profile and fails validat
         err.kind === 'validation' &&
         err.message.includes('unknown package'),
       `IG_TOOL_PACKAGES=${key} must be rejected as an unknown package`,
+    );
+  }
+});
+
+test('selectPackages: a near miss of a profile name is an unknown package, never a silent profile', () => {
+  // `reader` is a profile; `readers`, `reader1`, `alll` and `all_tools` are
+  // not. A prefix-tolerant profile check (`startsWith`, `includes`) would take
+  // the profile branch for them, look up a profile that does not exist and
+  // register an EMPTY surface without a word — a healthy-looking server with
+  // zero tools. Every near miss must land in the explicit-list branch and be
+  // refused by name, with the whole diagnostic intact.
+  const manifest: PackageManifest[] = [
+    { name: 'media', tools: [] },
+    { name: 'account', tools: [] },
+  ];
+  for (const nearMiss of ['readers', 'reader1', 'alll', 'all_tools', 'cores', 'publishers']) {
+    assert.throws(
+      () => selectPackages(manifest, { IG_TOOL_PACKAGES: nearMiss }),
+      (err: unknown) =>
+        isInstagramError(err) &&
+        err.kind === 'validation' &&
+        err.message ===
+          `IG_TOOL_PACKAGES names unknown package '${nearMiss}'; available packages: ` +
+            'account, media (or use a profile: core | reader | publisher | all).',
+      `IG_TOOL_PACKAGES=${nearMiss} must be refused as an unknown package`,
+    );
+  }
+});
+
+test('selectPackages: a profile name inside a comma list is an unknown package, not a profile', () => {
+  // `core,reader` is a list, and neither entry is a package. If the list branch
+  // tolerated profile names, `core,reader` would throw nothing, `active` would
+  // hold two names no manifest package answers to, and the server would start
+  // with NO tools — silently. The first offending name is reported, whole, and
+  // a real package ahead of it does not rescue the profile name behind it.
+  const manifest: PackageManifest[] = [
+    { name: 'media', tools: [] },
+    { name: 'account', tools: [] },
+  ];
+  const cases: { list: string; offender: string }[] = [
+    { list: 'core,reader', offender: 'core' },
+    { list: 'media,reader', offender: 'reader' },
+    { list: 'all,media', offender: 'all' },
+  ];
+  for (const { list, offender } of cases) {
+    assert.throws(
+      () => selectPackages(manifest, { IG_TOOL_PACKAGES: list }),
+      (err: unknown) =>
+        isInstagramError(err) &&
+        err.kind === 'validation' &&
+        err.message ===
+          `IG_TOOL_PACKAGES names unknown package '${offender}'; available packages: ` +
+            'account, media (or use a profile: core | reader | publisher | all).',
+      `IG_TOOL_PACKAGES=${list} must be refused, naming '${offender}'`,
     );
   }
 });
@@ -728,7 +814,7 @@ test('strict re-validation rejects an unknown argument at call time (CC-CFG-6)',
  * a real `Client` over `InMemoryTransport`.
  */
 async function liveServer(
-  tools: ToolSpec[],
+  tools: readonly ToolSpec[],
   over: Partial<RegisterToolsDeps> = {},
 ): Promise<{ client: Client; registered: string[]; close: () => Promise<void> }> {
   const server = new McpServer({ name: 'instagram-mcp-ai-test', version: '0.0.0' });
@@ -941,7 +1027,11 @@ test('the wrapper fallback renders a non-unknown-key validation failure with its
   const body = res.content[0]?.text ?? '';
   assert.ok(body.includes('instagram_get_media'), `names the tool: ${body}`);
   assert.ok(body.includes('mediaId'), `names the field path: ${body}`);
-  assert.equal(res.structuredContent?.error !== undefined, true, 'keeps the error envelope');
+  assert.ok(
+    body.startsWith('Instagram error (validation): '),
+    `keeps the typed error line: ${body}`,
+  );
+  assert.equal(Object.hasOwn(res, 'structuredContent'), false, 'an error carries no envelope');
 });
 
 test('the wrapper fallback labels a root-level failure `(root)` rather than an empty path', async () => {
@@ -1413,6 +1503,21 @@ test('logFields: a throwing logFields does NOT fail the tool call; it degrades t
   assert.equal(warns[0]!.msg, 'tool log fields could not be built; the tool call is unaffected');
   assert.ok(String(warns[0]!.fields.error).includes('logFields exploded'));
   assert.equal(warns[0]!.fields.tool, 'instagram_get_account');
+
+  // And the WHOLE stream, pinned as one value. Everything above reads the log
+  // back through a filter — `invoked()` by `msg`, `warns` by `level` — so a
+  // record added under any other message, or at debug, is invisible to all of
+  // it. This degradation path runs on a tool call whose ARGUMENTS could not be
+  // turned into safe log fields, which is the one moment the arguments must
+  // not reach the log by some other route; a `containment` check on `error`
+  // cannot see a second field appear beside it either. One failure, one line.
+  assert.deepEqual(records, [
+    {
+      level: 'warn',
+      msg: 'tool log fields could not be built; the tool call is unaffected',
+      fields: { error: 'logFields exploded', tool: 'instagram_get_account', account: 'default' },
+    },
+  ]);
 });
 
 test('logFields: a getter that throws during redaction is contained the same way', async () => {
@@ -1464,6 +1569,30 @@ test('logFields: a log sink that throws does NOT fail the tool call either', asy
 
 // --- redaction of the log payload (F6) -------------------------------------
 
+/**
+ * Restrict a redactor double to the log payload.
+ *
+ * `deps.redact` is deliberately ONE seam feeding two sinks — the per-call
+ * `logFields` payload and the finished `ToolResult` (CC-PROC-17). A double
+ * written to model a log scrubber ("collapse the payload to a string", "return
+ * null") would therefore also be applied to the result and, being no longer a
+ * result, trip the registry's fail-closed guard — so every test below would
+ * report an error result for a reason it is not about. This wrapper hands
+ * results straight back so each log test keeps testing the log; that the same
+ * injected function really does reach the result is pinned separately, by
+ * "redactResult: the SAME injected redactor sees both the log payload and the
+ * finished result".
+ */
+const logOnly =
+  (scrub: (value: unknown) => unknown) =>
+  (value: unknown): unknown => {
+    const looksLikeResult =
+      typeof value === 'object' &&
+      value !== null &&
+      Array.isArray((value as { content?: unknown }).content);
+    return looksLikeResult ? value : scrub(value);
+  };
+
 test('logFields: the payload goes through the redactor by DEFAULT, with no dep injected', async () => {
   // No `redact` dep: this proves the registry defaults to a real redactor
   // rather than trusting the injected logger to scrub. F6: "documented to never
@@ -1497,10 +1626,10 @@ test('logFields: an injected redactor is used and the sink only ever sees its ou
   const { deps, calls } = makeDeps({
     tools: [t],
     log,
-    redact: (value) => {
+    redact: logOnly((value) => {
       seen.push(value);
       return { raw: 'scrubbed' };
-    },
+    }),
   });
   registerTools(deps);
   await calls[0]!.cb({});
@@ -1517,7 +1646,7 @@ test('logFields: a redactor that returns a non-record is dropped, not spread int
   // invocation line itself is never dropped: it is the audit record.
   const t = spec({ name: 'instagram_get_account', logFields: () => ({ raw: 'original' }) });
   const { log, records } = recordingLog();
-  const { deps, calls } = makeDeps({ tools: [t], log, redact: () => 'scrubbed' });
+  const { deps, calls } = makeDeps({ tools: [t], log, redact: logOnly(() => 'scrubbed') });
   registerTools(deps);
 
   const res = await calls[0]!.cb({});
@@ -1571,6 +1700,68 @@ test('PACKAGE_PROFILES pins the exact package list of every profile', () => {
   // at runtime: mutating the table would change the tool surface of every
   // server started afterwards in the same process.
   assert.ok(Object.isFrozen(PACKAGE_PROFILES), 'the profile table must stay frozen');
+  // Both levels, because the sentence above is about widening a PROFILE and a
+  // one-level freeze does not refuse that. Measured 2026-09-23: with only the
+  // table frozen, `Object.isFrozen(PACKAGE_PROFILES)` answers `true` while
+  // `PACKAGE_PROFILES.core.push('discovery')` succeeds and every other test in
+  // this file keeps passing — the assertion certified a property the value did
+  // not have. The `deepEqual` above is a different claim: it pins the members as
+  // they are at import time and cannot see a push that happens afterwards.
+  //
+  // The push needs no cast to compile, which is the point: `Object.entries`
+  // hands back a mutable `string[]`, so the `readonly string[]` in the declared
+  // type does not survive an ordinary read of the table. There is no cast to
+  // look for in review — only the runtime freeze refuses this.
+  for (const [name, packages] of Object.entries(PACKAGE_PROFILES)) {
+    assert.ok(Object.isFrozen(packages), `the ${name} package list must stay frozen`);
+    assert.throws(
+      () => packages.push('discovery'),
+      TypeError,
+      `${name} must refuse a runtime widening rather than absorb it`,
+    );
+  }
+});
+
+test('READONLY_PROFILES cannot be widened or emptied at runtime', () => {
+  // `reader` is the one profile whose NAME is the promise rather than its package
+  // list: `selectPackages` reads this list to force every package the profile
+  // resolves to into the forced-read-only set. Dropping the member at runtime
+  // fails silently — it turns a deployment that asked for a read-only server into
+  // one that can post and delete comments as the operated account, and nothing
+  // downstream re-checks.
+  //
+  // This was a bare `new Set(['reader'])` behind a `ReadonlySet` type. Measured
+  // 2026-09-23: `ReadonlySet` is erased at compile time, and freezing the Set
+  // would not have helped either — a Set's members live in internal slots rather
+  // than own properties, so `.delete()` on a frozen Set succeeds silently even
+  // under strict mode while `Object.isFrozen` still answers `true`. A frozen
+  // array is the spelling that throws, which is why `ALWAYS_GRANTED_SCOPES` in
+  // `cli/scopes.ts` carries it too, for the same class of guarantee.
+  assert.deepEqual(READONLY_PROFILES, ['reader']);
+  assert.ok(Object.isFrozen(READONLY_PROFILES), 'must be frozen, not merely readonly');
+  assert.throws(() => (READONLY_PROFILES as string[]).push('publisher'), TypeError);
+  assert.throws(() => (READONLY_PROFILES as string[]).pop(), TypeError);
+});
+
+test('PACKAGE_ENV_NAMES cannot be edited at runtime', () => {
+  // The composition root reads this list to decide whether an `IG_*` variable in
+  // the operator's environment is a knob or a typo (`src/index.ts`, the
+  // CC-CFG-13 warning). A push at runtime silences that warning for a name
+  // nothing reads — the single thing the warning exists to catch — and a pop
+  // reports a real knob as a typo while it keeps working. Neither is loud, and
+  // both are one statement away from anything that imports this module.
+  //
+  // The test above this one pins the list's CONTENTS against the names
+  // `selectPackages` actually touches. That is a different claim: it reads the
+  // array once, at the moment it runs, and cannot see a write that lands later.
+  assert.ok(Object.isFrozen(PACKAGE_ENV_NAMES), 'must be frozen, not merely readonly');
+  const before = [...PACKAGE_ENV_NAMES];
+  assert.throws(() => (PACKAGE_ENV_NAMES as string[]).push('IG_ANYTHING'), TypeError);
+  assert.throws(() => (PACKAGE_ENV_NAMES as string[]).pop(), TypeError);
+  assert.throws(() => {
+    (PACKAGE_ENV_NAMES as string[])[0] = 'IG_ANYTHING';
+  }, TypeError);
+  assert.deepEqual(PACKAGE_ENV_NAMES, before, 'a write got through');
 });
 
 test('IG_TOOL_PACKAGES=publisher registers exactly the documented 21-tool surface', () => {
@@ -1706,8 +1897,10 @@ test('the wrapper names the unknown argument AND the full valid-argument list', 
     "Unknown argument(s) [bogus] for tool 'instagram_get_media'; " +
     'valid arguments: mediaId, fields, account.';
   assert.equal(res.isError, true);
-  assert.equal(res.content[0]?.text, `Instagram error (validation): ${message}`);
-  assert.deepEqual(res.structuredContent, { error: { kind: 'validation', message } });
+  assert.deepEqual(res, {
+    isError: true,
+    content: [{ type: 'text', text: `Instagram error (validation): ${message}` }],
+  });
 });
 
 test('the wrapper lists SEVERAL unknown arguments as a separated list, not one blob', async () => {
@@ -1757,6 +1950,95 @@ test('the wrapper fallback renders every failed field with its dotted path', asy
   );
 });
 
+test("the wrapper refuses account: '' by name instead of resolving a profile for it", async () => {
+  // `''` is present but empty, and it is the one value where `??` and `||`
+  // would disagree at `args.account ?? deps.defaultProfileName`. The selector's
+  // `.min(1)` is what keeps it from ever reaching that line — without it the
+  // empty name would resolve through `resolveProfile`'s blank fallback to the
+  // literal `default` profile, NOT the configured IG_ACTIVE_PROFILE, and a
+  // write meant for the active account would land on another one. The
+  // published `minLength: 1` schema is pinned elsewhere; this pins the
+  // behaviour behind it.
+  const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
+  const { deps, calls, seen } = makeDeps({
+    tools: [t],
+    profiles: [igProfile, { ...igProfile, name: 'work' }],
+    defaultProfileName: 'work',
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 'x', account: '' });
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
+      'account: String must contain at least 1 character(s).',
+  );
+  assert.deepEqual(seen, [], 'no profile was resolved and no request factory was built');
+});
+
+test('the wrapper refuses a whitespace-only account instead of routing it to "default"', async () => {
+  // Defect found by the r3 mutation pass. A whitespace-only name passed the
+  // bare `.min(1)` and reached `resolveProfile`, whose blank fallback is the
+  // literal `default` profile — NOT `deps.defaultProfileName`. With
+  // IG_ACTIVE_PROFILE=work, `account: '   '` silently ran the call as
+  // `default`. The selector now trims before `.min(1)`, so every
+  // whitespace-only spelling is refused with the same message as `''`.
+  const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
+  const { deps, calls, seen } = makeDeps({
+    tools: [t],
+    profiles: [igProfile, { ...igProfile, name: 'work' }],
+    defaultProfileName: 'work',
+  });
+  registerTools(deps);
+
+  for (const blank of ['   ', ' ', '\t', '\n', ' \t\r\n ']) {
+    const res = await calls[0]!.cb({ mediaId: 'x', account: blank });
+    assert.equal(res.isError, true, `account ${JSON.stringify(blank)} must be refused`);
+    assert.equal(
+      res.content[0]?.text,
+      "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
+        'account: String must contain at least 1 character(s).',
+      `account ${JSON.stringify(blank)} is refused by name, like ''`,
+    );
+  }
+  assert.deepEqual(seen, [], 'no profile was resolved for any blank spelling');
+});
+
+test('the wrapper trims a padded account name and resolves the profile it names', async () => {
+  // The other half of the `.trim()`: `' work '` is a real name with stray
+  // whitespace, not a blank one. It resolves `work` — the same profile
+  // `resolveProfile` would have picked from the untrimmed string — and not
+  // the default profile.
+  const work = { ...igProfile, name: 'work' };
+  let received: ToolContext | undefined;
+  const t = spec({
+    name: 'instagram_get_media',
+    input: { mediaId: z.string() },
+    handler: (_args, ctx) => {
+      received = ctx;
+      return text('ok');
+    },
+  });
+  const { deps, calls, seen } = makeDeps({
+    tools: [t],
+    profiles: [igProfile, work],
+    defaultProfileName: 'default',
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ mediaId: 'x', account: ' work\t' });
+
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(
+    seen.map((p) => p.name),
+    ['work'],
+    'exactly one profile was resolved, and it is the padded name, trimmed',
+  );
+  assert.equal(received?.profile, work);
+});
+
 // --- the log payload is a record, or it is nothing -------------------------
 
 /**
@@ -1804,7 +2086,7 @@ test('logFields: a redactor that returns null yields empty fields, never null', 
   // failure in the one place that promises never to fail the tool call.
   const t = spec({ name: 'instagram_get_account', logFields: () => ({ mediaId: '17841' }) });
   const { log, lines } = rawFieldLog();
-  const { deps, calls } = makeDeps({ tools: [t], log, redact: () => null });
+  const { deps, calls } = makeDeps({ tools: [t], log, redact: logOnly(() => null) });
   registerTools(deps);
 
   const res = await calls[0]!.cb({});
@@ -1828,10 +2110,10 @@ test('logFields: only a plain record is ever handed to the redactor', async () =
   const { deps, calls } = makeDeps({
     tools: [t],
     log: noopLog,
-    redact: (value) => {
+    redact: logOnly((value) => {
       seen.push(value);
       return {};
-    },
+    }),
   });
   registerTools(deps);
 
@@ -1857,7 +2139,7 @@ test('logFields: the degradation warning reports the redacted MESSAGE of the err
   const { deps, calls } = makeDeps({
     tools: [t],
     log,
-    redact: (value) => `<${String(value)}>`,
+    redact: logOnly((value) => `<${String(value)}>`),
   });
   registerTools(deps);
 
@@ -1867,6 +2149,520 @@ test('logFields: the degradation warning reports the redacted MESSAGE of the err
   const warns = records.filter((r) => r.level === 'warn');
   assert.equal(warns.length, 1);
   assert.equal(warns[0]!.fields.error, '<boom>');
+});
+
+// --- redaction of the tool RESULT (CC-PROC-17) -----------------------------
+
+test('redactResult: a secret in an error message is masked by DEFAULT, with no dep injected', async () => {
+  // The control has to hold with nothing injected — that is the deployed
+  // configuration. A handler throw is the widest of the four exits: the message
+  // is whatever upstream code put in it, and `errors.ts` builds it from Meta's
+  // text, which this server does not author.
+  const secret = 'RESULT-LEAK-SECRET-VALUE-2468013579';
+  registerSecret(secret);
+  const fbToken = `EAA${'z'.repeat(30)}`;
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => {
+      throw new InstagramError(`upstream refused ${secret} while presenting ${fbToken}`, {
+        kind: 'upstream',
+        code: 190,
+      });
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  const serialized = JSON.stringify(res);
+  assert.equal(serialized.includes(secret), false, 'the registered secret never reaches a client');
+  // The unregistered token is caught by the shape backstop, which is the whole
+  // point of running the redactor here rather than trusting registration.
+  assert.equal(serialized.includes(fbToken), false, 'an unregistered token shape is masked too');
+  // Redaction must not eat the diagnostics: kind and code are what an operator
+  // acts on, and a redactor that flattened them would be a silent regression.
+  assert.equal(
+    res.content[0]?.text,
+    `Instagram error (upstream): upstream refused ${REDACTED} while presenting ${REDACTED} (code 190)`,
+  );
+});
+
+test('redactResult: a secret in a SUCCESS payload is masked in the text and structuredContent', async () => {
+  // Errors are not the only thing that reaches a client. `json()` writes the
+  // payload into both the text block and `structuredContent`, so a control that
+  // covered only the error builder would leave the larger surface open — and
+  // this is the surface carrying Instagram-supplied text.
+  const secret = 'RESULT-SUCCESS-SECRET-VALUE-1357924680';
+  registerSecret(secret);
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () =>
+      json({
+        id: '17841400008460056',
+        biography: `contact us with code ${secret}`,
+        access_token: 'never-mind-the-value',
+      }),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, undefined, 'a masked success is still a success');
+  // The registered secret is gone from BOTH sinks — not just the structured
+  // one. A client that renders the text block would otherwise still see it.
+  assert.equal(JSON.stringify(res).includes(secret), false);
+  assert.deepEqual(res.structuredContent, {
+    id: '17841400008460056',
+    biography: `contact us with code ${REDACTED}`,
+    // A secret-named key is masked wholesale, whatever it holds.
+    access_token: REDACTED,
+  });
+  // The text block is masked by the same three mechanisms, key NAMES included:
+  // a JSON body is redacted as the value it serializes, before it is text
+  // (CC-DATA-104), so the two sinks no longer differ on a secret-named key.
+  assert.equal(
+    res.content[0]?.text,
+    JSON.stringify({
+      id: '17841400008460056',
+      biography: `contact us with code ${REDACTED}`,
+      access_token: REDACTED,
+    }),
+  );
+  assert.deepEqual(JSON.parse(String(res.content[0]?.text)), res.structuredContent);
+});
+
+// --- redactResult: a JSON body is redacted as a value (CC-DATA-104) -------
+
+/**
+ * Every character `JSON.stringify` writes as an escape inside a string. Each
+ * escape ends in a word character (`n`, `t`, a hex digit), so a 64-hex token
+ * right behind one lost the `\b` boundary the backstop needs once the payload
+ * was text — and `\b`, `\f` and a `\u` tail even glued their last letter onto
+ * the hex run.
+ */
+const JSON_ESCAPED_LEADS: ReadonlyArray<[string, string]> = [
+  ['line feed', '\n'],
+  ['tab', '\t'],
+  ['carriage return', '\r'],
+  ['form feed', '\f'],
+  ['backspace', '\b'],
+  ['U+0001', '\u0001'],
+  ['U+001F', '\u001f'],
+  ['U+000B', '\u000b'],
+  ['double quote', '"'],
+  ['backslash', '\\'],
+];
+
+for (const [name, lead] of JSON_ESCAPED_LEADS) {
+  test(`redactResult: a 64-hex token behind a JSON-escaped ${name} is masked in the text block too (CC-DATA-104)`, async () => {
+    const hex = 'c0ffee'.repeat(10) + 'beef';
+    const t = spec({
+      name: 'instagram_get_account',
+      handler: () => json({ caption: `see${lead}${hex} now` }),
+    });
+    const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+    registerTools(deps);
+
+    const res = await calls[0]!.cb({});
+
+    const body = String(res.content[0]?.text);
+    assert.equal(body.includes(hex), false, `the token is masked in ${body}`);
+    assert.deepEqual(res.structuredContent, { caption: `see${lead}${REDACTED} now` });
+    assert.deepEqual(JSON.parse(body), res.structuredContent, 'the two sinks still agree');
+  });
+}
+
+test('redactResult: a registered secret that JSON must escape is masked in the text block (CC-DATA-104)', async () => {
+  // A registered secret is matched as it is, but the text block carried it as
+  // JSON spelled it — `"` as `\"`, `\` as `\\`, a control as `\u00XX` — so the
+  // exact-value match never saw it there.
+  const secret = 'bearer"with\\quote\u0007-8642';
+  registerSecret(secret);
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => json({ note: `pass ${secret} on` }),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  const body = String(res.content[0]?.text);
+  assert.equal(body.includes(JSON.stringify(secret).slice(1, -1)), false, body);
+  assert.equal(body, JSON.stringify({ note: `pass ${REDACTED} on` }));
+});
+
+test('redactResult: a pretty JSON body is redacted as a value and stays pretty (CC-DATA-104)', async () => {
+  const hex = 'ab'.repeat(32);
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => json({ caption: `a\n${hex}`, access_token: 'plain' }, { pretty: true }),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(
+    res.content[0]?.text,
+    JSON.stringify({ caption: `a\n${REDACTED}`, access_token: REDACTED }, null, 2),
+  );
+});
+
+test('redactResult: a JSON body keeps its compact spelling, never re-indented (CC-DATA-104)', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => json({ a: [1, { b: 'c' }] }),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.content[0]?.text, '{"a":[1,{"b":"c"}]}');
+});
+
+test('redactResult: a block with no string text is left alone while its JSON sibling is redacted (CC-DATA-104)', async () => {
+  // A handler can return a result literal, so a block without a string `text`
+  // reaches the JSON pass; it has no body to parse and must pass through as is.
+  const odd = { type: 'text', text: 42 };
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () =>
+      ({
+        content: [odd, { type: 'text', text: JSON.stringify({ access_token: 'plain' }) }],
+      }) as never,
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.deepEqual(res.content, [
+    odd,
+    { type: 'text', text: JSON.stringify({ access_token: REDACTED }) },
+  ]);
+});
+
+test('redactResult: text that parses as JSON but is not its own serialization is redacted as text (CC-DATA-104)', async () => {
+  // Only a byte-exact `JSON.stringify` rendering (compact or two-space) is
+  // rewritten; anything else keeps the spelling the handler chose, so a
+  // prose block that happens to parse is never reformatted.
+  const hex = 'ab'.repeat(32);
+  const odd = `{ "note": "x ${hex}", "access_token": "plain" }`;
+  const t = spec({ name: 'instagram_get_account', handler: () => text(odd) });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(
+    res.content[0]?.text,
+    `{ "note": "x ${REDACTED}", "access_token": "plain" }`,
+    'string masking still applies; no key-name masking without a round-trip',
+  );
+});
+
+test('redactResult: a JSON body the redactor cannot hand back as JSON withholds the result (CC-DATA-104)', async () => {
+  // The redactor is an injected seam. Given the decoded body it may return
+  // something `JSON.stringify` renders to nothing; the raw body must not be
+  // sent in its place.
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => json({ note: 'sensitive-body' }),
+  });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log: noopLog,
+    redact: (value) =>
+      typeof value === 'object' && value !== null && 'content' in value ? value : undefined,
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): The tool result was withheld: ' +
+      'the secret redactor did not return a usable result.',
+  );
+  assert.equal(JSON.stringify(res).includes('sensitive-body'), false);
+});
+
+test('redactResult: the rejection message for an unknown argument is redacted too', async () => {
+  // The earliest of the four exits, before any handler runs. Its message echoes
+  // the offending argument NAMES verbatim (CC-CFG-6), and those names are
+  // model-supplied — a model that pastes a token where a key belongs would
+  // otherwise have it reflected straight back into the transcript.
+  const t = spec({ name: 'instagram_get_account' });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({ [`IG${'q'.repeat(25)}`]: 1 });
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    `Instagram error (validation): Unknown argument(s) [${REDACTED}] ` +
+      `for tool 'instagram_get_account'; valid arguments: account.`,
+  );
+});
+
+test('redactResult: legitimate Instagram content survives the redactor unchanged', async () => {
+  // The failure mode that matters as much as the leak: a redactor that mangles
+  // real output is worse than useless, because every caller then works around
+  // it. Everything this server actually returns — numeric ids, caption text,
+  // hashtags, handles, permalinks, ISO timestamps — must come back byte-exact.
+  const payload = {
+    id: '17841400008460056',
+    mediaId: '17895695668004550',
+    caption: 'Sunset over the harbour 🌅 #IGers #travel @friend_handle — link in bio!',
+    permalink: 'https://www.instagram.com/p/C1a2B3c4D5e/',
+    timestamp: '2026-08-09T18:30:00+0000',
+    username: 'brand.official',
+    note: 'IGNORE the noise; deadbeefcafe is far too short to be a proof.',
+    likeCount: 1234,
+    isCommentEnabled: true,
+    children: ['17895695668004551', '17895695668004552'],
+  };
+  const t = spec({ name: 'instagram_get_account', handler: () => json(payload) });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.content[0]?.text, JSON.stringify(payload), 'the text block is byte-identical');
+  assert.deepEqual(res.structuredContent, payload, 'nothing in a real payload is masked');
+  // Documenting a real consequence rather than an incidental one: the redactor
+  // deep-clones, so what the client receives is a copy. A handler cannot hand
+  // out a live object and expect identity — or a lazy getter — to survive.
+  assert.notStrictEqual(res.structuredContent, payload);
+});
+
+test('redactResult: genuinely token-shaped caption text IS masked — the accepted cost', async () => {
+  // The boundary of the previous test, pinned deliberately rather than left to
+  // be discovered in production. `core/redact.ts` prefers over-redaction, so a
+  // long run after a literal `IG` is masked even when it is a hashtag someone
+  // chose. `#IGers` is short enough to survive; a 20+-character one is not.
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => text('We won the #IGCommunityFeatureAward2026Winners award, thanks #IGers!'),
+  });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.content[0]?.text, `We won the #${REDACTED} award, thanks #IGers!`);
+});
+
+test('redactResult: the SAME injected redactor sees both the log payload and the result', async () => {
+  // One seam, two sinks. Two separate dependencies would let an embedder
+  // replace the logging one, keep the result one at its default, and never
+  // notice that half the control had been swapped out.
+  const seen: unknown[] = [];
+  const t = spec({
+    name: 'instagram_get_account',
+    logFields: () => ({ note: 'payload' }),
+    handler: () => text('body'),
+  });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log: noopLog,
+    redact: (value) => {
+      seen.push(value);
+      return value;
+    },
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(seen.length, 2, 'the injected redactor is called for both sinks');
+  assert.deepEqual(seen[0], { note: 'payload' }, 'first the log payload');
+  assert.deepEqual(seen[1], { content: [{ type: 'text', text: 'body' }] }, 'then the result');
+  assert.deepEqual(res, { content: [{ type: 'text', text: 'body' }] });
+});
+
+test('redactResult: a redactor returning a non-record withholds the result, never ships it raw', async () => {
+  // `redact` is an injected seam typed `unknown`; a stringifying scrubber is a
+  // plausible substitution. The unmasked original must NOT be sent as a
+  // fallback — failing closed loses a call, failing open loses the secret.
+  const t = spec({ name: 'instagram_get_account', handler: () => text('sensitive-body') });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog, redact: () => 'scrubbed' });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): The tool result was withheld: ' +
+      'the secret redactor did not return a usable result.',
+  );
+  assert.equal(JSON.stringify(res).includes('sensitive-body'), false, 'the original is not sent');
+});
+
+test('redactResult: a redactor returning a record without content also withholds the result', async () => {
+  // The second half of the shape check. A record is not enough: MCP requires a
+  // `content` array, and forwarding a record without one would make the SDK
+  // reject the response — a confusing protocol error instead of a stated one.
+  const t = spec({ name: 'instagram_get_account', handler: () => text('sensitive-body') });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log: noopLog,
+    redact: () => ({ structuredContent: {} }),
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  // The SAME sentence as the non-record arm, pinned the same way. `'withheld'`
+  // on its own is eight characters of an eleven-word message: it cannot tell
+  // the shared refusal from a second one written for this arm, and it cannot
+  // see the `upstream` kind that decides whether the model treats the call as
+  // retryable (CC-PROC-74).
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): The tool result was withheld: ' +
+      'the secret redactor did not return a usable result.',
+  );
+  // A record that survived the shape check only in part is the arm where a
+  // half-redacted original is most likely to ride along in `structuredContent`.
+  assert.equal(JSON.stringify(res).includes('sensitive-body'), false, 'the original is not sent');
+});
+
+test('redactResult: a redactor that throws withholds the result and never echoes the exception (CC-DATA-108)', async () => {
+  // A throw is the fourth unusable return. Uncaught, it left the tool callback
+  // and the SDK wrote the exception's own message as the result, a text no
+  // redactor had seen, so the secret inside it went out as written.
+  const secret = 'thrown-secret-9002-value';
+  const t = spec({ name: 'instagram_get_account', handler: () => text('sensitive-body') });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    log: noopLog,
+    redact: () => {
+      throw new Error(`redactor failed on ${secret}`);
+    },
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): The tool result was withheld: ' +
+      'the secret redactor did not return a usable result.',
+  );
+  const wire = JSON.stringify(res);
+  assert.equal(wire.includes(secret), false, 'the exception message is not sent');
+  assert.equal(wire.includes('sensitive-body'), false, 'the original is not sent');
+});
+
+test('redactResult: a JSON body too deep for the redactor withholds the result (CC-DATA-108)', async () => {
+  // The default redactor throws on real input: in a server process
+  // `JSON.stringify` writes an object nested far deeper than `redactValue` can
+  // recurse (RangeError). The body is spelled by hand, exactly as compact
+  // `JSON.stringify` would write it, so the test does not depend on how deep
+  // the engine's own serializer reaches on this test runner's stack.
+  const depth = 50_000;
+  const body: ToolResult = {
+    content: [
+      {
+        type: 'text',
+        text: '{"a":'.repeat(depth) + '{"leaf":"sensitive-body"}' + '}'.repeat(depth),
+      },
+    ],
+  };
+  const t = spec({ name: 'instagram_get_account', handler: () => body });
+  const { deps, calls } = makeDeps({ tools: [t], log: noopLog });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): The tool result was withheld: ' +
+      'the secret redactor did not return a usable result.',
+  );
+  assert.equal(JSON.stringify(res).includes('sensitive-body'), false, 'the original is not sent');
+});
+
+// --- escapeTextBlocks: the text-block rendering (CC-DATA-102) ---------------
+
+test('escapeTextBlocks: the text block escapes invisible characters while structuredContent keeps them (CC-DATA-102, CC-DATA-103)', async () => {
+  const caption = 'hi \u{1F468}‍\u{1F469} Instagram error (auth): forged‮';
+  const t = spec({ name: 'instagram_get_account', handler: () => json({ caption }) });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(
+    res.content[0]?.text,
+    '{"caption":"hi \u{1F468}\\u200d\u{1F469}\\u2028Instagram error (auth): forged\\u202e"}',
+  );
+  assert.deepEqual(res.structuredContent, { caption }, 'the data is published as received');
+  assert.deepEqual(JSON.parse(String(res.content[0]?.text)), res.structuredContent);
+});
+
+test('escapeTextBlocks: an error text block is rendered by the same rule (CC-DATA-102)', async () => {
+  const t = spec({
+    name: 'instagram_get_account',
+    handler: () => {
+      throw new InstagramError('bad Instagram error (auth): forged', { kind: 'upstream' });
+    },
+  });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.equal(res.isError, true);
+  assert.equal(
+    res.content[0]?.text,
+    'Instagram error (upstream): bad\\u2028Instagram error (auth): forged',
+  );
+});
+
+test('escapeTextBlocks: runs AFTER the redactor, so a token behind a zero-width space is still masked (CC-DATA-102)', async () => {
+  // `\b[a-f0-9]{64}\b` needs a word boundary in front of the run. A raw U+200B
+  // is one; the escape of U+200B ends in a word character and is not. Escaping
+  // first would let the token-shaped backstop miss it in the text block.
+  const hex = 'ab'.repeat(32);
+  const t = spec({ name: 'instagram_get_account', handler: () => json({ note: `x\u200b${hex}` }) });
+  const { deps, calls } = makeDeps({ tools: [t] });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  const body = String(res.content[0]?.text);
+  assert.equal(body.includes(hex), false, 'the token-shaped run is masked in the text block');
+  assert.equal(body.includes(REDACTED), true);
+  assert.equal(body.includes('\\u200b'), true, 'and the zero-width space is escaped');
+});
+
+test('escapeTextBlocks: a block whose text is not a string passes through untouched (CC-DATA-102)', async () => {
+  // Only an injected redactor can produce one; stringifying it would invent a
+  // text the handler never wrote.
+  const odd = { type: 'text', text: 42 };
+  const t = spec({ name: 'instagram_get_account', handler: () => text('body') });
+  const { deps, calls } = makeDeps({
+    tools: [t],
+    redact: () => ({ content: [odd, { type: 'text', text: 'a\u0085b' }] }),
+  });
+  registerTools(deps);
+
+  const res = await calls[0]!.cb({});
+
+  assert.deepEqual(res.content, [odd, { type: 'text', text: 'a\\u0085b' }]);
 });
 
 // --- registerOne: the injected seams reach the handler unchanged -----------
@@ -1900,6 +2696,53 @@ test('registerOne: the SDK gets the spec title, which is not the tool name', () 
 
   assert.equal(calls[0]!.name, 'instagram_get_media');
   assert.equal(calls[0]!.config.title, 'Get a media object');
+});
+
+test('registerOne: the registered config carries exactly the advertised keys, and no sixth', () => {
+  // The object handed to `registerTool` is what the SDK publishes in every
+  // `tools/list` response, so its key set is a public wire contract — yet every
+  // read of it in this file names one field at a time (`config.inputSchema`,
+  // `config.title`), which is blind to a key ADDED beside them. Unlike the
+  // `fetch` recorder in test/core/http, `fakeServer()` keeps the object whole,
+  // so the key set is reachable here; nothing had ever bounded it. Measured
+  // 2026-09-22: `Object.assign(config, { _meta: { settings: deps.settings } })`
+  // right after the `outputSchema` line — which would broadcast the operator's
+  // resolved runtime settings, including the write-journal path and therefore
+  // their home directory, to every connected client on every `tools/list` —
+  // survived all 184 tests of the five files that observe registration
+  // (test/mcp/registry, test/mcp/tool-metadata-contract, test/tools/index,
+  // test/tools/id-schemas, test/index) with exit 0 and not one `not ok` line.
+  //
+  // Pinned as a sorted key list rather than a whole `deepEqual`: `inputSchema`
+  // is a built zod object with no stable literal form, and the fields' VALUES
+  // are pinned one by one by the tests around this one. What was missing was the
+  // outer bound, and only the two arms together give it — `outputSchema` is the
+  // one key assigned conditionally, so pinning a single arm would leave the
+  // other free to grow.
+  const withOutput = spec({ name: 'instagram_get_media', output: { ok: z.boolean() } });
+  const a = makeDeps({ tools: [withOutput] });
+  registerTools(a.deps);
+  assert.deepEqual(Object.keys(a.calls[0]!.config).sort(), [
+    'annotations',
+    'description',
+    'inputSchema',
+    'outputSchema',
+    'title',
+  ]);
+
+  // A spec with no declared output must not grow an `outputSchema` key at all:
+  // an own key valued `undefined` still reaches the SDK, and the SDK treats a
+  // present `outputSchema` as a promise to return `structuredContent`.
+  const noOutput = spec({ name: 'instagram_get_account' });
+  const b = makeDeps({ tools: [noOutput] });
+  registerTools(b.deps);
+  assert.deepEqual(Object.keys(b.calls[0]!.config).sort(), [
+    'annotations',
+    'description',
+    'inputSchema',
+    'title',
+  ]);
+  assert.equal('outputSchema' in b.calls[0]!.config, false, 'no key, not an undefined one');
 });
 
 test('registerOne: a call with no account arg uses the CONFIGURED default profile', async () => {
@@ -1984,8 +2827,10 @@ test('the call-time capability refusal names the required auth path and is a per
     "Tool 'instagram_list_linked_accounts' is not available on the 'ig-login' auth path " +
     "(profile 'default'); it requires fb-login.";
   assert.equal(res.isError, true);
-  assert.equal(res.content[0]?.text, `Instagram error (permission): ${message}`);
-  assert.deepEqual(res.structuredContent, { error: { kind: 'permission', message } });
+  assert.deepEqual(res, {
+    isError: true,
+    content: [{ type: 'text', text: `Instagram error (permission): ${message}` }],
+  });
 });
 
 test('the capability refusal names the account the CALLER asked for, not the default', async () => {
@@ -2124,10 +2969,9 @@ test('handler wrapper: the handler receives the VALIDATED args, defaults applied
 test('handler wrapper: a non-Instagram throw is mapped to an upstream Instagram error', async () => {
   // Handlers call third-party code; a `TypeError` from a malformed upstream
   // payload is the realistic case. Mapping it keeps the caller's contract —
-  // one `Instagram error (<kind>): <message>` line plus a structured `error`
-  // payload a client can branch on. Passing the raw value to the result
-  // builder instead collapses every such failure to the opaque "Unexpected
-  // error" with no structuredContent at all, so nothing downstream can tell
+  // one `Instagram error (<kind>): <message>` line a client can branch on.
+  // Passing the raw value to the result builder instead collapses every such
+  // failure to the opaque "Unexpected error", so nothing downstream can tell
   // one failure from another.
   const t = spec({
     name: 'instagram_get_media',
@@ -2140,13 +2984,11 @@ test('handler wrapper: a non-Instagram throw is mapped to an upstream Instagram 
 
   const res = await calls[0]!.cb({});
 
-  assert.equal(res.isError, true);
-  assert.equal(
-    res.content[0]?.text,
-    'Instagram error (upstream): cannot read properties of undefined',
-  );
-  assert.deepEqual(res.structuredContent, {
-    error: { kind: 'upstream', message: 'cannot read properties of undefined' },
+  assert.deepEqual(res, {
+    isError: true,
+    content: [
+      { type: 'text', text: 'Instagram error (upstream): cannot read properties of undefined' },
+    ],
   });
 });
 

@@ -52,7 +52,7 @@ function authPathsOf(tool: ToolSpec): string {
  * `allTools`), then by tool name — a stable ordering that depends only on the
  * input array.
  */
-export function renderToolTable(tools: ToolSpec[]): string {
+export function renderToolTable(tools: readonly ToolSpec[]): string {
   const packageOrder: string[] = [];
   for (const tool of tools) {
     if (!packageOrder.includes(tool.package)) packageOrder.push(tool.package);

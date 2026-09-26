@@ -1,39 +1,41 @@
 # Installing the Instagram MCP as a Claude Code plugin (`.claude-plugin`)
 
 > **Audience:** **Claude Code** users who want this server present in every session
-> without hand-editing `.mcp.json` in each repo, and who are comfortable supplying the
-> access token through a file or their shell environment rather than a GUI form. If you
-> want a GUI form, you want the **Claude Desktop** bundle instead —
+> without hand-editing `.mcp.json` in each repo. The token is prompted for at install
+> time and kept in the OS keychain; an env file works as a fallback (Step 2). If you
+> are on **Claude Desktop** rather than Claude Code, you want the bundle instead —
 > [`mcpb-install.md`](mcpb-install.md).
 >
-> **Status: `[not shipped]`.** Both manifests
-> ([`../.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) and
+> **Status: `[not listed]`.** Both manifests
+> ([`../plugins/instagram-mcp-ai/.claude-plugin/plugin.json`](../plugins/instagram-mcp-ai/.claude-plugin/plugin.json) and
 > [`../.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)) are authored
 > in-tree, validate against their published JSON schemas, and are locked by the
 > four-channel version-drift test
 > ([`../test/release/version-consistency.test.ts`](../test/release/version-consistency.test.ts))
 > plus a manifest-contract test
 > ([`../test/release/plugin-manifest.test.ts`](../test/release/plugin-manifest.test.ts)).
-> **One blocker remains, and it is the only one:**
 >
-> - **No npm package.** The manifest launches the server with
->   `npx -y instagram-mcp-ai@<version>`, and `instagram-mcp-ai` **is not on the npm
->   registry** — `npm view instagram-mcp-ai` returns **404**. A plugin install would
->   succeed and then fail the moment Claude Code tried to start the server.
+> The blocker that used to sit here — **no npm package** — was **cleared** on
+> 2026-08-25, when `instagram-mcp-ai@0.7.0` was published. The pin moves with every
+> release, though: the in-tree manifest now pins `npx -y instagram-mcp-ai@0.8.0`, the
+> version prepared in this tree, and until 0.8.0 is published an install from this tree
+> fails at launch with an npm 404. The pin resolves again once that release is on npm.
+> (An earlier revision also listed "no marketplace" as a blocker; that too is fixed —
+> `.claude-plugin/marketplace.json` lists this plugin with
+> `"source": "./plugins/instagram-mcp-ai"`, so the repo is its own single-plugin
+> marketplace.)
 >
-> (An earlier revision of this page also listed "no marketplace" as a blocker. That is
-> fixed: `.claude-plugin/marketplace.json` now exists and lists this plugin with
-> `"source": "./"`, so the repo is its own single-plugin marketplace.)
->
-> The npm publish is tracked as an outstanding human step in
-> [`release-checklist.md`](release-checklist.md) (step 8, then step 11).
-> Treat everything below as the intended flow, **not** a verified transcript.
+> What is left is **listing**, not building: the repo has not been submitted to any
+> plugin marketplace beyond itself, and **no install has ever been executed by a real
+> Claude Code client** — the `${user_config.IG_ACCESS_TOKEN}` interpolation is
+> schema-valid and unit-asserted, never run. Treat the flow below as the intended one,
+> **not** a verified transcript.
 >
 > For the complete Meta-app walkthrough (creating the app, adding the Instagram product,
 > roles/testers, scopes, App Review reality) and for how to obtain a token at all, see
 > **[`setup-guide.md`](setup-guide.md)** — this page does not repeat it. This document
 > covers only what is specific to the plugin channel: **how it installs**, and **how the
-> token reaches the server when the manifest carries no credential fields.**
+> token reaches the server.**
 
 ## Which channel is this? (the ten-second version)
 
@@ -136,11 +138,12 @@ The two names are **not** the same string and are easy to swap by accident:
 marketplace's `name` in `marketplace.json` — the catalog, not the plugin. The install
 prompts for `IG_ACCESS_TOKEN` at this point, per `userConfig`.
 
-> **The install will succeed and the server will still fail to start**, until
-> `instagram-mcp-ai` exists on npm at the pinned version — see the status banner. There
-> is nothing wrong with the marketplace; the launcher just has nothing to launch yet.
+> The launcher runs whatever version the manifest pins, so it has a real package to run
+> only once that version is on npm — `0.7.0` is; the `0.8.0` this tree pins is not yet.
+> What has **not** happened yet at all is an install executed by a real Claude Code
+> client — see the status banner.
 
-### 1b. From a local clone — for trying it before it ships
+### 1b. From a local clone — for trying the plugin without a marketplace
 
 Claude Code can also load a plugin directly from a directory for the duration of a
 session, without any marketplace, via the `--plugin-dir` command-line flag (there is a
@@ -153,13 +156,13 @@ has no installed record, so a plain `claude plugin list` will not show it.
 > repeated) **was not confirmed against `claude --help`**. Check
 > `claude --help` on your machine before relying on it. What *is* confirmed from this
 > repo is the layout the flag would be pointed at: the manifest is at
-> `<repo>/.claude-plugin/plugin.json`, i.e. the plugin root is the repo root.
+> `<repo>/plugins/instagram-mcp-ai/.claude-plugin/plugin.json`, i.e. the plugin root is
+> `<repo>/plugins/instagram-mcp-ai`, not the repo root.
 
-Either way, remember the manifest still runs `npx -y instagram-mcp-ai@<version>`. Until
-that version exists on npm, a local plugin load gets you a registered-but-broken server.
-To exercise the code before publication, skip the plugin channel entirely and point an
-MCP client at your build (`node dist/src/index.js`) — see
-[`setup-guide.md`](setup-guide.md) §9.
+Either way, remember the manifest still runs `npx -y instagram-mcp-ai@<version>` — the
+**published** npm package, not your clone. To exercise unreleased code from a clone, skip
+the plugin channel entirely and point an MCP client at your build
+(`node dist/src/index.js`) — see [`setup-guide.md`](setup-guide.md) §9.
 
 ## Step 2 — get `IG_ACCESS_TOKEN` to the server
 
@@ -180,8 +183,8 @@ account profile:
 | # | Source | Notes |
 | --- | --- | --- |
 | 1 | **The real process environment** | Always wins — and this is where the plugin's `userConfig` → `env` injection lands. Claude Code otherwise gives plugin MCP servers "access to the same environment variables as manually configured servers", i.e. the server also sees the environment Claude Code itself was launched with. Env-file loading uses `override: false`, so nothing below can overwrite a variable that is already set. |
-| 2 | **`IG_ENV_FILE`**, if set and non-blank | **Exclusive.** When this points at a file, that file is the *only* env file loaded — both defaults below are skipped. It must itself come from the real environment (it is read before any file is opened), so you cannot set it *inside* an env file. |
-| 3 | **`<config home>/instagram-mcp-ai/.env`** | The canonical token home, and the file the `login` / `refresh` commands write. Config home is `$XDG_CONFIG_HOME` (default `~/.config`) on macOS/Linux and `%APPDATA%` (default `<home>\AppData\Roaming`) on Windows. |
+| 2 | **`IG_ENV_FILE`**, if set and non-blank | **Exclusive.** When this points at a file, that file is the *only* env file loaded — both defaults below are skipped. It must itself come from the real environment (it is read before any file is opened), so you cannot set it *inside* an env file. If it names a path that cannot be read as a file (missing, a directory, unreadable), the server refuses to start and names the variable and the path. Because it is then the only file read, `login` / `refresh` write their token to it (it must be an absolute file name — a leading `~` is the home directory; a relative one is refused, and a `$VAR` / `%VAR%` / `~user` spelling stops the start). |
+| 3 | **`<config home>/instagram-mcp-ai/.env`** | The canonical token home, and the file the `login` / `refresh` commands write when `IG_ENV_FILE` is not set. Config home is `$XDG_CONFIG_HOME` (default `~/.config`) on macOS/Linux and `%APPDATA%` (default `<home>\AppData\Roaming`) on Windows. |
 | 4 | **`<cwd>/.env`** | The project fallback, resolved against the server process's working directory. Loaded *after* #3, so with `override: false` **the config-home file wins** for any key both define. |
 
 Files at #3 and #4 are only read if they exist; both are loaded when both exist. If, after
@@ -203,15 +206,15 @@ have to re-paste by hand every ~60 days.
 
 Normally you would not write it by hand — `instagram-mcp-ai login` performs the browser
 OAuth, exchanges the code for a long-lived (~60-day) token and writes that file
-atomically with `chmod 0600` on POSIX, printing no secret. Since the npm package is not
-published, run it from a clone instead:
+atomically with `chmod 0600` on POSIX, printing no secret. The npm package is published,
+so `npx` runs it without a clone:
 
 ```bash
-git clone https://github.com/IvanBBaev/instagram-mcp.git
-cd instagram-mcp
-npm install && npm run build
-IG_APP_ID=... IG_APP_SECRET=... node dist/src/index.js login --path ig
+IG_APP_ID=... IG_APP_SECRET=... npx -y instagram-mcp-ai@0.7.0 login --path ig
 ```
+
+From a clone, `npm install && npm run build` and then
+`node dist/src/index.js login --path ig` does the same.
 
 Or write the file yourself — plain `KEY=value` lines, and **restrict the permissions
 yourself** (`chmod 600`), because nothing else will:
@@ -219,7 +222,7 @@ yourself** (`chmod 600`), because nothing else will:
 ```bash
 # ~/.config/instagram-mcp-ai/.env      (chmod 600 — never commit this)
 IG_ACCESS_TOKEN=<long-lived ig-login token>
-IG_ACCOUNT_ID=<ig professional-account id>   # optional: skips a lookup
+IG_ACCOUNT_ID=<ig professional-account id>   # optional: calls address `me` without it
 ```
 
 That is Path A (Instagram Login). Path B (Facebook Login) puts its token in the **same**
@@ -279,24 +282,38 @@ plugin-provided ones. Failure symptoms and fixes are tabulated in
 
 ## Why the plugin is not inside the npm package
 
-`package.json`'s `files` field is an **allowlist**, and `.claude-plugin/` is deliberately
-left out of it — a packaging test asserts that exclusion
+`package.json`'s `files` field is an **allowlist**, and both `.claude-plugin/` (the
+marketplace catalog) and `plugins/` (the plugin itself) are deliberately left out of it — a packaging test asserts that exclusion
 ([`../test/release/packaging.test.ts`](../test/release/packaging.test.ts)).
 
 That is intentional, not an oversight. The plugin channel is served **from git** (a
 marketplace clones the repo); it is never resolved out of `node_modules`. Shipping
-`.claude-plugin/` inside the tarball would add a manifest nothing reads to every `npx`
+the plugin manifest inside the tarball would add a file nothing reads to every `npx`
 run, and would create a second, stale copy of the version pin the moment a tarball lagged
 the repo. The two channels stay cleanly separated: npm ships the runtime, git ships the
 plugin that launches it.
+
+## Why the plugin has its own directory
+
+The plugin root is `plugins/instagram-mcp-ai/`, not the repo root, and it holds nothing
+but `.claude-plugin/plugin.json`. On install, Claude Code copies the plugin root into its
+plugin cache and, when that root holds a `package.json`, runs `npm ci` (install scripts off)
+there. While the marketplace entry said `"source": "./"`, every install therefore copied
+the whole repository and pulled its full dev toolchain (TypeScript, ESLint, c8, …) —
+measured with Claude Code 2.1.280, an ~88 MB `node_modules` for a plugin that only runs
+`npx -y instagram-mcp-ai@<version>`. With the plugin in its own directory the cached copy
+is a few kilobytes and no install runs. A release-gate test
+([`../test/release/plugin-manifest.test.ts`](../test/release/plugin-manifest.test.ts))
+keeps any `package.json` out of the plugin root.
 
 ## What has to happen before this page loses its status banner
 
 1. ~~The repo gains a `.claude-plugin/marketplace.json` listing this plugin.~~ **Done** —
    the catalog exists, validates against its schema, and names the pair
    `instagram-mcp-ai@instagram-mcp`.
-2. `instagram-mcp-ai` is published to npm at the version the manifest pins. **This is the
-   only remaining blocker.**
+2. `instagram-mcp-ai` is published to npm at the version the manifest pins. Done once
+   for `0.7.0` (2026-08-25); it has to hold again for every release, and the `0.8.0`
+   this tree pins is not published yet.
 3. The verified `--plugin-dir` invocation is filled into Step 1b, replacing the
    `[unverified]` note.
 4. A clean-machine install test is run: `/plugin marketplace add`, `/plugin install`,

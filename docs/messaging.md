@@ -142,8 +142,10 @@ accurately rather than by guesswork.
 ## 4. The webhook question
 
 DMs are inherently push. This server is stdio-by-default, with an opt-in
-Streamable HTTP transport that **binds `127.0.0.1` only** (architecture.md §8).
-It has no public endpoint and, by design, will not get one:
+Streamable HTTP transport that **binds loopback only** — a non-loopback
+`IG_HTTP_HOST` is refused at startup even when `IG_HTTP_TOKEN` is set
+(architecture.md §8, security.md §3). It has no public endpoint and, by design,
+will not get one:
 [operations.md](operations.md) §7 calls webhooks an explicit v1 non-goal, and
 [roadmap.md](roadmap.md) "Later / explicitly parked" lists the webhook receiver
 as needing a public endpoint. Nothing in this review asks to reopen that.
@@ -188,7 +190,8 @@ as needing a public endpoint. Nothing in this review asks to reopen that.
 
 ### The existing gate, applied honestly
 
-`src/mcp/write-mode.ts` gives every mutation two gates:
+`src/mcp/write-mode.ts` gives every mutation two env-flag gates, plus a third —
+an MCP elicitation confirmation — only when the client supports elicitation:
 
 1. **Preview → apply.** `applyRequested` is true when `args.apply === true`, or
    when `IG_WRITE_MODE=apply` and the call did not pass `apply: false`.
@@ -207,7 +210,7 @@ Gate 1 alone is `apply: true` — a boolean the **model** supplies. The security
 review already named this (F-1/F-3, and theme 3 in
 [reviews/summary.md](reviews/summary.md)): a model-set boolean is not human
 consent, and `IG_WRITE_MODE=apply` disables the gate for the whole session
-silently. For a comment reply that is an accepted, bounded risk. For a DM it is
+silently whenever the client cannot elicit. For a comment reply that is an accepted, bounded risk. For a DM it is
 not.
 
 **Position: the existing gate is not sufficient for DMs, and stretching the
@@ -312,9 +315,10 @@ currently missing:
   package, shipped without its gating probe (T-E3). Adding a *harder*
   probe-dependent package while the existing probe debt is unpaid is the wrong
   order of work.
-- The write-safety design (§5) depends on D3 elicitation, which is only being
-  implemented now. A safety mechanism that has not yet shipped cannot be the
-  foundation of the riskiest package in the project.
+- The write-safety design (§5) depends on D3 elicitation, which has shipped but
+  is skipped whenever the client cannot elicit and is not yet proven. A safety
+  mechanism that can be silently absent cannot be the foundation of the riskiest
+  package in the project.
 - The security posture is genuinely worse than for anything already shipped
   (§5, §6), and the recommended path is also the one with the weaker credential
   binding (§2).

@@ -93,15 +93,21 @@ Dashboard, because token introspection does not expose the app mode (§6).
 ## 5. Required scopes
 
 Request exactly the scopes the server needs — over-granted scopes are flagged by
-`doctor` so you can trim them. The `login` CLI requests these defaults per path
+`doctor` (Path B, where `debug_token` reports the grant) so you can trim them. The `login` CLI requests these defaults per path
 (override with `--scopes`):
+
+> **Messaging scopes are deliberately not in either list.** Both paths support one
+> (`instagram_business_manage_messages` on Path A, `instagram_manage_messages` on
+> Path B), but no tool in this server calls a messaging endpoint — M6 messaging is
+> DEFER ([messaging.md](messaging.md)) — and DM access is on the short list of
+> permissions Meta will not approve for an unpublished app. Add it explicitly with
+> `login --scopes=...` if you are preparing for one.
 
 **Path A — `ig-login`** (granular, post-Dec-2024 names):
 
 - `instagram_business_basic`
 - `instagram_business_content_publish`
 - `instagram_business_manage_comments`
-- `instagram_business_manage_messages`
 - `instagram_business_manage_insights`
 
 **Path B — `fb-login`** (classic names + Page plumbing):
@@ -110,7 +116,6 @@ Request exactly the scopes the server needs — over-granted scopes are flagged 
 - `instagram_content_publish`
 - `instagram_manage_comments`
 - `instagram_manage_insights`
-- `instagram_manage_messages`
 - `pages_show_list`
 - `pages_read_engagement`
 - `business_management` *(system-user / Business-portfolio setups)*
@@ -129,9 +134,12 @@ Both paths put their token in the **same** variable, `IG_ACCESS_TOKEN` — the p
 only decides which host it is sent to and whether an `appsecret_proof` HMAC is
 attached. The path is inferred as `fb-login` when both `IG_APP_ID` and
 `IG_APP_SECRET` are set, otherwise `ig-login`; set `IG_AUTH_MODE` explicitly to
-override. Capability differences (e.g. discovery tools are hidden on Path A) are
-handled automatically: tools that a path cannot serve are not registered for that
-profile.
+override. Once `login` or `refresh` has run, the env file also carries the path
+as `IG_AUTH_PATH`, and that spelling wins when both are set — so an
+`IG_AUTH_MODE` passed by the MCP client no longer overrides it; set `IG_AUTH_PATH`
+instead, or re-run `login` with the path you want. Capability differences (e.g.
+discovery tools are hidden on Path A) are handled automatically: tools that a path
+cannot serve are not registered for that profile.
 
 ## 7. Get a long-lived token, two ways
 
@@ -142,7 +150,8 @@ mint one by hand.
 ### (a) The built-in `login` CLI (recommended)
 
 `login` runs the browser OAuth flow and **persists** a long-lived token to the
-XDG/APPDATA env file (`chmod 0600` on POSIX). It needs a **registered Meta app**
+XDG/APPDATA env file (`chmod 0600` on POSIX) — or, when `IG_ENV_FILE` is set, to
+the absolute file it names (a leading `~` is the home directory; a relative name stops the server at start-up), the only one the server then reads. It needs a **registered Meta app**
 (App ID + Secret) and a redirect URI whitelisted in the app's OAuth settings —
 there is no offline login.
 
@@ -169,9 +178,15 @@ Useful flags (`login --help` for the full list):
 | `--path <ig\|fb>` | Auth path. **Required.** |
 | `--app-id` / `--app-secret` | App credentials (or env `IG_APP_ID` / `IG_APP_SECRET`). |
 | `--redirect-uri <uri>` | OAuth redirect (default `http://127.0.0.1:8723/callback`) — must match an entry whitelisted in the app **literally**: Meta treats `127.0.0.1` and `localhost` as different entries. |
-| `--account-id <id>` | Pre-set the IG professional-account id (skips a lookup). |
-| `--profile <name>` | Which account profile to write (default `default`). |
+| `--account-id <id>` | Pre-set the IG professional-account id to store (otherwise Path A stores the `user_id` its code exchange returns, and Path B stores none). |
+| `--profile <name>` | Which account profile to write (default `default`); letters, digits, `_`, `.` and `-` only — any other name is refused with exit code 2. |
 | `--scopes <csv>` | Override the per-path scope defaults. |
+
+The long flags also take the inline form (`--path=ig`), and the path may be given
+as a bare word (`login ig`). Anything else on the line is refused with exit code 2
+and the help text — `login: unknown argument '--scope' (did you mean --scopes?)` —
+before any request is made, so a mistyped flag can never run the flow with the
+defaults.
 
 Then refresh before expiry with `npx instagram-mcp-ai refresh` (see
 [operations.md](operations.md) and [stability.md](stability.md)).
@@ -193,10 +208,14 @@ expires):
   exchange it for a long-lived one (`ig_exchange_token`). Put it in
   `IG_ACCESS_TOKEN`.
 
-> A hand-pasted token has **no exchange metadata**, and Path A has no
-> `debug_token`, so `instagram_token_status` reports its expiry as **unknown**
-> (it never invents a date). Re-acquiring via `login` is the way to get accurate
-> expiry tracking.
+> Path A has no `debug_token`, so `instagram_token_status` and `doctor` report the
+> expiry `login` / `refresh` recorded in the env file beside the token. A token
+> pasted by hand has no such record, and its expiry is reported as **unknown**
+> (they never invent a date); a record written for a different token — one it
+> no longer fingerprints, or one that reached the server from a different source
+> than the token — is ignored, so that expiry is **unknown** too; `doctor` only
+> warns about a recorded expiry that has lapsed. On Path B the expiry comes from
+> `debug_token`.
 
 ## 8. Verify with `doctor`
 
@@ -210,11 +229,12 @@ npx instagram-mcp-ai doctor
 `doctor` reports (redacted — never a secret):
 
 1. **Configuration** — profile, auth path, transport, write mode, destructive
-   flag, active packages, refresh window.
+   flag, write-journal path and state, active packages, refresh window.
 2. **Token & authentication** — Path B introspects via `debug_token` (validity,
    scopes, expiry); Path A has no `debug_token`, so validity is proven by the
    reachability check.
-3. **Reachability** — one cheap `GET /{ig-id}` that resolves your account.
+3. **Reachability** — one cheap `GET /{ig-id}` (`GET /me` when `IG_ACCOUNT_ID` is
+   unset) that resolves your account.
 4. **Meta app mode** — a reminder to confirm Development vs Live in the Dashboard
    (not exposed by introspection).
 
@@ -233,7 +253,7 @@ The full catalog is [.env.example](../.env.example) (canonical:
 ```bash
 # Path A — Instagram Login (token only)
 IG_ACCESS_TOKEN=<long-lived ig-login token>
-IG_ACCOUNT_ID=<ig professional-account id>   # optional: skips a lookup
+IG_ACCOUNT_ID=<ig professional-account id>   # optional: calls address `me` without it
 
 # Path B — Facebook Login (same token var; app id/secret select the path and
 # supply appsecret_proof + refresh)
@@ -295,11 +315,10 @@ The token/secret env vars passed here **always win** over the XDG env file
 ```
 
 > **Token-in-`env` vs auto-refresh:** a token injected through the client `env`
-> is static — the server cannot rotate it in place, so it warns via
-> `instagram_token_status` instead of auto-refreshing (the D2 persistence gate,
-> [auth.md](auth.md) §3). For hands-off rotation, let `login`/`refresh` manage the
-> **XDG env file** and omit the token from the client `env`. See
-> [stability.md](stability.md).
+> is static — the server cannot rotate it in place (the D2 persistence gate,
+> [auth.md](auth.md) §3), and it never auto-refreshes any token. To rotate, run
+> `refresh` so it rewrites the **XDG env file**, and omit the token from the client
+> `env`. See [stability.md](stability.md).
 
 Restart the client, and the Instagram tools appear. Reads are safe to try first
 (`instagram_get_account`, `instagram_list_media`); writes preview by default.

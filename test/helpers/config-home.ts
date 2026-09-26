@@ -36,6 +36,19 @@ export function configHomeEnv(
   dir: string,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
+  // A non-blank RELATIVE directory is refused here, where the mistake is still
+  // visible. `config-write.ts` ignores a relative config home (CC-CFG-24) and
+  // falls back to the platform default, so a test that passed one would not
+  // fail: it would resolve to the developer's REAL `~/.config`, merge a fake
+  // token over their live `IG_ACCESS_TOKEN`, and still go green. A blank string
+  // is allowed because it is the documented "unset" shape whose fallback the
+  // resolver's own tests inject on purpose — and those tests resolve a path
+  // without writing anything.
+  if (dir.trim() !== '' && !path.isAbsolute(dir)) {
+    throw new Error(
+      `configHomeEnv needs an absolute directory (a relative one resolves to the real config home): ${dir}`,
+    );
+  }
   return platform === 'win32' ? { APPDATA: dir } : { XDG_CONFIG_HOME: dir };
 }
 

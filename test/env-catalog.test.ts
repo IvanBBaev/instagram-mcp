@@ -86,6 +86,13 @@ const NOT_ENV_VARS: ReadonlyMap<string, string> = new Map([
       'variable is IG_PORT, not IG_HTTP_PORT. Documenting it would create the ' +
       'very variable the comment warns does not exist.',
   ],
+  [
+    'IG_PROFILE__ACCESS_TOKEN',
+    'named only as a counter-example: an equivalent-mutant note in src/core/config.ts ' +
+      'cites it as the malformed key the empty-name guard rejects. It is the spelling of ' +
+      'a profile variable that must NOT resolve, so documenting it would invite an ' +
+      'operator to set the one key the parser is built to drop.',
+  ],
 ]);
 
 /** Every `.ts` file under a directory, recursively. */
@@ -218,4 +225,138 @@ test('architecture §12 states the true accepted range of every numeric knob', (
       );
     }
   }
+});
+
+/**
+ * The rows of the §12 catalog table, sliced out of the document rather than
+ * matched across the whole of it. The range notes counted below are a claim about
+ * that table specifically — a `(range 1–60)` written into some other section's
+ * prose is not a catalog entry, and counting it here would let it stand in for the
+ * entry that is actually missing.
+ */
+function envCatalogRows(doc: string): string[] {
+  const lines = doc.split('\n');
+  const start = lines.findIndex((line) => /^## \d+\. Environment variable catalog/.test(line));
+  assert.notEqual(
+    start,
+    -1,
+    'docs/architecture.md no longer has an "Environment variable catalog" section, so the ' +
+      'range notes below would be counted over nothing.',
+  );
+  const offset = lines.slice(start + 1).findIndex((line) => line.startsWith('## '));
+  const end = offset === -1 ? lines.length : start + 1 + offset;
+  return lines.slice(start, end).filter((line) => line.startsWith('|'));
+}
+
+/**
+ * Every environment variable `loadSettings` puts through a `{ min, max }` clamp,
+ * read out of the source. The bounds themselves are deliberately not captured: they
+ * are the document's business, as the file docstring explains, and what this scrape
+ * is for is the *set* of knobs that has one.
+ */
+function clampedKnobs(): string[] {
+  const source = readFileSync(join(repoRoot, 'src', 'core', 'settings.ts'), 'utf8');
+  const calls = source.matchAll(
+    /parseIntEnv\(\s*env,\s*'(IG_[A-Z0-9_]+)',[^,]*,\s*\{\s*min:\s*[\d_]+,\s*max:\s*[\d_]+/g,
+  );
+  return [...calls].flatMap((match) => (match[1] === undefined ? [] : [match[1]])).sort();
+}
+
+/**
+ * {@link NUMERIC_KNOBS} is the one hand list in this file without a counterpart, and
+ * the test above is a per-item loop over it: a knob the list omits is a knob whose
+ * documented range nothing checks, and the loop walks past it reporting the knobs it
+ * does name as healthy. Adding a sixth clamp to `loadSettings` is the ordinary way
+ * that happens — nothing about writing one prompts an edit here.
+ *
+ * So the list answers to the source. The equality holds in both directions on
+ * purpose: a knob the source clamps and the list omits goes unchecked, and a knob
+ * the list names and the source no longer clamps is a range assertion standing on
+ * nothing, which keeps passing for whatever reason it happens to pass for.
+ */
+test('every knob loadSettings clamps has a documented range, and no other row claims one', () => {
+  const clamped = clampedKnobs();
+  assert.deepEqual(
+    clamped,
+    NUMERIC_KNOBS.map((knob) => knob.env).sort(),
+    'NUMERIC_KNOBS no longer matches the `{ min, max }` clamps in src/core/settings.ts. A knob ' +
+      'the source clamps and this list omits has no documented range anyone checks; a knob ' +
+      'this list names and the source does not clamp is a range assertion with nothing behind ' +
+      'it.',
+  );
+
+  // The same completeness claim from the document's side. A `(range ...)` note on a
+  // row for something `loadSettings` does not clamp promises an operator a
+  // validation that will not happen, and the loop above never reads that row.
+  const doc = readFileSync(join(repoRoot, 'docs', 'architecture.md'), 'utf8');
+  const noted = envCatalogRows(doc).flatMap((row) => [...row.matchAll(/range \d/g)]);
+  assert.equal(
+    noted.length,
+    clamped.length,
+    `the §12 catalog table carries ${noted.length} "(range ...)" note(s) for ${clamped.length} ` +
+      'clamped knob(s). An extra note documents a bound nothing enforces.',
+  );
+});
+/**
+ * The `IG_*` names the composition root reads out of `process.env` itself,
+ * scraped from the source it is built from.
+ *
+ * `unrecognisedEnvNames` warns about every `IG_*` name nothing reads (CC-CFG-13)
+ * by subtracting one list per owner, and each owner is supposed to pin its own
+ * half against what it actually reads: `core/settings.ts` and `mcp/registry.ts`
+ * both do, through a recording `Proxy` over the env they are handed. The entry’s
+ * half had no counterpart, and the docstring above `ENTRY_ENV_NAMES` claimed one
+ * for it.
+ *
+ * The `Proxy` technique does not transfer. `src/index.ts` reads `process.env`
+ * directly rather than an injected env, and it cannot be imported at all —
+ * `main()` runs at module scope, which is why every other test of the entry
+ * spawns it as a child process. So this pin is textual, over the same source the
+ * build compiles, in the idiom `clampedKnobs` above already uses.
+ */
+function entrySource(): string {
+  return readFileSync(join(repoRoot, 'src', 'index.ts'), 'utf8');
+}
+
+/** Every `process.env.IG_*` member read in the entry, deduplicated and sorted. */
+function entryEnvReads(source: string): string[] {
+  const reads = source.matchAll(/process\.env\.(IG_[A-Z0-9_]+)/g);
+  const names = [...reads].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+  return [...new Set(names)].sort();
+}
+
+/** The `ENTRY_ENV_NAMES` literal, read as text because the module cannot be imported. */
+function entryEnvNames(source: string): string[] {
+  const literal = /const ENTRY_ENV_NAMES: readonly string\[\] = \[([^\]]*)\]/.exec(source)?.[1];
+  assert.notEqual(
+    literal,
+    undefined,
+    'ENTRY_ENV_NAMES is no longer a plain array literal in src/index.ts, so this gate can no ' +
+      'longer read it. Adjust the pattern rather than deleting the check.',
+  );
+  const quoted = (literal ?? '').matchAll(/'(IG_[A-Z0-9_]+)'/g);
+  return [...quoted].flatMap((match) => (match[1] === undefined ? [] : [match[1]])).sort();
+}
+
+test('ENTRY_ENV_NAMES is exactly the IG_* set the composition root reads itself', () => {
+  const source = entrySource();
+  const read = entryEnvReads(source);
+  const declared = entryEnvNames(source);
+
+  // Both scrapes are floored. If either pattern silently stopped matching, an
+  // empty set would compare equal to an empty set and this gate would pass for
+  // the one reason that means nothing.
+  assert.ok(read.length > 0, 'found no process.env.IG_* read in src/index.ts — the scrape broke');
+  assert.ok(declared.length > 0, 'found no name in the ENTRY_ENV_NAMES literal — the scrape broke');
+
+  // Read in both directions, like the two sibling pins. A name the entry reads
+  // and this list omits is a working knob reported to the operator as a typo;
+  // a name the list carries and the entry no longer reads silences the warning
+  // for a variable that does nothing. Measured 2026-09-23: dropping
+  // `IG_ENV_FILE` from the list survived the whole suite before this test
+  // existed, while the identical drop from `SETTINGS_ENV_NAMES` was killed by
+  // its own pin — the positive control that says the suite can see this class of
+  // change at all.
+  assert.deepEqual(read, declared);
+  assert.equal(new Set(declared).size, declared.length, 'no duplicates');
 });

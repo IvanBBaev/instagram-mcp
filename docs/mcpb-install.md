@@ -23,10 +23,12 @@ and passes your GUI answers in as `IG_*` environment variables. The bundle is
 **Path A (Instagram Login)** oriented: the one required field, `IG_ACCESS_TOKEN`, is a
 **long-lived `graph.instagram.com` token** for an Instagram professional (Business or
 Creator) account — no Facebook Page required. Path B (Facebook-Login / system-user
-tokens) puts its token in the **same** `IG_ACCESS_TOKEN` field, but its two extra
-requirements, `IG_APP_ID` and `IG_APP_SECRET`, are **not exposed as GUI fields** in this
-bundle; Path-B operators should install via JSON config / the CLI instead (see
-`setup-guide.md`).
+tokens) puts its token in the **same** `IG_ACCESS_TOKEN` field. The bundle does expose
+`IG_APP_ID` and `IG_APP_SECRET` as optional GUI fields, and pins the auth path with the
+**Auth path** field (`IG_AUTH_MODE`), which defaults to `ig-login`. Without that pin,
+filling **both** app fields would make the server infer a Path-B (`fb-login`) token; with
+it, a Path-A token stays Path A whatever the app fields hold. For a Path-B token, set
+**Auth path** to `fb-login` and fill both app fields (see `setup-guide.md`).
 
 Prerequisites (one-time, detailed in `setup-guide.md`):
 
@@ -79,14 +81,17 @@ value you paste into the `IG_ACCESS_TOKEN` prompt.**
 > **Refreshing later.** A long-lived Path-A token can be refreshed (once it is ≥ 24 h old
 > and not yet expired) via
 > `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=<LONG_LIVED_TOKEN>`.
-> If you supply `IG_APP_ID` + `IG_APP_SECRET` in the GUI, the server's `refresh` path can
-> do this for you before expiry.
+> The server never refreshes a token by itself, and the `refresh` CLI rewrites the
+> credentials file, not the token Claude Desktop passes in: after refreshing, paste the new
+> token into the GUI field. A Path-A refresh needs neither `IG_APP_ID` nor
+> `IG_APP_SECRET`; if you fill them anyway, keep **Auth path** at `ig-login`.
 
 ## Step 2 — obtain `IG_ACCOUNT_ID` (optional)
 
-`IG_ACCOUNT_ID` is optional — the server can resolve it — but providing it skips a lookup
-and disambiguates multiple accounts. For a Path-A token, the account ID is the
-**IG-scoped user id**:
+`IG_ACCOUNT_ID` is optional on Path A — left unset, every call addresses `me`, which an
+Instagram-Login token resolves to its own account (no lookup is made). Set it on Path B,
+where `me` is the Page or user behind the token rather than the Instagram account. For a
+Path-A token, the account ID is the **IG-scoped user id**:
 
 ```
 GET https://graph.instagram.com/me?fields=user_id,username&access_token=<LONG_LIVED_TOKEN>
@@ -106,9 +111,10 @@ entry in the manifest. Fill them as follows:
 | GUI prompt (`user_config`) | Env var passed to the server | What to enter | Required |
 | --- | --- | --- | --- |
 | **Instagram access token** | `IG_ACCESS_TOKEN` | The long-lived token from Step 1b. Stored in the OS keychain (`sensitive`). | **Yes** |
-| **Instagram account ID** | `IG_ACCOUNT_ID` | The `user_id` from Step 2. Leave blank to auto-resolve. | No |
-| **Meta app ID** | `IG_APP_ID` | Your app's ID. Needed only for token refresh / `debug_token` / discovery. | No |
-| **Meta app secret** | `IG_APP_SECRET` | Your app secret. Needed only for token exchange/refresh + `appsecret_proof`. Stored in the keychain (`sensitive`). | No |
+| **Instagram account ID** | `IG_ACCOUNT_ID` | The `user_id` from Step 2. Leave blank on Path A to address `me`; set it on Path B. | No |
+| **Meta app ID** | `IG_APP_ID` | Your app's ID. Path B only (with the secret: token refresh, `debug_token`, discovery); leave blank for a Path-A token. | No |
+| **Auth path** | `IG_AUTH_MODE` | `ig-login` (default — Instagram Login, Path A) or `fb-login` (Facebook Login, Path B; also fill both app fields). | No |
+| **Meta app secret** | `IG_APP_SECRET` | Your app secret. Path B only (token refresh + `appsecret_proof`); leave blank for a Path-A token. Stored in the keychain (`sensitive`). | No |
 | **Write mode** | `IG_WRITE_MODE` | `preview` (default — plan only) or `apply` (execute writes). | No |
 | **Tool packages** | `IG_TOOL_PACKAGES` | `core` (default), `reader` (forced read-only — no write tool is registered), `publisher`, `all`, or an explicit comma-separated list. | No |
 
@@ -118,7 +124,7 @@ the server falls back to its default / auto-resolution.
 
 ## Step 4 — install the `.mcpb` into Claude Desktop
 
-1. Obtain the packaged bundle **`instagram-mcp-ai.mcpb`** (see the build step below; at
+1. Obtain the packaged bundle **`instagram-mcp-ai-<version>.mcpb`** (see the build step below; at
    release it will be attached to the GitHub release).
 2. In **Claude Desktop → Settings → Extensions**, either **drag the `.mcpb` file** onto
    the Extensions pane or use **Install extension…** and select the file.
@@ -133,18 +139,19 @@ file editing required.
 
 ## Building the `.mcpb` (release-time step, not required to use this doc)
 
-The archive is produced with the official **MCPB CLI** (`@anthropic-ai/mcpb`), a dev
-tool. **Do not install it globally** — run it via `npx` at release time only:
+The archive is produced with the official **MCPB CLI** (`@anthropic-ai/mcpb`), run via
+`npx` by `scripts/build-mcpb.sh` — **do not install it globally**, and do not run a bare
+`mcpb pack` from the repo root: that archives the whole working directory (`src/`,
+`test/`, `.github/`, dev `node_modules`, local AI-harness files) into a ~16 MB bundle.
 
 ```bash
-# from the repo root
-npm run build                          # produce dist/
-npm ci --omit=dev                      # (optional) ship only the 3 runtime deps in node_modules
-npx @anthropic-ai/mcpb validate manifest.json
-npx @anthropic-ai/mcpb pack            # -> instagram-mcp-ai.mcpb
+# from the repo root; publishes nothing
+scripts/build-mcpb.sh . ./out          # -> out/instagram-mcp-ai-<version>.mcpb
 ```
 
-`pack` archives the working directory (manifest + `dist/` + `node_modules` + `docs/`) into
-a single `.mcpb`. Add a `.mcpbignore` to exclude non-runtime files (`src/`, `test/`,
-`.github/`, coverage, AI-harness files) before shipping. This build/pack + a live install
-are the parts still marked **`[verify — live]`** above.
+The script builds `dist/`, stages the exact npm tarball contents (`npm pack`), adds
+`manifest.json`, installs production dependencies only (`npm ci --omit=dev` inside the
+staging directory, never in your checkout), checks that the manifest version matches
+`package.json`, then runs `mcpb validate` and `mcpb pack` on the staging directory. The
+result is ~3 MB. A live install into Claude Desktop is the part still marked
+**`[verify — live]`** above.

@@ -74,8 +74,28 @@ function readRepoJson(file: string): Record<string, unknown> {
  * constraint differently, not to validate semver ranges.
  */
 function floorMajor(range: string): number {
-  const match = /(\d+)/.exec(range);
-  assert.ok(match, `could not read a major version out of ${JSON.stringify(range)}`);
+  // Anchored, and narrow on purpose. The first version of this read `/(\d+)/` —
+  // the first digit run ANYWHERE in the string — which answers for shapes it
+  // cannot actually mean: `18.x || >=20` reads as a floor of 18, and `>=22.12`
+  // reads as 22, silently rounding the floor DOWN to a version the range
+  // excludes. The shim compares majors and nothing finer, so rounding down is
+  // not a display detail: it is the shim admitting a runtime `engines.node`
+  // rejects. Refusing the shape is the only honest answer, and it is the
+  // standard `parseNodeFloor` in `mcpb-manifest.test.ts` already holds this
+  // repo's other Node-floor channel to.
+  const match = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(range.trim());
+  assert.ok(
+    match,
+    `could not read a major version out of ${JSON.stringify(range)}: this gate compares a ` +
+      'plain ">=X[.Y[.Z]]" floor, so widen the parser deliberately rather than letting a ' +
+      'richer range be read by its first digits',
+  );
+  assert.ok(
+    Number(match[2] ?? 0) === 0 && Number(match[3] ?? 0) === 0,
+    `${JSON.stringify(range)} sets a floor below the major granularity the launcher shim can ` +
+      'enforce, so the shim would admit a runtime this range excludes. Teach the shim to ' +
+      'compare minors before tightening the range here',
+  );
   return Number(match[1]);
 }
 
@@ -94,6 +114,33 @@ function runNode(args: string[], cwd: string): SpawnSyncReturns<string> {
     if (key.startsWith('IG_')) delete env[key];
   }
   return spawnSync(process.execPath, args, { cwd, env, encoding: 'utf8', timeout: 20000 });
+}
+
+/** The one thing the launcher itself contributes to a failed hand-off. */
+const LOAD_FAILURE_PREFIX = 'instagram-mcp-ai failed to load: ';
+
+/**
+ * Assert that `stderr` is the launcher's failure report and nothing else.
+ *
+ * The middle of this stream is V8's stack, which the shim does not author and a
+ * test cannot spell out — but both ends are the shim's own. A containment match
+ * on the prefix proved only that the attribution appears *somewhere*: a banner
+ * printed before it, or advice appended under the stack, left the match green.
+ * Pinning both boundaries states the real contract — the attribution comes
+ * first, with nothing in front of it, and the stack is the last thing written.
+ */
+function assertIsLauncherFailureReport(stderr: string): void {
+  assert.ok(
+    stderr.startsWith(LOAD_FAILURE_PREFIX),
+    `the report must open with "${LOAD_FAILURE_PREFIX}" and nothing before it, so the failure ` +
+      `is attributable to this package; got ${JSON.stringify(stderr.slice(0, 80))}`,
+  );
+  const lines = stderr.replace(/\n$/, '').split('\n');
+  assert.match(
+    lines.at(-1) ?? '',
+    /^ {4}at /,
+    'the report must end with the last frame of the stack — nothing may be appended after it',
+  );
 }
 
 test('the Node floor is the same number everywhere it is declared', () => {
@@ -153,15 +200,19 @@ test('the launcher refuses an under-floor runtime on stderr and exits non-zero',
     // stdout carries JSON-RPC on the stdio transport; a diagnostic there would be
     // a framing error, so the refusal has to go to stderr and stdout must stay clean.
     assert.equal(result.stdout, '', 'the guard must not write to stdout');
-    assert.match(
+    // Whole-stream equality, not a phrase match. Every byte here is the shim's
+    // own, and matching "requires Node.js >= 22" somewhere in it proved only
+    // that the floor was named: the remediation line underneath could send the
+    // user to a runtime still under the floor (`nvm install 20`), or invite a
+    // bypass switch that does not exist, and nothing in the suite moved. The
+    // refusal must name the real floor, the runtime actually found, and a fix
+    // that reaches that floor.
+    assert.equal(
       result.stderr,
-      new RegExp(`requires Node\\.js >= ${String(floor)}\\b`),
-      `the refusal must name the real floor (${String(floor)}); a stale number in the ` +
-        `message sends users to the wrong runtime`,
-    );
-    assert.ok(
-      result.stderr.includes(under),
-      'the refusal must name the runtime that was actually found, so the user can see the mismatch',
+      `instagram-mcp-ai requires Node.js >= ${String(floor)}, but this runtime is ${under}.\n` +
+        `Use a newer runtime, e.g.: nvm install ${String(floor)} && nvm use ${String(floor)}\n`,
+      `the refusal must read exactly as the shim writes it, naming the real floor ` +
+        `(${String(floor)}) and the runtime found (${under})`,
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -190,11 +241,7 @@ test('a missing ESM entry is reported, not thrown as an unhandled rejection', ()
     assert.equal(result.error, undefined, 'launcher should spawn without error');
     assert.equal(result.status, 1, 'a failed hand-off must exit 1');
     assert.equal(result.stdout, '', 'the failure report must not write to stdout');
-    assert.match(
-      result.stderr,
-      /instagram-mcp-ai failed to load:/,
-      'the catch handler must prefix the failure so it is attributable to this package',
-    );
+    assertIsLauncherFailureReport(result.stderr);
     // Node prints "[ERR_UNHANDLED_REJECTION]" / "Uncaught" when a rejection escapes.
     // Seeing the package's own prefix above and no such marker proves the `.catch`
     // ran rather than the process dying on the raw rejection.
@@ -253,17 +300,14 @@ test('the shipped launcher reports a failed hand-off from its own installed path
     assert.equal(result.error, undefined, 'launcher should spawn without error');
     assert.equal(result.status, 1, 'a failed hand-off must exit 1');
     assert.equal(result.stdout, '', 'the failure report must not write to stdout');
-    assert.match(
-      result.stderr,
-      /instagram-mcp-ai failed to load:/,
-      'the catch handler must prefix the failure so it is attributable to this package',
-    );
+    assertIsLauncherFailureReport(result.stderr);
     // The handler prints `err.stack` when there is one. A bare message would
     // strip the module specifier and leave the operator with nothing to act on.
-    assert.match(
-      result.stderr,
-      /index\.js\.missing/,
-      'the report must name the entry it could not load',
+    assert.ok(
+      (result.stderr.split('\n')[0] ?? '').includes('index.js.missing'),
+      'the report must name the entry it could not load, on its first line — the match this ' +
+        'replaces accepted that name anywhere in the stream, including in text appended ' +
+        'after the stack',
     );
     assert.ok(
       !/unhandled rejection/i.test(result.stderr),
@@ -296,11 +340,16 @@ test('an entry that rejects with a non-Error is still reported, not swallowed', 
     assert.equal(result.error, undefined, 'launcher should spawn without error');
     assert.equal(result.status, 1, 'a failed hand-off must exit 1');
     assert.equal(result.stdout, '', 'the failure report must not write to stdout');
-    assert.match(result.stderr, /instagram-mcp-ai failed to load: entry refused to load/);
-    assert.doesNotMatch(
+    // Whole-stream equality: with no stack to print, every byte of this report is
+    // the shim's own. The containment match it replaces could not see a line
+    // appended under the message — nor one printed above it — and the
+    // `doesNotMatch` beside it could not either, because it carried no right
+    // boundary. The stack-less value must be stringified rather than read
+    // through a missing `.stack`, and nothing may be written around it.
+    assert.equal(
       result.stderr,
-      /failed to load: undefined/,
-      'the stack-less value must be stringified, not read through a missing .stack',
+      `${LOAD_FAILURE_PREFIX}entry refused to load\n`,
+      'a rejection with no .stack must be reported as exactly String(err), on its own line',
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

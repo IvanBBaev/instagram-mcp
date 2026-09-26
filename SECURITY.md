@@ -52,16 +52,17 @@ See [docs/security.md](docs/security.md) for the authoritative treatment.
   `user_config`) — never in the repo. A redaction layer masks configured secret
   values and token-shaped strings (`EAA…`, `IGQ…`) before anything is serialized to
   the model, into errors, or into logs. Logs are structured JSON on stderr only,
-  with query strings stripped from URLs (Graph puts `access_token` in the query).
+  and no request URL is ever logged — a request record carries only method, host
+  and path (Graph puts `access_token` in the query).
 - **Network policy (SSRF).** A hard host allowlist admits only the official Meta
-  Graph hosts — `graph.instagram.com` and `graph.facebook.com` (plus the
-  resumable-upload host; see [docs/security.md](docs/security.md) §3) — and refuses
+  Graph hosts — `graph.instagram.com` and `graph.facebook.com`, and nothing else
+  (no resumable-upload host; see [docs/security.md](docs/security.md) §3) — and refuses
   everything else, including redirect targets, before the socket opens. No
   environment override widens this in v1. User-supplied `image_url` / `video_url`
   values are passed to Meta for ingestion; the server never fetches them itself.
 - **Model-driven-mutation safety (write gate).** Every write is **preview by
   default** and requires `apply: true` (or standing `IG_WRITE_MODE=apply`) to
-  execute — previews perform read-only GETs. Irreversible operations
+  execute — a preview makes no Graph call at all. Irreversible operations
   (`delete_comment`) are **double-gated** behind `IG_ALLOW_DESTRUCTIVE=true` and
   annotated with `destructiveHint`. Applied writes are journaled for audit, and
   `media_publish` is never auto-retried so one instruction can never post twice.

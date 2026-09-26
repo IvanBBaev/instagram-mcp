@@ -7,3 +7,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# MCPB bundles (built by scripts/build-mcpb.sh, attached to releases)
+*.mcpb

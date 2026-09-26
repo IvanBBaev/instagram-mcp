@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { allTools } from '../src/tools/index.js';
+import { PACKAGE_PROFILES, READONLY_PROFILES } from '../src/mcp/registry.js';
 import type { ToolSpec } from '../src/mcp/define.js';
 import { renderToolTable, renderEnvCatalog } from './helpers/doc-generators.js';
 
@@ -125,5 +126,93 @@ test('two tools sharing a name and package keep a stable relative order', () => 
   assert.ok(
     forward.indexOf('First copy.') < forward.indexOf('Second copy.'),
     'equal keys must preserve input order',
+  );
+});
+
+/**
+ * How many tools a profile actually registers: its packages intersected with the
+ * surface, and — for a profile that is read-only by definition — only the tools
+ * carrying `readOnlyHint`. This is the same resolution the registry performs, so
+ * the README table cannot claim a number the server does not produce.
+ */
+function toolsInProfile(profile: string): number {
+  const packages = new Set(PACKAGE_PROFILES[profile] ?? []);
+  const selected = allTools.filter((spec) => packages.has(spec.package));
+  return READONLY_PROFILES.includes(profile)
+    ? selected.filter((spec) => spec.annotations.readOnlyHint === true).length
+    : selected.length;
+}
+
+/**
+ * The hand-written profile table is the only place the README states what an
+ * operator gets for each `IG_TOOL_PACKAGES` value. `registry.test.ts` pins 15 and
+ * 21 as literals annotated "(README table)", but nothing ever read the README to
+ * check — so adding a tool moved the code and left the table behind, silently.
+ */
+test('README profile table states the tool count each profile really registers', () => {
+  const readme = readFileSync('README.md', 'utf8');
+  // Column 2 is captured, not skipped over: it is the literal an operator pastes into
+  // IG_TOOL_PACKAGES, and it is checked below.
+  const rows = [...readme.matchAll(/^\| `([a-z]+)`[^|]*\| ([^|]*)\|[^|]*\| (\d+) \|$/gm)];
+  const stated = new Map(rows.map(([, profile, , count]) => [profile, Number(count)]));
+  // Not `size > 0`: a floor lets a row go quiet. A row naming a profile the registry
+  // does not define is not a documentation slip either — selectPackages falls through
+  // to its explicit-list branch and throws at startup, so the operator who followed the
+  // table cannot start the server at all.
+  assert.deepEqual(
+    [...stated.keys()].sort(),
+    [...Object.keys(PACKAGE_PROFILES), 'all'].sort(),
+    'the README profile table and PACKAGE_PROFILES name different profiles.',
+  );
+
+  for (const profile of Object.keys(PACKAGE_PROFILES)) {
+    assert.strictEqual(
+      stated.get(profile),
+      toolsInProfile(profile),
+      `README claims a different tool count for the \`${profile}\` profile than the ` +
+        `registry resolves. An operator picks a profile by this number.`,
+    );
+  }
+  assert.strictEqual(
+    stated.get('all'),
+    allTools.length,
+    'README claims a different size for the `all` profile than the full surface.',
+  );
+
+  // The count is what an operator compares; the package list is what they copy. A wrong
+  // list is the quieter failure of the two: it is still a valid explicit selection, so
+  // the server starts and simply exposes a different surface than the row promised.
+  // `all` spells its value in prose, so which rows carry a literal list is asserted
+  // rather than assumed — a list that decayed into prose would otherwise be checked by
+  // nothing at all.
+  const spelled = new Map<string, string>();
+  for (const [, profile, packages] of rows) {
+    const literal = /^`([a-z, ]+)`$/.exec((packages ?? '').trim());
+    if (profile !== undefined && literal?.[1] !== undefined) spelled.set(profile, literal[1]);
+  }
+  assert.deepEqual(
+    [...spelled.keys()].sort(),
+    Object.keys(PACKAGE_PROFILES).sort(),
+    'the README rows spelling an explicit package list are no longer exactly the profiles ' +
+      'PACKAGE_PROFILES expands.',
+  );
+  for (const [profile, packages] of spelled) {
+    assert.deepEqual(
+      packages.split(',').map((pkg) => pkg.trim()),
+      [...(PACKAGE_PROFILES[profile] ?? [])],
+      `README spells the \`${profile}\` profile as a different package list than the registry ` +
+        'expands it to. An operator who copies that value gets a different tool surface.',
+    );
+  }
+});
+
+test('README tools badge counts the tools the server exposes', () => {
+  const readme = readFileSync('README.md', 'utf8');
+  const badge = /badge\/tools-(\d+)-/.exec(readme);
+  assert.notEqual(badge, null, 'README no longer carries a tools badge');
+  assert.strictEqual(
+    Number(badge?.[1]),
+    allTools.length,
+    'the README tools badge is stale — it is the first number anyone reads.',
   );
 });

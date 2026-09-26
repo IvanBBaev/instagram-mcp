@@ -30,11 +30,12 @@
  *                              pins anything the child derives from the wall
  *                              clock (token expiry arithmetic, above all).
  *
- * It also turns SIGTERM into an ordinary `process.exit(0)`. A transport child is
- * otherwise only stoppable by SIGKILL, which skips Node's exit hooks — including
- * the one that writes the `NODE_V8_COVERAGE` profile, so the child's work would
- * not be measured. This only changes how the child shuts down; nothing any test
- * asserts happens during shutdown.
+ * It also turns SIGTERM into an ordinary `process.exit(0)` for a child that has
+ * no handler of its own (the stdio transport). Such a child is otherwise only
+ * stoppable by SIGKILL, which skips Node's exit hooks — including the one that
+ * writes the `NODE_V8_COVERAGE` profile, so the child's work would not be
+ * measured. A child whose entry installed its own SIGTERM handler (the HTTP
+ * transport) is left to it: that shutdown is behaviour under test.
  */
 import { appendFileSync } from 'node:fs';
 
@@ -46,14 +47,24 @@ export interface StubRoute {
   status?: number;
   /** JSON body to answer with (default `{}`). */
   body?: unknown;
+  /**
+   * Extra response headers, merged over the content type. The reason this
+   * exists: Graph reports rate-limit consumption ONLY in headers
+   * (`X-App-Usage`, `X-Business-Use-Case-Usage`), and a body-only stub can
+   * therefore never drive the entry's usage telemetry (CC-RATE-8).
+   */
+  headers?: Record<string, string>;
 }
 
 type FetchArgs = Parameters<typeof fetch>;
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    // Route headers are merged AFTER the content type, so a route can override
+    // that too; spreading an absent `headers` contributes nothing, which is why
+    // no route needs to opt in.
+    headers: { 'content-type': 'application/json', ...headers },
   });
 }
 
@@ -91,7 +102,7 @@ globalThis.fetch = (input: FetchArgs[0], init?: FetchArgs[1]): Promise<Response>
       }),
     );
   }
-  return Promise.resolve(jsonResponse(route.status ?? 200, route.body ?? {}));
+  return Promise.resolve(jsonResponse(route.status ?? 200, route.body ?? {}, route.headers));
 };
 
 const fakeNodeVersion = process.env.IG_TEST_FAKE_NODE_VERSION;
@@ -108,6 +119,25 @@ if (fakeNowMs !== undefined) {
   Date.now = () => fixed;
 }
 
+// The harness knobs are the only `IG_*` names the entry does not own, and the
+// entry warns about every `IG_*` name nothing reads (CC-CFG-13). They have
+// served their purpose by now, so drop them before the entry looks — the
+// alternative, exempting `IG_TEST_*` in production code, would teach the
+// server about its own test harness.
+for (const name of [
+  'IG_TEST_ROUTES',
+  'IG_TEST_REQUEST_LOG',
+  'IG_TEST_FAKE_NODE_VERSION',
+  'IG_TEST_FAKE_NOW_MS',
+]) {
+  delete process.env[name];
+}
+
 process.on('SIGTERM', () => {
+  // The entry owns SIGTERM whenever it registered a handler of its own (the HTTP
+  // transport does, CC-PROC-204), and that handler is what the tests measure.
+  // Exiting here would pre-empt it — this listener was added first, so it runs
+  // first — and a test of graceful shutdown would pass without one.
+  if (process.listenerCount('SIGTERM') > 1) return;
   process.exit(0);
 });

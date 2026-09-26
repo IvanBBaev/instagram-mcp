@@ -18,11 +18,12 @@ the two Instagram auth paths and the credential resolution order.
 ## Quality gate
 
 ```bash
-npm run check        # the full gate: lint + format:check + build + test
+npm run check        # the full gate: lint + format:check + build + corpus + coverage + audit
 npm run lint         # eslint . (type-checked)
 npm run format:check # prettier --check .
 npm test             # node --test over dist (needs a prior build)
-npm run test:full    # build + test in one step
+npm run test:corpus  # the compiled suite is non-empty and the runner glob reaches it
+npm run test:full    # build + corpus guard + test in one step
 npm run coverage     # c8 text + lcov
 ```
 
@@ -63,7 +64,7 @@ run `npm run gen:readme`; the drift test fails CI when they are stale.
 ```bash
 npm run build
 node dist/src/index.js          # start the MCP server on the stdio transport
-node dist/src/index.js login    # interactive browser OAuth -> persist a token
+node dist/src/index.js login --path ig  # interactive browser OAuth -> persist a token (--path fb for Path B)
 node dist/src/index.js doctor   # diagnose the active profile's credential
 node dist/src/index.js refresh  # refresh the active profile's token
 ```
@@ -73,8 +74,8 @@ The published binary (`npx instagram-mcp-ai`) wraps the same entry; the
 the ESM graph. See the [README](README.md) for a full MCP-client config block.
 
 The server talks **only** to official Meta Graph hosts, and it is safe by
-default: every write tool is **preview by default**. A preview performs a
-read-only GET and returns what _would_ change; a real mutation requires
+default: every write tool is **preview by default**. A preview makes no
+Graph call at all and returns what _would_ change; a real mutation requires
 `apply: true` on the call (or the standing `IG_WRITE_MODE=apply`). Irreversible
 operations (`instagram_delete_comment`) are double-gated behind
 `IG_ALLOW_DESTRUCTIVE=true`. See [SECURITY.md](SECURITY.md) for the full model.

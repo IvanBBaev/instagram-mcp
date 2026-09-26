@@ -4,6 +4,7 @@
  * network) and a recording clock (no real time — `sleep` resolves instantly and
  * records its requested duration so backoff/Retry-After math is assertable).
  */
+import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isInstagramError } from '../../src/core/types.js';
@@ -32,8 +33,26 @@ interface FetchCall {
   url: string;
   method: string;
   body: string | undefined;
+  /**
+   * The headers the client set, or `undefined` when it set none. Recorded
+   * because "no payload" is a statement about the header as much as about the
+   * body: a `content-type` with nothing behind it is still a wire difference
+   * (CC-DATA-15).
+   */
+  headers: RequestInit['headers'];
   /** The `redirect` mode the client asked the transport for. */
   redirect: RequestInit['redirect'];
+  /**
+   * Every key the client actually put on the `RequestInit`, sorted.
+   *
+   * The five fields above are a PROJECTION: this recorder copies the keys it
+   * knows about and drops the rest, so a sixth key set by the seam cannot reach
+   * any assertion in this file no matter how thoroughly the five are checked.
+   * In production that object is handed verbatim to the global `fetch`, so a key
+   * added here is a change to what leaves the machine for Meta. Recorded so the
+   * key set itself can be pinned (CC-DATA-37).
+   */
+  initKeys: string[];
 }
 
 type FetchHandler = (n: number, call: FetchCall) => MockResponseSpec | Promise<MockResponseSpec>;
@@ -48,7 +67,9 @@ function mockFetch(handler: FetchHandler): { fetchImpl: typeof fetch; calls: Fet
       url,
       method: (init?.method ?? 'GET').toUpperCase(),
       body: typeof init?.body === 'string' ? init.body : undefined,
+      headers: init?.headers,
       redirect: init?.redirect,
+      initKeys: Object.keys(init ?? {}).sort(),
     };
     calls.push(call);
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
@@ -71,12 +92,18 @@ function mockFetch(handler: FetchHandler): { fetchImpl: typeof fetch; calls: Fet
   return { fetchImpl: impl, calls };
 }
 
-/** A {@link Clock} whose `sleep` resolves immediately and records durations. */
-function recordingClock(): Clock & { sleeps: number[] } {
+/**
+ * A {@link Clock} whose `sleep` resolves immediately and records durations.
+ *
+ * `now` is anchored at the epoch by default, which keeps the HTTP-date fixtures
+ * below readable. Pass `nowMs` when a test needs to prove that some piece of
+ * arithmetic reads the injected clock rather than a hard-wired zero.
+ */
+function recordingClock(nowMs = 0): Clock & { sleeps: number[] } {
   const sleeps: number[] = [];
   return {
     sleeps,
-    now: () => 0,
+    now: () => nowMs,
     sleep: (ms: number) => {
       sleeps.push(ms);
       return Promise.resolve();
@@ -84,26 +111,56 @@ function recordingClock(): Clock & { sleeps: number[] } {
   };
 }
 
-interface DebugRecord {
+interface LogRecord {
   msg: string;
   fields: Record<string, unknown> | undefined;
 }
 
-/** A {@link Logger} that captures `warn` messages and `debug` records. */
-function testLogger(): Logger & { warns: string[]; debugs: DebugRecord[] } {
+interface LeveledRecord extends LogRecord {
+  level: 'debug' | 'info' | 'warn' | 'error';
+}
+
+/**
+ * A {@link Logger} that captures every record whole — level, message AND fields.
+ * `warns` keeps the bare messages for the tests that only count them;
+ * `warnRecords` and `debugs` are for the ones that pin what an operator would
+ * read at one level.
+ *
+ * `records` is every level in emission order. It exists because the per-level
+ * views cannot see a record ADDED at a level nothing reads: `info` and `error`
+ * were once no-op sinks here, and a new `log.info` on the request path was
+ * therefore invisible to all 1877 tests.
+ */
+function testLogger(): Logger & {
+  warns: string[];
+  warnRecords: LogRecord[];
+  debugs: LogRecord[];
+  records: LeveledRecord[];
+} {
   const warns: string[] = [];
-  const debugs: DebugRecord[] = [];
+  const warnRecords: LogRecord[] = [];
+  const debugs: LogRecord[] = [];
+  const records: LeveledRecord[] = [];
   const logger = {
     warns,
+    warnRecords,
     debugs,
+    records,
     debug(msg: string, fields?: Record<string, unknown>) {
       debugs.push({ msg, fields });
+      records.push({ level: 'debug', msg, fields });
     },
-    info() {},
-    warn(msg: string) {
+    info(msg: string, fields?: Record<string, unknown>) {
+      records.push({ level: 'info', msg, fields });
+    },
+    warn(msg: string, fields?: Record<string, unknown>) {
       warns.push(msg);
+      warnRecords.push({ msg, fields });
+      records.push({ level: 'warn', msg, fields });
     },
-    error() {},
+    error(msg: string, fields?: Record<string, unknown>) {
+      records.push({ level: 'error', msg, fields });
+    },
     child() {
       return logger;
     },
@@ -383,6 +440,17 @@ test('a GET never carries a request body, even when the caller passes one', asyn
   await req({ method: 'GET', path: '/me', body: { caption: 'stray' } });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.body, undefined);
+  // The whole init key set on a read, not just the absence of `body`. This
+  // object is passed straight to the global `fetch`, so its key set is the wire
+  // contract, and every read of it in this file names one field at a time —
+  // which is blind to a key ADDED beside them, and so is the recorder above
+  // unless it keeps this list. Measured 2026-09-22: `credentials: 'include'` on
+  // that literal — which would send ambient cookie state to graph.instagram.com
+  // on every Graph call — survived all 132 tests of the four files that drive
+  // `createIgRequest` (test/core/http, test/api/path-injection, test/index,
+  // test/harness) with exit 0 and not one `not ok` line. A read sets three keys
+  // and no more: no `headers` without a body (CC-DATA-15), and nothing else.
+  assert.deepEqual(calls[0]!.initKeys, ['method', 'redirect', 'signal']);
 });
 
 test('an undefined body field is omitted, never sent as the string "undefined"', async () => {
@@ -405,6 +473,177 @@ test('an undefined body field is omitted, never sent as the string "undefined"',
   assert.equal(calls[0]!.body, 'caption=ok');
 });
 
+/*
+ * CC-DATA-12 — the sibling of CC-DATA-10, same defect, different sink. The
+ * query-string builder in `host.ts` skips a `null`; the form-body builder here
+ * did not, so `String(null)` serialized the four characters `null` into the
+ * `x-www-form-urlencoded` payload. Observed before the fix, verbatim:
+ * `caption=ok&alt_text=null&share_to_feed=false`. On a write that is a post
+ * whose alt text publicly reads "null" and a publishing-quota slot spent to fix
+ * it; nothing that guards `buildUrl` runs on a request body, so the guard has to
+ * exist twice.
+ *
+ * The cast below is the defect itself, written out: `IgRequestOptions.body`
+ * declares `string | number | boolean | undefined`, that annotation is erased
+ * before the loop runs, and nothing validates the object that arrives — a
+ * JavaScript consumer of the shipped `.d.ts` is bound by nothing at all.
+ *
+ * The `null` sits in the MIDDLE deliberately: a guard that aborted the loop
+ * instead of skipping the entry would silently drop every later field of the
+ * write.
+ */
+test('a null body field is omitted, never sent as the literal string "null" (CC-DATA-12)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  const fromUntypedCaller = { caption: 'ok', alt_text: null, location_id: '42' } as unknown as {
+    [k: string]: string | number | boolean | undefined;
+  };
+  await req({ method: 'POST', path: '/123/media', body: fromUntypedCaller });
+  const payload = String(calls[0]!.body);
+  assert.equal(/null/.test(payload), false, 'no spelling of null reaches the wire');
+  assert.equal(
+    payload,
+    'caption=ok&location_id=42',
+    'the null field must vanish from the payload, and the fields behind it must survive',
+  );
+
+  // Both nullish spellings are skipped by the same guard, so a body whose every
+  // field is nullish contributes no fields at all — and therefore no payload.
+  //
+  // This assertion previously read `assert.equal(calls[1]!.body, '')`, which
+  // pinned the wrong behaviour: it recorded that an all-nullish body still put
+  // an empty form payload (and a `content-type` header) on the wire, which is
+  // exactly the defect CC-DATA-15 names. It was written while CC-DATA-12 was
+  // being closed and was only ever asserting "no phantom keys" — the empty
+  // string was the incident, not the intent. The intent is asserted in full by
+  // the CC-DATA-15 group below; here it is only tightened from `''` to "no body
+  // at all", which is strictly stronger.
+  await req({
+    method: 'POST',
+    path: '/123/media',
+    body: { a: null, b: undefined } as unknown as { [k: string]: string | undefined },
+  });
+  assert.equal(calls[1]!.body, undefined);
+});
+
+/*
+ * The boundary the fix above must not cross: the guard is nullish, never falsy.
+ * `false`, `0` and `''` are values a caller deliberately chose — `share_to_feed:
+ * false` is an explicit opt-out, `thumb_offset: 0` is the first frame, `''` is a
+ * cleared caption — and each has a real spelling in a form body. Widening the
+ * guard to `!value` would drop all three and perform a DIFFERENT write than the
+ * one requested, with nothing in the payload to show for it.
+ */
+test('a POST body keeps falsy-but-meaningful values and drops only the nullish ones', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({
+    method: 'POST',
+    path: '/123/media',
+    body: {
+      share_to_feed: false,
+      thumb_offset: 0,
+      caption: '',
+      gone: undefined,
+      also_gone: null,
+    } as unknown as { [k: string]: string | number | boolean | undefined },
+  });
+  assert.equal(calls[0]!.body, 'share_to_feed=false&thumb_offset=0&caption=');
+});
+
+/*
+ * CC-DATA-15 — two spellings of "no payload" were two different requests on the
+ * wire. `init.body` and the `content-type` header are set together, gated on the
+ * serialized body being defined, and the serialization was assigned
+ * unconditionally: `form.toString()` on an empty form is `''`, which is defined.
+ * Measured before the fix, through this same seam:
+ *
+ *   body: undefined      -> `body` absent from init, no headers
+ *   body: {}             -> init.body === '', content-type: …x-www-form-urlencoded
+ *   body: {a:null,b:und} -> init.body === '', content-type: …x-www-form-urlencoded
+ *   DELETE body: {}      -> init.body === '', content-type: …x-www-form-urlencoded
+ *
+ * The all-nullish row is new since CC-DATA-12 closed: before that fix those
+ * fields serialized to `a=null&b=undefined`, so a body that means nothing only
+ * started reaching this point empty once the nullish guard began skipping them.
+ *
+ * The header is half the defect and the more durable half — it survives even
+ * when the payload is empty, and it is what makes the two requests
+ * distinguishable to every proxy on the path. A DELETE carrying a zero-length
+ * form body is the sharp end: nothing in the caller asked for that.
+ */
+
+/** Assert the recorded request carried no payload at all — neither half. */
+function assertNoPayload(call: FetchCall, label: string): void {
+  assert.equal(call.body, undefined, `${label}: no request body`);
+  assert.equal(call.headers, undefined, `${label}: and no content-type header`);
+}
+
+test('a body that contributes no fields leaves the wire exactly as no body does (CC-DATA-15)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+
+  await req({ method: 'POST', path: '/123/media' }); // the reference shape
+  await req({ method: 'POST', path: '/123/media', body: {} });
+  await req({
+    method: 'POST',
+    path: '/123/media',
+    body: { a: null, b: undefined } as unknown as { [k: string]: string | undefined },
+  });
+  await req({ method: 'DELETE', path: '/123', body: {} });
+
+  assertNoPayload(calls[0]!, 'body: undefined');
+  assertNoPayload(calls[1]!, 'body: {}');
+  assertNoPayload(calls[2]!, 'a body whose every field is nullish');
+  assertNoPayload(calls[3]!, 'DELETE with body: {}');
+});
+
+/*
+ * The boundary CC-DATA-15 must not cross — and the reason the guard counts
+ * FIELDS instead of testing the serialized string for emptiness. `{ caption: '' }`
+ * is not an absent payload: clearing a caption is a real write, `''` is the
+ * value the caller chose, and it has a real spelling on the wire (`caption=`).
+ * A guard spelled "is the serialized body falsy?" would drop that write and
+ * leave the caption untouched, with nothing in the request to show for it.
+ */
+test('a body whose only field is an empty string still sends a payload (CC-DATA-15)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'POST', path: '/123/media', body: { caption: '' } });
+  assert.equal(calls[0]!.body, 'caption=');
+  assert.deepEqual(calls[0]!.headers, { 'content-type': 'application/x-www-form-urlencoded' });
+  // The write path's whole init key set, for the reason the GET test above
+  // spells out. `headers` pins the inner record; this pins the outer one, which
+  // nothing else in this file bounds. A write sets exactly these five — the
+  // three a read sets, plus the body and the content-type that must travel
+  // together.
+  assert.deepEqual(calls[0]!.initKeys, ['body', 'headers', 'method', 'redirect', 'signal']);
+});
+
 test('the request debug log carries no URL and no token', async () => {
   // Graph puts `access_token` in the query string, so the signed URL is a
   // credential. Logs are structured JSON on stderr and are the artifact an
@@ -425,6 +664,18 @@ test('the request debug log carries no URL and no token', async () => {
     log.debugs.some((rec) => rec.msg === 'graph request'),
     'the request itself is still logged',
   );
+  // The record is pinned whole: method, host and path are the three things an
+  // operator needs to match a log line to a call, and none of them is a secret.
+  // A `some(msg === …)` alone would let any of the three silently drop out.
+  assert.deepEqual(
+    log.debugs.filter((rec) => rec.msg === 'graph request'),
+    [
+      {
+        msg: 'graph request',
+        fields: { method: 'GET', host: 'graph.instagram.com', path: '/123/media' },
+      },
+    ],
+  );
   for (const rec of log.debugs) {
     const serialized = JSON.stringify(rec.fields ?? {});
     assert.equal(serialized.includes('IG_TOKEN'), false, `token leaked into "${rec.msg}"`);
@@ -434,6 +685,65 @@ test('the request debug log carries no URL and no token', async () => {
       `a full URL leaked into "${rec.msg}": ${serialized}`,
     );
   }
+});
+
+test('one graph request emits exactly one log record and nothing at info or error', async () => {
+  // Every other logging test in this file reads ONE level: `debugs` or
+  // `warnRecords`. Those views are blind in one direction — a record ADDED at a
+  // level nothing reads is invisible to all of them. `info` and `error` were
+  // no-op sinks in this double until now, and a `log.info('graph request
+  // dispatched', …)` planted on the request path duly survived the entire
+  // suite. The whole ordered stream is pinned instead, on the two paths that
+  // carry a record at all: a plain request, and a throttled one below.
+  const log = testLogger();
+  const { fetchImpl } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log,
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/123/media' });
+
+  assert.deepEqual(log.records, [
+    {
+      level: 'debug',
+      msg: 'graph request',
+      fields: { method: 'GET', host: 'graph.instagram.com', path: '/123/media' },
+    },
+  ]);
+});
+
+test('a throttled request emits exactly the debug line then the warn, in that order', async () => {
+  const log = testLogger();
+  const { fetchImpl } = mockFetch(() => ({
+    body: { ok: 1 },
+    headers: { 'x-app-usage': JSON.stringify({ call_count: 95 }) },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log,
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me' });
+
+  // Order is part of the contract: the request is logged before it goes out, the
+  // throttle warning only after the response headers have been read.
+  assert.deepEqual(log.records, [
+    {
+      level: 'debug',
+      msg: 'graph request',
+      fields: { method: 'GET', host: 'graph.instagram.com', path: '/me' },
+    },
+    {
+      level: 'warn',
+      msg: 'approaching Instagram rate limit; throttling before returning',
+      fields: { host: 'graph.instagram.com', usagePct: 95 },
+    },
+  ]);
 });
 
 // --- http.ts: SSRF gate short-circuits before any fetch ---------------------
@@ -465,6 +775,28 @@ test('a loopback host (127.0.0.1) rejects with kind=validation and makes NO fetc
   });
   await assert.rejects(
     () => req({ method: 'GET', path: '/x', host: '127.0.0.1' as unknown as GraphHost }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'validation',
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('an empty host is refused rather than silently replaced by the default', async () => {
+  // `opts.host ?? auth.defaultHost`, never `||`. An empty `host` is a caller or
+  // config bug, and the two operators disagree about exactly that value: `??`
+  // lets it through to the SSRF gate, which refuses it; `||` would swap in the
+  // default host and send the request somewhere the caller never named. A
+  // request silently redirected to a host nobody asked for is the failure this
+  // whole gate exists to prevent, so the empty string must surface as an error.
+  const { fetchImpl, calls } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/x', host: '' as unknown as GraphHost }),
     (e: unknown) => isInstagramError(e) && e.kind === 'validation',
   );
   assert.equal(calls.length, 0);
@@ -668,6 +1000,148 @@ test('a mapped Graph error surfaces as an InstagramError with the right kind (ne
   assert.equal(calls.length, 1); // validation is never retried
 });
 
+test('a GET that meets an OAuthException with no recognised code is auth and is NOT retried (CC-AUTH-23)', async () => {
+  // Measured before `deriveKind` read `error.type`: this exact response, on a
+  // GET, produced FOUR fetches and three backoffs and surfaced as `upstream` —
+  // three replays against a credential that will never work again, and an
+  // operator told nothing about re-authenticating. The retry decision is what
+  // this test pins, not the classification alone: `isRetryableKind` replays
+  // `upstream` on every idempotent call, so `kind` and the request count are
+  // two views of the same bug.
+  const clock = recordingClock();
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 400,
+    body: {
+      error: {
+        type: 'OAuthException',
+        message: 'Error validating access token: Session has expired',
+      },
+    },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'auth' &&
+      e.status === 400 &&
+      e.code === undefined &&
+      e.message === 'Error validating access token: Session has expired',
+  );
+  assert.equal(calls.length, 1, 'a dead token is reported once, never replayed');
+  assert.deepEqual(clock.sleeps, [], 'no backoff without a retry');
+});
+
+test('a blank x-fb-trace-id header leaves the field absent, not empty (CC-DATA-21)', async () => {
+  // `mapGraphError` runs its non-empty filter over the trace id it finds in the
+  // BODY only; the header argument is adopted verbatim. So `x-fb-trace-id: ` — a
+  // present-but-empty header, which a proxy or a load balancer in front of Meta
+  // can emit — arrived on the error as `fbtraceId: ''`: an id-shaped field with
+  // no id in it. It reads to the operator as "we have a trace id", it is
+  // worthless to anyone who quotes it at Meta support, and it passes every
+  // `fbtraceId !== undefined` check between here and the sink, so nothing
+  // downstream can tell it apart from a real one. Absent and present-but-blank
+  // are the same fact; an id is the different one. All three are pinned in one
+  // table so a later edit cannot "fix" one case by breaking another.
+  const cases: Array<{ label: string; headers: Record<string, string>; expected?: string }> = [
+    { label: 'header absent', headers: {} },
+    { label: 'header present but empty', headers: { 'x-fb-trace-id': '' } },
+    // A real `Headers` strips leading and trailing whitespace from a value on the
+    // way in, so this row reaches the client already flattened to `''`. It is
+    // here because it is the spelling an operator would actually see on the wire,
+    // and it must land on the same answer; the case where the whitespace SURVIVES
+    // the transport is pinned separately below.
+    { label: 'header whitespace-only', headers: { 'x-fb-trace-id': '   ' } },
+    {
+      label: 'header carries a real id',
+      headers: { 'x-fb-trace-id': 'AbC-123' },
+      expected: 'AbC-123',
+    },
+  ];
+
+  for (const { label, headers, expected } of cases) {
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 400,
+      headers,
+      body: { error: { code: 100, message: 'Invalid parameter' } },
+    }));
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock: recordingClock(),
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/x' }),
+      (e: unknown) => {
+        assert.ok(isInstagramError(e));
+        assert.equal(e.fbtraceId, expected, label);
+        // The trace-id decision changes nothing else about the mapped error.
+        assert.equal(e.kind, 'validation', label);
+        assert.equal(e.status, 400, label);
+        assert.equal(e.code, 100, label);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, label); // still a validation error: never retried
+  }
+});
+
+test('a whitespace-only trace id stays blank when the transport does not normalize', async () => {
+  // The table above goes through a real `Headers`, which flattens `'   '` to `''`
+  // before the client ever sees it — so that row cannot tell a blank test apart
+  // from a zero-length one. `fetchImpl` is an injectable seam and nothing makes
+  // every transport an `undici` one: a proxy agent, a stubbed `Response`, or a
+  // future runtime may answer a header lookup verbatim. Driving that directly
+  // pins the guard as "blank", not merely "empty" — and the second row pins the
+  // other half of the same decision, that an id which passes the guard is handed
+  // on EXACTLY as Meta wrote it. Reshaping a support reference is the same class
+  // of harm as inventing one.
+  for (const [rawHeader, expected] of [
+    ['  \t ', undefined],
+    [' AbC-123 ', ' AbC-123 '],
+  ] as const) {
+    const fetchImpl: typeof fetch = () => {
+      const res = new Response(JSON.stringify({ error: { code: 100, message: 'nope' } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
+      // The normalization is the thing being stepped around, so it cannot be the
+      // thing doing the answering: a bare `get` that returns what it was given.
+      const verbatim = {
+        get: (name: string): string | null => (name === 'x-fb-trace-id' ? rawHeader : null),
+      };
+      // `defineProperty`'s descriptor takes `any`, so no cast is needed — and adding
+      // one would be flagged as unnecessary rather than documenting anything.
+      Object.defineProperty(res, 'headers', { value: verbatim });
+      return Promise.resolve(res);
+    };
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock: recordingClock(),
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/x' }),
+      (e: unknown) => {
+        assert.ok(isInstagramError(e));
+        assert.equal(e.fbtraceId, expected, JSON.stringify(rawHeader));
+        assert.equal(e.status, 400);
+        return true;
+      },
+    );
+  }
+});
+
 test('a transport error retries on an idempotent GET and then succeeds', async () => {
   // A dropped socket / DNS blip never reaches the response branch — it rejects
   // out of `fetch`. Retrying it is the client's core resilience guarantee.
@@ -766,6 +1240,49 @@ test('a transport error that never clears exhausts the attempt budget', async ()
   assert.equal(clock.sleeps.length, 3, 'one backoff between each pair of attempts');
 });
 
+test('a rate limit that never clears exhausts the attempt budget instead of looping forever', async () => {
+  // The HTTP-error arm's `lastAttempt` check is the ONLY exit from the retry
+  // loop for an error that stays retryable — the loop itself is unbounded. Every
+  // other 429 test here clears on a later attempt, so none of them can observe
+  // that check: with it gone they all still pass, and only a rate limit that
+  // never lifts distinguishes a bounded client from one that spins until the
+  // caller's own signal (or the test runner) kills it.
+  //
+  // The clock carries a fuse. `sleep` here resolves instantly, so an unbounded
+  // client would spin without ever yielding long enough for a test timeout to
+  // land — and `npm test` passes no `--test-timeout` at all. Rejecting on the
+  // fourth backoff is unreachable while the bound holds (the assertions below
+  // pin it at three), and turns a regression into a millisecond-fast failure
+  // instead of a hung CI job.
+  const sleeps: number[] = [];
+  const clock: Clock = {
+    now: () => 0,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      return sleeps.length > 3
+        ? Promise.reject(new Error('the retry loop never terminated'))
+        : Promise.resolve();
+    },
+  };
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    body: { error: { code: 4, message: 'throttled' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'rate_limit',
+  );
+  assert.equal(calls.length, 4, 'MAX_ATTEMPTS is 4 — the first try plus 3 retries');
+  assert.equal(sleeps.length, 3, 'one backoff between each pair of attempts');
+});
+
 test('Retry-After in the HTTP-date form is honored relative to the clock', async () => {
   // Meta may answer with an HTTP-date instead of delta-seconds; the recording
   // clock anchors `now` at 0, so this date is exactly 30s out.
@@ -775,6 +1292,34 @@ test('Retry-After in the HTTP-date form is honored relative to the clock', async
       ? {
           status: 429,
           headers: { 'retry-after': 'Thu, 01 Jan 1970 00:00:30 GMT' },
+          body: { error: { code: 4, message: 'throttled' } },
+        }
+      : { body: { ok: true } },
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me' });
+  assert.deepEqual(clock.sleeps, [30_000]);
+});
+
+test('an HTTP-date Retry-After is measured from the injected clock, not from a fixed zero', async () => {
+  // The test above anchors `now` at the epoch, which makes it blind to whether
+  // the subtraction reads `clock.now()` at all — 0 is both the honest answer and
+  // the constant a bug would hard-wire. Anchoring the clock in 2026 separates
+  // them: read correctly the wait is 30s; read as 0 it becomes 56 years, which
+  // the 60s cap flattens to a full minute.
+  const anchor = Date.parse('2026-01-01T00:00:00Z');
+  const clock = recordingClock(anchor);
+  const { fetchImpl } = mockFetch((n) =>
+    n === 0
+      ? {
+          status: 429,
+          headers: { 'retry-after': new Date(anchor + 30_000).toUTCString() },
           body: { error: { code: 4, message: 'throttled' } },
         }
       : { body: { ok: true } },
@@ -813,7 +1358,10 @@ test('an HTTP-date Retry-After already in the past clamps to zero, never negativ
 });
 
 test('an unparseable or blank Retry-After falls back to exponential backoff', async () => {
-  for (const header of ['soon', '   ']) {
+  // The digit-bearing rows are the near misses: delta-seconds is `^\d+$` and
+  // nothing looser. A prefix match would feed `Number('2s')` (NaN) into the
+  // sleep, and a NaN sleep is an immediate retry — the opposite of backing off.
+  for (const header of ['soon', '   ', '2s', '5;foo', '5 seconds']) {
     const clock = recordingClock();
     const { fetchImpl } = mockFetch((n) =>
       n === 0
@@ -840,6 +1388,205 @@ test('an unparseable or blank Retry-After falls back to exponential backoff', as
   }
 });
 
+test('a Retry-After that is not delta-seconds or an IMF-fixdate falls back to backoff (CC-RATE-17)', async () => {
+  // V8's `Date.parse` has a legacy fallback that reads almost anything as a
+  // date: `'1.5'` is 2001-01-01, `'-1'` is 2001-01-01, `'+5'` and `'Thu 5'` are
+  // 2001-05-01, `'60,'` is 1960, `'12/31'` is 2001-12-31. Against a 2026 clock
+  // each becomes a past instant, so the retry fired with ZERO delay (the
+  // hammering CC-RATE-10 exists to avoid). The clock is anchored in 2026
+  // because an epoch anchor would turn every one of these into the 60 s cap
+  // instead and hide the zero. (A bare `'2026'` is valid delta-seconds and is
+  // not in this list.) Only the IMF-fixdate form RFC 9110
+  // requires senders to use is read as a date; the obsolete forms and a
+  // lower-cased fixdate (HTTP-date is case-sensitive) take the backoff too.
+  const anchor = Date.parse('2026-09-26T00:00:00Z');
+  for (const header of [
+    '1.5',
+    '-1',
+    '+5',
+    '60,',
+    'Thu 5',
+    '12/31',
+    'Jan 1',
+    'Sun Nov  6 08:49:37 1994',
+    'Sunday, 06-Nov-94 08:49:37 GMT',
+    'sat, 26 sep 2026 00:00:30 gmt',
+    // Near misses V8 still reads as a date, each 30 s (or an hour before that)
+    // after the clock: they pin the anchors, the comma and the zone of the form.
+    'x Sat, 26 Sep 2026 00:00:30 GMT',
+    'Sat, 26 Sep 2026 00:00:30 GMT+0100',
+    'Sat 26 Sep 2026 00:00:30 GMT',
+    'Sat, 26 Sep 2026 00:00:30 UTC',
+    // IMF-fixdate in shape, but no instant: `Date.parse` answers NaN.
+    'Sat, 26 Sep 2026 25:00:00 GMT',
+    'Sat, 99 Sep 2026 00:00:30 GMT',
+  ]) {
+    const clock = recordingClock(anchor);
+    const { fetchImpl } = mockFetch((n) =>
+      n === 0
+        ? {
+            status: 429,
+            headers: { 'retry-after': header },
+            body: { error: { code: 4, message: 'throttled' } },
+          }
+        : { body: { ok: true } },
+    );
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await req({ method: 'GET', path: '/me' });
+    assert.equal(clock.sleeps.length, 1);
+    assert.ok(
+      clock.sleeps[0]! >= 500 && clock.sleeps[0]! < 750,
+      `Retry-After ${JSON.stringify(header)} must not be read as a date; got ${clock.sleeps[0]}`,
+    );
+  }
+});
+
+test('a FUTURE-dated RFC 850 or asctime Retry-After still takes backoff, not its wait (CC-RATE-18)', async () => {
+  // RFC 9110 §5.6.7 says a recipient MUST accept the two obsolete HTTP-date
+  // forms; this client refuses them on purpose (owner decision, CC-RATE-18).
+  // The CC-RATE-17 list above only has 1994 dates, where honoring would mean
+  // a zero wait; this pins the refusal where honoring would mean a REAL wait
+  // (30 s after the clock), so a change of policy has to change this test.
+  const anchor = Date.parse('2026-09-26T00:00:00Z');
+  for (const header of ['Saturday, 26-Sep-26 00:00:30 GMT', 'Sat Sep 26 00:00:30 2026']) {
+    const clock = recordingClock(anchor);
+    const { fetchImpl } = mockFetch((n) =>
+      n === 0
+        ? {
+            status: 429,
+            headers: { 'retry-after': header },
+            body: { error: { code: 4, message: 'throttled' } },
+          }
+        : { body: { ok: true } },
+    );
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await req({ method: 'GET', path: '/me' });
+    assert.equal(clock.sleeps.length, 1);
+    assert.ok(
+      clock.sleeps[0]! >= 500 && clock.sleeps[0]! < 750,
+      `obsolete-form Retry-After ${JSON.stringify(header)} must take backoff; got ${clock.sleeps[0]}`,
+    );
+  }
+});
+
+test('an IMF-fixdate Retry-After on every weekday and month is still honored (CC-RATE-17)', async () => {
+  // The strict form must not lose a real date: the first of every month plus
+  // seven consecutive days, so every month name and every day name the pattern
+  // lists is exercised, each exactly 30 s after the clock.
+  const anchors = [
+    ...Array.from({ length: 12 }, (_, month) => Date.UTC(2026, month, 1)),
+    ...Array.from({ length: 7 }, (_, day) => Date.UTC(2026, 8, 21 + day)),
+  ];
+  for (const anchor of anchors) {
+    const clock = recordingClock(anchor);
+    const header = new Date(anchor + 30_000).toUTCString();
+    const { fetchImpl } = mockFetch((n) =>
+      n === 0
+        ? {
+            status: 429,
+            headers: { 'retry-after': header },
+            body: { error: { code: 4, message: 'throttled' } },
+          }
+        : { body: { ok: true } },
+    );
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await req({ method: 'GET', path: '/me' });
+    assert.deepEqual(clock.sleeps, [30_000], `Retry-After ${header} must be honored`);
+  }
+});
+
+test('a padded delta-seconds Retry-After is trimmed when the transport does not normalize', async () => {
+  // A real `Headers` strips the padding before the client sees it, so every
+  // fixture that goes through `new Response` is a fixed point for the `trim()`
+  // in `parseRetryAfter`. With the trim gone, `' 2 '` fails the delta-seconds
+  // regex and falls to `Date.parse`, which V8 reads leniently as a date in 2001
+  // — a 60s (capped) wait in place of a 2s one. The verbatim transport below is
+  // the same seam the trace-id test uses: `fetchImpl` is injectable and nothing
+  // makes every transport normalize.
+  const clock = recordingClock();
+  let n = 0;
+  const fetchImpl: typeof fetch = () => {
+    const first = n++ === 0;
+    const res = new Response(
+      JSON.stringify(first ? { error: { code: 4, message: 'throttled' } } : { ok: true }),
+      { status: first ? 429 : 200, headers: { 'content-type': 'application/json' } },
+    );
+    const verbatim = {
+      get: (name: string): string | null => (first && name === 'retry-after' ? ' 2 ' : null),
+    };
+    Object.defineProperty(res, 'headers', { value: verbatim });
+    return Promise.resolve(res);
+  };
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me' });
+  assert.deepEqual(clock.sleeps, [2_000]);
+});
+
+test('idempotent:false on a GET switches retries OFF — the override is a value, not a default', async () => {
+  // `opts.idempotent ?? method === 'GET'`: the option overrides the method-derived
+  // default in BOTH directions (types.ts). `false` is falsy, so an `||` in that
+  // seat would quietly re-enable retries for a GET the caller declared unsafe to
+  // replay — the one case the override exists for. Both retryable outcomes
+  // (a 429 and a transport error) are pinned to a single attempt.
+  for (const [label, handler] of [
+    [
+      '429',
+      (): MockResponseSpec => ({
+        status: 429,
+        headers: { 'retry-after': '1' },
+        body: { error: { code: 4, message: 'throttled' } },
+      }),
+    ],
+    [
+      'transport error',
+      (): MockResponseSpec => {
+        throw new TypeError('fetch failed');
+      },
+    ],
+  ] as const) {
+    const clock = recordingClock();
+    const { fetchImpl, calls } = mockFetch(handler);
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/me', idempotent: false }),
+      (e: unknown) => isInstagramError(e),
+      label,
+    );
+    assert.equal(calls.length, 1, `${label}: a non-idempotent GET is never replayed`);
+    assert.deepEqual(clock.sleeps, [], `${label}: no backoff without a retry`);
+  }
+});
+
 // --- http.ts: timeout / abort ----------------------------------------------
 
 test('a caller-aborted signal produces an InstagramError and does not retry', async () => {
@@ -859,6 +1606,37 @@ test('a caller-aborted signal produces an InstagramError and does not retry', as
     (e: unknown) => isInstagramError(e),
   );
   assert.equal(clock.sleeps.length, 0);
+});
+
+test('a caller abort during an idempotent fetch is final — no retry, and it reads as a cancel', async () => {
+  // Since 2026-09-23 an already-aborted signal is refused before the slot, so the
+  // test above no longer reaches the transport at all. This is the in-flight
+  // half: the abort lands while `fetch` is pending, on a GET that WOULD be
+  // retried after a timeout, and must end the call on its first attempt with
+  // the cancel's own message rather than the timeout's.
+  const clock = recordingClock();
+  const controller = new AbortController();
+  const { fetchImpl, calls } = mockFetch(() => {
+    controller.abort();
+    return new Promise<MockResponseSpec>(() => {});
+  });
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me', signal: controller.signal }),
+    (e: unknown) => {
+      assert.ok(isInstagramError(e));
+      assert.equal(e.message, 'This operation was aborted');
+      return true;
+    },
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(clock.sleeps, []);
 });
 
 test('a timeout on a never-resolving fetch rejects without hanging', async () => {
@@ -887,6 +1665,99 @@ test('a timeout on a never-resolving fetch rejects without hanging', async () =>
     assert.equal(clock.sleeps.length, 0);
   } finally {
     if (keepAlive) clearTimeout(keepAlive);
+  }
+});
+
+test('a per-attempt timeout on an idempotent GET is retried — only the caller’s own abort is final', async () => {
+  // The per-attempt deadline is `AbortSignal.timeout` folded into the same
+  // combined signal the caller's abort goes through, so when the timer fires the
+  // signal handed to fetch IS aborted. The retry decision must read the CALLER's
+  // signal, not the combined one: a client that checks the combined signal sees
+  // every timeout as a caller abort and gives up on the first slow attempt. The
+  // two POST timeout tests above cannot tell the difference — a POST is never
+  // retried whichever signal is consulted — so this one times out a GET.
+  const clock = recordingClock();
+  let slow: ReturnType<typeof setTimeout> | undefined;
+  const { fetchImpl, calls } = mockFetch((n) =>
+    n === 0
+      ? new Promise<MockResponseSpec>((resolve) => {
+          slow = setTimeout(() => resolve({ body: { late: true } }), 10_000);
+        })
+      : { body: { ok: true } },
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ timeoutMs: 20 }), // real 20ms per-attempt deadline
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  try {
+    const out = await req<{ ok: boolean }>({ method: 'GET', path: '/me' });
+    assert.deepEqual(out, { ok: true });
+    assert.equal(calls.length, 2, 'the timed-out attempt is followed by exactly one retry');
+    assert.equal(clock.sleeps.length, 1, 'one backoff between the two attempts');
+  } finally {
+    if (slow) clearTimeout(slow);
+  }
+});
+
+test('the third backoff doubles again — 500, 1000, 2000 ms with the jitter pinned to zero', async (t) => {
+  // Rule of the fixed point: `500 · 2^n` and `500 · (n + 1)` agree at n = 0 and
+  // n = 1 (500 and 1000 ms), which is every backoff the two-retry tests above can
+  // see. Only the third sleep (n = 2: 2000 vs 1500 ms) separates exponential from
+  // linear, and the [base, 1.5·base) jitter bands of the two overlap there, so
+  // the jitter is pinned to zero for a whole-sequence assertion that cannot pass
+  // by luck.
+  t.mock.method(Math, 'random', () => 0);
+  const clock = recordingClock();
+  const { fetchImpl, calls } = mockFetch((n) => {
+    if (n < 3) throw new TypeError('fetch failed');
+    return { body: { ok: true } };
+  });
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  const out = await req<{ ok: boolean }>({ method: 'GET', path: '/me' });
+  assert.deepEqual(out, { ok: true });
+  assert.equal(calls.length, 4);
+  assert.deepEqual(clock.sleeps, [500, 1000, 2000]);
+});
+
+test('the request deadline is the configured timeout, not some multiple of it', async () => {
+  // The test above proves only that a timeout fires eventually: its fetch never
+  // answers, so any deadline at all — 20ms, 200ms, 20s — ends the same way. This
+  // one pins the number. The fetch answers at 120ms, comfortably past the 20ms
+  // deadline but well inside any plausible multiple of it, so a client reading
+  // the setting correctly aborts while one inflating it returns a 200.
+  const clock = recordingClock();
+  let late: ReturnType<typeof setTimeout> | undefined;
+  const { fetchImpl, calls } = mockFetch(
+    () =>
+      new Promise<MockResponseSpec>((resolve) => {
+        late = setTimeout(() => resolve({ body: { ok: true } }), 120);
+      }),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ timeoutMs: 20 }),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  try {
+    await assert.rejects(
+      () => req({ method: 'POST', path: '/x', body: { a: '1' } }), // POST → no retry
+      (e: unknown) => isInstagramError(e),
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(clock.sleeps.length, 0);
+  } finally {
+    if (late) clearTimeout(late);
   }
 });
 
@@ -962,7 +1833,215 @@ test('usage above 90% triggers a proactive throttle sleep and a warn log', async
   await req({ method: 'GET', path: '/me' });
   assert.equal(clock.sleeps.length, 1);
   assert.ok(clock.sleeps[0]! > 0);
-  assert.equal(log.warns.length, 1);
+  // Pinned whole, not counted: the message is what an operator greps for and the
+  // two fields (which host, how hot) are what makes the line actionable. A bare
+  // `warns.length === 1` passes with the message rewritten or `usagePct` gone.
+  assert.deepEqual(log.warnRecords, [
+    {
+      msg: 'approaching Instagram rate limit; throttling before returning',
+      fields: { host: 'graph.instagram.com', usagePct: 95 },
+    },
+  ]);
+});
+
+// A `fetch` double whose RESPONSE BODY is observable. `mockFetch` above returns
+// `new Response(payload)` - a fully buffered body whose read cannot fail and
+// cannot be ordered against anything, which is precisely why the two tests below
+// could not be written with it (CC-PROC-184). `onRead` runs when the client
+// first pulls from the body STREAM, and its text (or rejection) is what the
+// stream yields: the client reads the stream itself since the body cap
+// (CC-PROC-203), so a double that only patches `text()` would observe nothing.
+function bodyFetch(headers: Record<string, string>, onRead: () => Promise<string>): typeof fetch {
+  return async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        controller.enqueue(new TextEncoder().encode(await onRead()));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'application/json', ...headers },
+    });
+  };
+}
+
+const HOT = { 'x-app-usage': JSON.stringify({ call_count: 95 }) };
+
+test('a throttled response is DRAINED before the throttle sleep, not after', async () => {
+  // The throttle sleeps on `opts.signal`, never on the per-attempt
+  // `AbortSignal.timeout(settings.timeoutMs)` - so it burns its full second no
+  // matter how little of the deadline is left, while the body it has not read
+  // yet is still governed by that deadline. Reading after sleeping therefore
+  // discarded responses that had already arrived in full.
+  //
+  // Measured end-to-end before this test existed, against the real undici and
+  // the real system clock, one loopback request whose headers land at ~2 ms
+  // carrying `x-app-usage` at 95%: at `timeoutMs: 30_000` it returned at 1009 ms,
+  // and at `timeoutMs: 900` the byte-identical response failed at 1004 ms with
+  // `DOMException` / `AbortError`. Only the throttle's share of the deadline
+  // differed between those runs.
+  //
+  // Pinned here as ORDER rather than as elapsed time: the wall-clock version
+  // needs a real sleep to be honest and still only fails when the numbers line
+  // up, whereas the order is the actual invariant and holds at every timeout.
+  const order: string[] = [];
+  const clock: Clock = {
+    now: () => 0,
+    sleep: () => {
+      order.push('sleep');
+      return Promise.resolve();
+    },
+  };
+  const fetchImpl = bodyFetch(HOT, () => {
+    order.push('read');
+    return Promise.resolve(JSON.stringify({ ok: 1 }));
+  });
+  const req = createIgRequest({ auth: igAuth, settings: s(), clock, log: testLogger(), fetchImpl });
+  const out = await req<{ ok: number }>({ method: 'GET', path: '/me' });
+  assert.deepEqual(out, { ok: 1 });
+  assert.deepEqual(order, ['read', 'sleep']);
+});
+
+test('a body that aborts mid-read arrives as an InstagramError, not a raw DOMException', async () => {
+  // Both `readBody` call sites sit outside the transport `try`/`catch`, so
+  // whatever the body stream rejects with used to leave `createIgRequest`
+  // untouched: `isInstagramError` answered false for it, it carried no `kind`
+  // for the retry matrix, and the tool layer had no shape to render. A body read
+  // is a network operation and fails like one (CC-PROC-184).
+  const fetchImpl = bodyFetch(HOT, () =>
+    Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  const err = await req({ method: 'GET', path: '/me' }).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  assert.ok(isInstagramError(err), `expected an InstagramError, got ${String(err)}`);
+  assert.equal(err.kind, 'upstream');
+  assert.equal(err.message, 'The operation was aborted.');
+});
+
+/**
+ * What this catches: the throttle warning is pinned whole in exactly one place
+ * (the test above), and that one place drives the throttle from `x-app-usage`
+ * alone, on one host. So the record is pinned for one of the two header
+ * spellings that can make the client pause, and `usagePct` happens to equal
+ * `appUsagePct` there — which lets the field silently stop being the number the
+ * decision was actually made on.
+ *
+ * Why the wording is behaviour: this warn line is the only place the client ever
+ * says out loud that it is deliberately slowing itself down. It is not a field
+ * of a structured error somebody re-renders — it goes to the stderr JSON log,
+ * and it is the line an operator greps for when tool calls suddenly take a
+ * second longer than they used to. The message answers "why is this slow", and
+ * `usagePct` answers "how close am I" — the number that decides whether they
+ * wait it out or go stop a job. A line that says "approaching the rate limit"
+ * with no number, or with the cool header's number while the hot one is at 97%,
+ * sends them to the wrong conclusion, and nothing else in the process states
+ * that fact.
+ *
+ * Mutant measured as SURVIVING the suite without this test (restored):
+ *  - `usagePct: usage.maxPct` → `usagePct: usage.appUsagePct`. 122/122 passed.
+ *    The existing pin sends only `x-app-usage`, so the two are the same number
+ *    there; a business-use-case throttle (the one Instagram publishing actually
+ *    hits) would then log `usagePct: undefined` while still pausing.
+ *  The mirror-image mutant `usagePct: usage.bucUsagePct` IS killed by the
+ *  existing test, so the gap is one-directional — which is exactly why only a
+ *  table over both headers closes it.
+ *
+ * The table is every input spelling that reaches the line: app-usage alone,
+ * business-use-case alone, both with each one in turn the hotter, and both
+ * allowlisted hosts (so the `host` field is pinned as the resolved host rather
+ * than a constant). The sentence is restated here rather than imported.
+ */
+test('the throttle warning names the reading it acted on, whichever header carried it', async () => {
+  const cases: ReadonlyArray<{
+    label: string;
+    auth: AuthProvider;
+    host: GraphHost;
+    headers: Record<string, string>;
+    usagePct: number;
+  }> = [
+    {
+      label: 'x-app-usage alone',
+      auth: igAuth,
+      host: 'graph.instagram.com',
+      headers: { 'x-app-usage': JSON.stringify({ call_count: 95 }) },
+      usagePct: 95,
+    },
+    {
+      label: 'x-business-use-case-usage alone',
+      auth: igAuth,
+      host: 'graph.instagram.com',
+      headers: {
+        'x-business-use-case-usage': JSON.stringify({ '17841400000000000': [{ call_count: 97 }] }),
+      },
+      usagePct: 97,
+    },
+    {
+      label: 'both headers, the business-use-case bucket hotter',
+      auth: igAuth,
+      host: 'graph.instagram.com',
+      headers: {
+        'x-app-usage': JSON.stringify({ call_count: 12 }),
+        'x-business-use-case-usage': JSON.stringify({ '17841400000000000': [{ total_time: 99 }] }),
+      },
+      usagePct: 99,
+    },
+    {
+      label: 'both headers, the app-usage reading hotter',
+      auth: igAuth,
+      host: 'graph.instagram.com',
+      headers: {
+        'x-app-usage': JSON.stringify({ total_cputime: 93 }),
+        'x-business-use-case-usage': JSON.stringify({ '17841400000000000': [{ call_count: 20 }] }),
+      },
+      usagePct: 93,
+    },
+    {
+      label: 'the other allowlisted host, business-use-case hot',
+      auth: fbAuth,
+      host: 'graph.facebook.com',
+      headers: {
+        'x-business-use-case-usage': JSON.stringify({
+          '17841400000000000': [{ call_count: 90.5 }],
+        }),
+      },
+      usagePct: 90.5,
+    },
+  ];
+
+  for (const { label, auth, host, headers, usagePct } of cases) {
+    const clock = recordingClock();
+    const log = testLogger();
+    const { fetchImpl } = mockFetch(() => ({ body: { ok: 1 }, headers }));
+    const req = createIgRequest({ auth, settings: s(), clock, log, fetchImpl });
+    await req({ method: 'GET', path: '/me' });
+
+    // The whole record, per spelling: the sentence, the host it is about and the
+    // reading that triggered it. A fragment (or a `warns.length` count) passes
+    // with the number gone or wrong, which is the half of the line that is
+    // actionable.
+    assert.deepEqual(
+      log.warnRecords,
+      [
+        {
+          msg: 'approaching Instagram rate limit; throttling before returning',
+          fields: { host, usagePct },
+        },
+      ],
+      label,
+    );
+    // The line claims a pause; the pause has to be real, or the sentence lies.
+    assert.deepEqual(clock.sleeps, [1000], label);
+  }
 });
 
 test('malformed usage headers are ignored, never fatal to the call', async () => {
@@ -990,6 +2069,42 @@ test('malformed usage headers are ignored, never fatal to the call', async () =>
   assert.equal(events[0]!.appUsagePct, undefined);
   assert.equal(events[0]!.bucUsagePct, undefined);
   assert.equal(events[0]!.maxPct, undefined);
+});
+
+test('a usage reading of 0% is a reading, not a missing header — the snapshot carries the zeros', async () => {
+  // A fresh app at the top of its window reports `call_count: 0`. That is a
+  // measurement, not an absent header: the snapshot must carry the zeros and a
+  // `maxPct` of 0, so a consumer can tell "quiet" from "no telemetry" (a mutant
+  // that tests the percentage for truthiness folds the two together).
+  const appHeader = JSON.stringify({ call_count: 0, total_cputime: 0, total_time: 0 });
+  const bucHeader = JSON.stringify({ '123': [{ call_count: 0, total_cputime: 0, total_time: 0 }] });
+  const events: UsageSnapshot[] = [];
+  const { fetchImpl } = mockFetch(() => ({
+    body: { ok: 1 },
+    headers: { 'x-app-usage': appHeader, 'x-business-use-case-usage': bucHeader },
+  }));
+  const clock = recordingClock();
+  const log = testLogger();
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log,
+    fetchImpl,
+    onUsage: (_host, usage) => events.push(usage),
+  });
+  await req({ method: 'GET', path: '/me' });
+  assert.deepEqual(events, [
+    {
+      appUsagePct: 0,
+      bucUsagePct: 0,
+      maxPct: 0,
+      raw: { 'x-app-usage': appHeader, 'x-business-use-case-usage': bucHeader },
+    },
+  ]);
+  // Zero is far below the throttle line: no sleep, no warning.
+  assert.deepEqual(clock.sleeps, []);
+  assert.deepEqual(log.warns, []);
 });
 
 test('a business-use-case header that is valid JSON but not an object yields no percentage', async () => {
@@ -1317,6 +2432,278 @@ test('an empty success body parses to an empty object, not undefined', async () 
   assert.deepEqual(await req<unknown>({ method: 'GET', path: '/me' }), {});
 });
 
+// --- http.ts: response-body size cap (CC-PROC-203) ------------------------
+
+/** The cap `core/http.ts` enforces, restated rather than imported. */
+const BODY_CAP = 16 * 1024 * 1024;
+const MIB = 1024 * 1024;
+
+/** What the stream double observed: how often it was pulled and whether it was cancelled. */
+interface StreamProbe {
+  pulls: number;
+  cancelled: boolean;
+}
+
+/**
+ * A `fetch` double serving `chunks()` as a real body stream — one chunk per
+ * pull, so a test can see how far the client read and whether it let go. The
+ * iterator may be endless: that is the upstream this cap exists for.
+ */
+function streamFetch(
+  chunks: () => Iterator<Uint8Array>,
+  init: { status?: number; headers?: Record<string, string> } = {},
+): { fetchImpl: typeof fetch; probe: StreamProbe; calls: () => number } {
+  const probe: StreamProbe = { pulls: 0, cancelled: false };
+  let calls = 0;
+  const fetchImpl: typeof fetch = () => {
+    calls += 1;
+    const it = chunks();
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          probe.pulls += 1;
+          const next = it.next();
+          if (next.done === true) controller.close();
+          else controller.enqueue(next.value);
+        },
+        cancel() {
+          probe.cancelled = true;
+        },
+      },
+      // No read-ahead: a pull happens only when the client asks for a chunk,
+      // so `pulls` counts exactly what the client consumed.
+      { highWaterMark: 0 },
+    );
+    return Promise.resolve(
+      new Response(stream, {
+        status: init.status ?? 200,
+        headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+      }),
+    );
+  };
+  return { fetchImpl, probe, calls: () => calls };
+}
+
+/** `n` bytes of ASCII `a`. */
+function filler(n: number): Uint8Array {
+  return new Uint8Array(n).fill(0x61);
+}
+
+/** A JSON string literal of exactly `total` bytes, served in 1 MiB chunks. */
+function* jsonStringOf(total: number): Iterator<Uint8Array> {
+  const quote = new TextEncoder().encode('"');
+  yield quote;
+  let left = total - 2;
+  while (left > 0) {
+    const n = Math.min(MIB, left);
+    yield filler(n);
+    left -= n;
+  }
+  yield quote;
+}
+
+function* endless(): Iterator<Uint8Array> {
+  for (;;) yield filler(MIB);
+}
+
+async function rejection(p: Promise<unknown>): Promise<unknown> {
+  return p.then(
+    () => assert.fail('expected the call to reject'),
+    (e: unknown) => e,
+  );
+}
+
+const CAP_REMEDY =
+  'it was discarded unread. Request a smaller page (a lower `limit`) or fewer fields; ' +
+  'if a proxy sits between this server and Meta, check what it is returning.';
+
+test('an endless response body is refused at the cap, not buffered until memory runs out (CC-PROC-203)', async () => {
+  // `readBody` used `res.text()`, which has no ceiling: an upstream (or a proxy
+  // in front of it) that never stops sending held the call — and the process's
+  // memory — until something else gave out. The client now counts bytes as they
+  // arrive and lets go of the stream the moment the count passes the cap.
+  const { fetchImpl, probe, calls } = streamFetch(endless);
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  const err = await rejection(req({ method: 'GET', path: '/me/media' }));
+  assert.ok(isInstagramError(err), `expected an InstagramError, got ${String(err)}`);
+  assert.equal(err.kind, 'upstream');
+  assert.equal(err.status, 200);
+  assert.equal(
+    err.message,
+    'Graph response body is larger than the 16 MiB this server buffers ' +
+      `(more than ${BODY_CAP} bytes received); ${CAP_REMEDY}`,
+  );
+  // Seventeen 1 MiB chunks are the first to cross 16 MiB; the reader stops
+  // there and cancels rather than draining the rest.
+  assert.equal(probe.pulls, 17);
+  assert.equal(probe.cancelled, true);
+  // Not retried, although it is an idempotent GET and the kind is `upstream`:
+  // a replay would be refused the same way, at the same cost.
+  assert.equal(calls(), 1);
+});
+
+test('a body of exactly the cap is read; one byte more is refused (CC-PROC-203)', async () => {
+  const at = streamFetch(() => jsonStringOf(BODY_CAP));
+  const reqAt = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl: at.fetchImpl,
+  });
+  const out = await reqAt<string>({ method: 'GET', path: '/me/media' });
+  assert.equal(out.length, BODY_CAP - 2);
+  assert.equal(at.probe.cancelled, false);
+
+  const over = streamFetch(() => jsonStringOf(BODY_CAP + 1));
+  const reqOver = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl: over.fetchImpl,
+  });
+  const err = await rejection(reqOver({ method: 'GET', path: '/me/media' }));
+  assert.ok(isInstagramError(err));
+  assert.match(err.message, /more than 16777216 bytes received/);
+  assert.equal(over.probe.cancelled, true);
+});
+
+test('a declared Content-Length over the cap is refused before any byte is read (CC-PROC-203)', async () => {
+  const { fetchImpl, probe } = streamFetch(endless, {
+    headers: { 'content-length': ` ${BODY_CAP + 1} ` },
+  });
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  const err = await rejection(req({ method: 'GET', path: '/me' }));
+  assert.ok(isInstagramError(err));
+  assert.equal(err.kind, 'upstream');
+  assert.equal(
+    err.message,
+    'Graph response body is larger than the 16 MiB this server buffers ' +
+      `(Content-Length ${BODY_CAP + 1}); ${CAP_REMEDY}`,
+  );
+  assert.equal(probe.pulls, 0);
+  assert.equal(probe.cancelled, true);
+});
+
+test('a Content-Length at the cap, unparseable, or under a content coding is not refused up front (CC-PROC-203)', async () => {
+  // Only the stream count is authoritative. The header is an early exit, taken
+  // when it can be trusted to count the same bytes: never under a real
+  // `Content-Encoding` (it then counts the compressed size), and never when it
+  // is not a plain decimal. A declared length AT the cap is within it.
+  const small = new TextEncoder().encode('{"ok":1}');
+  const cases: ReadonlyArray<Record<string, string>> = [
+    { 'content-length': String(BODY_CAP) },
+    { 'content-length': '1e9' },
+    { 'content-length': `${BODY_CAP + 1}`, 'content-encoding': 'gzip' },
+  ];
+  for (const headers of cases) {
+    const { fetchImpl } = streamFetch(() => [small][Symbol.iterator](), { headers });
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock: recordingClock(),
+      log: testLogger(),
+      fetchImpl,
+    });
+    assert.deepEqual(await req({ method: 'GET', path: '/me' }), { ok: 1 }, JSON.stringify(headers));
+  }
+  // `identity` is no coding at all, however it is cased or padded (the padding
+  // is stripped by `Headers` itself, before the client sees the value).
+  const { fetchImpl, probe } = streamFetch(endless, {
+    headers: { 'content-length': `${BODY_CAP + 1}`, 'content-encoding': ' Identity ' },
+  });
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  const err = await rejection(req({ method: 'GET', path: '/me' }));
+  assert.ok(isInstagramError(err));
+  assert.match(err.message, /\(Content-Length 16777217\)/);
+  assert.equal(probe.pulls, 0);
+});
+
+test('an oversized ERROR body is refused too, carries its status, and is not retried (CC-PROC-203)', async () => {
+  // The error path reads the body before mapping it, so it needs the same cap;
+  // a 5xx on a GET would otherwise be retried, and each replay would buffer
+  // another oversized body.
+  const { fetchImpl, calls } = streamFetch(endless, { status: 502 });
+  const clock = recordingClock();
+  const req = createIgRequest({ auth: igAuth, settings: s(), clock, log: testLogger(), fetchImpl });
+  const err = await rejection(req({ method: 'GET', path: '/me' }));
+  assert.ok(isInstagramError(err));
+  assert.equal(err.kind, 'upstream');
+  assert.equal(err.status, 502);
+  assert.match(err.message, /^Graph response body is larger than the 16 MiB/);
+  assert.equal(calls(), 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('the capped reader decodes exactly as Response.text() did — split characters, BOM, bad bytes (CC-PROC-203)', async () => {
+  // Replacing `res.text()` must not change a single delivered character: a
+  // multi-byte UTF-8 sequence split across two chunks stays one character, a
+  // leading BOM is dropped, and a malformed byte becomes U+FFFD, not a throw.
+  const enc = new TextEncoder();
+  const bytes = enc.encode('{"caption":"café \u{1F600}"}');
+  const cut = bytes.indexOf(0xc3) + 1; // inside the two-byte `é`
+  const emoji = bytes.indexOf(0xf0) + 2; // inside the four-byte emoji
+  const pieces = [
+    new Uint8Array([0xef, 0xbb, 0xbf]),
+    bytes.slice(0, cut),
+    bytes.slice(cut, emoji),
+    bytes.slice(emoji),
+  ];
+  const { fetchImpl } = streamFetch(() => pieces[Symbol.iterator]());
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  assert.deepEqual(await req({ method: 'GET', path: '/me' }), { caption: 'café \u{1F600}' });
+
+  // A sequence cut off by the END of the body is flushed as U+FFFD too.
+  const bad = streamFetch(() => [new Uint8Array([0x6f, 0xff, 0x6b, 0xc3])][Symbol.iterator]());
+  const reqBad = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl: bad.fetchImpl,
+  });
+  assert.equal(await reqBad({ method: 'GET', path: '/me' }), 'o\uFFFDk\uFFFD');
+});
+
+test('a response with no body stream at all reads as an empty object (CC-PROC-203)', async () => {
+  // `new Response(null)` — and a 204 from a real transport — has `body: null`;
+  // the stream reader must treat it as the empty body `res.text()` returned.
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response(null, { status: 200 }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  assert.deepEqual(await req({ method: 'GET', path: '/me' }), {});
+});
+
 // --- http.ts: per-host concurrency semaphore --------------------------------
 
 test('the per-host semaphore serializes calls beyond maxConcurrent', async () => {
@@ -1530,4 +2917,160 @@ test('a rejected request releases its concurrency slot', async () => {
   await assert.rejects(() => req({ method: 'GET', path: '/a' }));
   assert.deepEqual(await req<{ ok: number }>({ method: 'GET', path: '/b' }), { ok: 1 });
   assert.equal(calls.length, 2);
+});
+
+// --- http.ts: the caller's signal and the slot queue ------------------------
+
+/** Track a promise's outcome without awaiting it, so "still pending" is assertable. */
+function track(p: Promise<unknown>): {
+  state: () => 'pending' | 'fulfilled' | 'rejected';
+  error: () => unknown;
+} {
+  let state: 'pending' | 'fulfilled' | 'rejected' = 'pending';
+  let error: unknown;
+  p.then(
+    () => (state = 'fulfilled'),
+    (e: unknown) => {
+      state = 'rejected';
+      error = e;
+    },
+  );
+  return { state: () => state, error: () => error };
+}
+
+test('an already-aborted signal settles before any fetch, even with a slot free', async () => {
+  // Measured 2026-09-23 before the fix: the pre-aborted call took a slot and
+  // handed `fetch` a dead signal. The real `fetch` then rejects without opening
+  // a socket, but an injected transport - or any future pre-flight work behind
+  // the slot - still ran for a call the caller had already given up on.
+  const { fetchImpl, calls } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    semaphores: createSemaphoreRegistry(),
+  });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me', signal: controller.signal }),
+    (e: unknown) => {
+      assert.ok(isInstagramError(e));
+      // A cancel reads as a cancel, not as the timeout's "aborted due to timeout".
+      assert.equal(e.message, 'This operation was aborted');
+      assert.equal((e.cause as Error).name, 'AbortError');
+      return true;
+    },
+  );
+  assert.equal(calls.length, 0, 'no transport call for a cancelled request');
+});
+
+test('an already-aborted call does not queue behind a busy slot', async () => {
+  // Measured 2026-09-23 before the fix: at `maxConcurrent: 1` with the slot
+  // held, the pre-aborted call was still pending 200 ms later and settled only
+  // once the holder finished - in production that is up to four timed-out
+  // attempts plus their backoffs after the caller cancelled.
+  const gates: Array<() => void> = [];
+  const { fetchImpl, calls } = mockFetch(
+    () => new Promise<MockResponseSpec>((resolve) => gates.push(() => resolve({ body: {} }))),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ maxConcurrent: 1 }),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    semaphores: createSemaphoreRegistry(),
+  });
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = track(req({ method: 'GET', path: '/cancelled', signal: controller.signal }));
+  await flush();
+  assert.equal(cancelled.state(), 'rejected', 'settles while the slot is still held');
+  assert.ok(isInstagramError(cancelled.error()));
+  gates[0]!();
+  await holder;
+  assert.equal(calls.length, 1);
+});
+
+test('aborting a queued call rejects it at once and gives its place to the next waiter', async () => {
+  // The waiter must leave the queue, not merely have its promise rejected: a
+  // dead entry left behind would be handed the next freed slot, which it would
+  // never release - every later caller on the host then hangs. Aborting the
+  // MIDDLE of three waiters pins which entry is removed, and the FIFO order of
+  // the survivors.
+  const gates: Array<() => void> = [];
+  const { fetchImpl, calls } = mockFetch(
+    () => new Promise<MockResponseSpec>((resolve) => gates.push(() => resolve({ body: {} }))),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ maxConcurrent: 1 }),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    semaphores: createSemaphoreRegistry(),
+  });
+  const controller = new AbortController();
+  const first = req({ method: 'GET', path: '/first' });
+  const second = req({ method: 'GET', path: '/second' });
+  const middle = track(req({ method: 'GET', path: '/middle', signal: controller.signal }));
+  const last = req({ method: 'GET', path: '/last' });
+  await flush();
+  assert.equal(calls.length, 1);
+
+  controller.abort();
+  await flush();
+  assert.equal(middle.state(), 'rejected', 'the cancel settles without waiting for a slot');
+  assert.ok(isInstagramError(middle.error()));
+  assert.equal(calls.length, 1, 'and it did not take the slot');
+  // `{ once: true }` is the detach on this path: the signal may be reused.
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+
+  gates[0]!();
+  await first;
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.match(calls[1]!.url, /\/second\b/);
+  gates[1]!();
+  await second;
+  await flush();
+  assert.equal(calls.length, 3, 'the waiter behind the cancelled one is not stranded');
+  assert.match(calls[2]!.url, /\/last\b/);
+  gates[2]!();
+  await last;
+});
+
+test('a queued call that is granted its slot leaves no listener on the caller signal', async () => {
+  // The caller's signal spans every attempt of a request, and a caller may
+  // reuse one signal across many requests; `{ once: true }` detaches only when
+  // `abort` fires, so the grant path must detach explicitly or each queued wait
+  // leaves one dead closure on the signal for as long as it lives.
+  const gates: Array<() => void> = [];
+  const { fetchImpl } = mockFetch(
+    () => new Promise<MockResponseSpec>((resolve) => gates.push(() => resolve({ body: {} }))),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ maxConcurrent: 1 }),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    semaphores: createSemaphoreRegistry(),
+  });
+  const controller = new AbortController();
+  const holder = req({ method: 'GET', path: '/holder' });
+  const queued = req({ method: 'GET', path: '/queued', signal: controller.signal });
+  await flush();
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 1, 'waiting: one listener');
+  gates[0]!();
+  await holder;
+  await flush();
+  gates[1]!();
+  await queued;
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
 });

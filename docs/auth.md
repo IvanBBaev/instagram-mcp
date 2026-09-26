@@ -17,7 +17,8 @@ not coming back — this server does not attempt any workaround.
 ## 1. The two auth paths
 
 Meta offers two distinct ways to reach the same Instagram professional account. The
-server supports **both**, selected by which env vars are present (`getAuthMode()`).
+server supports **both**, selected by which env vars are present (`resolveAuthPath()`
+in `src/core/config.ts`).
 
 ### Path A — Instagram API with Instagram Login (`ig-login`)
 
@@ -30,10 +31,16 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
   - `instagram_business_basic`
   - `instagram_business_content_publish`
   - `instagram_business_manage_comments`
-  - `instagram_business_manage_messages`
   - `instagram_business_manage_insights`
+  - `instagram_business_manage_messages` — supported by the path, **not requested
+    by `login`** (no messaging tool ships; M6 is DEFER — see
+    [messaging.md](messaging.md)). Pass it via `login --scopes` if you need it.
 - **Token lifecycle**: browser OAuth yields a short-lived token (~1 h) → exchange
-  for a **long-lived token (60 days)**:
+  for a **long-lived token (60 days)**. The code exchange on `api.instagram.com`
+  answers either flat (`{access_token, user_id, …}`) or wrapped as
+  `{data: [{…}]}`; `login` accepts exactly one wrapped entry and refuses (nothing
+  stored) a `data` list with several entries, or one beside a top-level
+  `access_token`, rather than guess which token was authorized:
   `GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=...&access_token=...`
   → refresh before expiry (token must be ≥ 24 h old, unexpired):
   `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=...`
@@ -54,7 +61,8 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
   `GET /{page-id}?fields=instagram_business_account` → the IG user ID.
 - Scopes: `instagram_basic`, `instagram_content_publish`,
   `instagram_manage_comments`, `instagram_manage_insights`,
-  (`instagram_manage_messages` for DMs), plus Page plumbing:
+  (`instagram_manage_messages` for DMs — supported, but **not requested by
+  `login`**; M6 is DEFER), plus Page plumbing:
   `pages_show_list`, `pages_read_engagement`; `business_management` for
   system-user setups.
 - **Token lifecycle** (same machinery as facebook-mcp):
@@ -75,7 +83,7 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
 | Existing Business Manager / facebook-mcp user | **B (fb-login)** — never-expiring system-user token, one app for both servers |
 | Needs hashtag search / business discovery / product tags | **B** (confirmed Path-B-only *[verified 2026-07-21]*) |
 
-## 2. App setup (one-time, documented step-by-step in the future README)
+## 2. App setup (one-time; the step-by-step walkthrough is [setup-guide.md](setup-guide.md))
 
 1. developers.facebook.com → Create app → **Business type** (type is permanent).
 2. Add the **Instagram** product; for Path A configure "Instagram API with Instagram
@@ -94,22 +102,67 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
 
 ## 3. Token validation & introspection
 
-- On startup and in `doctor`: 
-  - Path B: `GET /debug_token?input_token=...` (app token auth) → `is_valid`,
-    `expires_at`, `data_access_expires_at`, `scopes`, `granular_scopes`.
+- In `doctor` and the `instagram_token_status` tool (not at startup — the server
+  makes no introspection call before serving):
+  - Path B: `GET /debug_token?input_token=...`, authenticated with the profile's own
+    token + `appsecret_proof` → `is_valid`, `expires_at`, `data_access_expires_at`,
+    `scopes`. `expires_at` and `data_access_expires_at` are held to the same
+    recordable range (whole seconds, 0 through 9999-12-31T23:59:59Z); a value outside
+    it reads as unknown (CC-AUTH-68, CC-AUTH-71).
   - Path A: `debug_token` is **not available** — it is a `graph.facebook.com`-only
-    endpoint *[verified 2026-07-21]*; use
-    `GET graph.instagram.com/me?fields=user_id,username` + tracking `expires_in`
-    from the exchange/refresh responses, persisted alongside the token.
-- The server persists **token metadata** (obtained-at, expires-at, scopes, path)
-  next to the token and surfaces it via an `instagram_token_status` tool, warning
-  when < 10 days remain (Path A) so the operator runs `refresh`/`login` in time.
-- Auto-refresh policy (Path A): `refresh_access_token` transparently when the token
-  is older than `IG_REFRESH_AFTER_DAYS` (default 45) at first use of a session.
+    endpoint *[verified 2026-07-21]*; validity is proven only by `doctor`'s
+    reachability `GET /{IG_ACCOUNT_ID or me}`, and expiry comes from the record
+    below.
+- `login`/`refresh` persist the path (`IG_AUTH_PATH`) and the token's **expiry**
+  (`IG_TOKEN_EXPIRES_AT`, Unix seconds, `0` = never, followed by `:` and a
+  12-hex SHA-256 fingerprint of the token — never the token itself) next to
+  the token. `login` and `refresh` turn the exchange's `expires_in` into the
+  record through one rule (`expiryFromLifetime` in `src/core/time.ts`):
+
+  | `expires_in` | Recorded as | Reads back as |
+  |---|---|---|
+  | absent, `null`, any other non-number, or a string that is not a canonical non-negative integer (`"-60"`, `"60.0"`, `" 60"`, `"060"`, `"6e1"`, `""`) | no record (an old one is removed) | unknown |
+  | a canonical non-negative integer string (`"5184000"`, `"0"`) — Meta has quoted `expires_in` on some endpoints | read as that number, then as below | as below |
+  | exactly `0` | `0` | never expires |
+  | any other finite number | `floor(now + expires_in)`, in whole seconds | valid / expiring soon / expired |
+  | a negative number | the past instant it names | expired, never "never expires" |
+  | a sum at or before 1970-01-01 (a pre-1970 clock), past 9999-12-31T23:59:59Z, `NaN` or `±Infinity` | no record | unknown |
+
+  The reader accepts exactly what the writers can produce: `0`, or a whole
+  number of seconds from `1` to `253402300799` (the last second of year 9999).
+  A record in **milliseconds** (a 13-digit `Date.now()` pasted by hand) is
+  therefore refused and reads as unknown, rather than as a token valid until
+  year 58692. `instagram_token_status` and
+  `doctor` read it back as the Path A expiry (unknown when absent or malformed)
+  and warn with `expiring_soon` once `IG_REFRESH_AFTER_DAYS` (default 45) or
+  fewer days remain, so the operator runs `refresh`/`login` in time. The record
+  describes the token that was written with it: a record whose fingerprint does
+  not match the token in use (a token pasted by hand over it) reads as unknown
+  rather than lending that token a foreign expiry (CC-AUTH-59); a record that
+  reached the server from a different source than its token (the client passed
+  the token, a file supplied the record) is dropped at startup and reads as
+  unknown too; a bare record set by hand beside its token (`<seconds>` with no
+  fingerprint — what the unknown-expiry warning tells an operator to set, and
+  what records from before the fingerprint look like) is still read, but it is
+  bound to nothing, so `token_status` and `doctor` report it as **unverified**:
+  every dated state, `valid` and `never` included, carries a `warning` saying the
+  expiry was set by hand and not checked against the token, and to run
+  `refresh`/`login` to record a bound one (CC-AUTH-70). On Path A
+  `doctor` reports a lapsed record as a warning and leaves the verdict to the
+  reachability check. Path B's `debug_token` `expires_at` is held to the same
+  range: a negative, a fraction, a value in milliseconds or anything past
+  9999-12-31T23:59:59Z reads as **unknown** with a warning naming the value,
+  never as a token dated in year 58692 or as one that "expired" in 1969
+  (CC-AUTH-68).
+- Refresh is **operator-driven**: nothing calls `refresh_access_token`
+  automatically. `IG_REFRESH_AFTER_DAYS` is only the warning threshold above;
+  the server has no refresh-decision helper at all (CC-AUTH-67).
 - **Design gate D2 (architecture F-2 / devops F-1) — RESOLVED, option (a).** A
   token injected via the MCP client's `env` always wins over the XDG file, so a
   refreshed token persisted to XDG would never take effect for client-env users.
-  Resolution: the **XDG env file is the only token home**. `core/refresh.ts`
+  Resolution: the **XDG env file is the only token home** — or, when
+  `IG_ENV_FILE` names a file, that file, since it is then the only env file the
+  server loads (`login` and `refresh` write it; see §4). `core/refresh.ts`
   performs the exchange and deliberately does not persist; only the `login` /
   `refresh` CLI writes, via `core/config-write.ts`. Tokens injected through the
   client `env` are treated as **static** — the server never pretends to rotate
@@ -121,10 +174,51 @@ server supports **both**, selected by which env vars are present (`getAuthMode()
   `user_config` mechanism — **never** in the repo, never in logs, never echoed back
   through MCP results (redaction layer strips anything token-shaped; see
   [security.md](security.md)).
+- **Write target.** `login` and `refresh` write the config-home store
+  (`<XDG_CONFIG_HOME | ~/.config>/instagram-mcp-ai/.env`, `%APPDATA%\instagram-mcp-ai\.env`
+  on Windows) unless `IG_ENV_FILE` is set and non-blank: the server then reads
+  that file **alone**, so that is the file they update — writing the config-home
+  store instead would leave the server on the old token. The value must be an
+  absolute file name: a relative one would resolve against whichever process's
+  working directory reads it, so it stops the server at start-up and refuses the
+  write, both with the same `kind: validation` error, before anything is touched
+  (CC-CFG-70). A leading `~` is the home directory, for the read
+  and the write alike; `~user`, `$VAR` and `%VAR%` spellings stop the start (and
+  any write) with a `kind: validation` error naming `IG_ENV_FILE`. The named file
+  is merged in place and left at `0600`, with its `.lock` and temp siblings
+  beside it; its directory is the operator's and is neither created nor
+  re-permissioned (a missing one fails the write). A `~` (or the default
+  `~/.config` / `%USERPROFILE%\AppData\Roaming`) needs an absolute home: a
+  blank or relative `HOME` / `USERPROFILE` is refused with a `kind: validation`
+  error naming the variable, never resolved against the cwd (CC-CFG-69).
+- **A symlinked store is written through the link**, for the config-home store
+  and an `IG_ENV_FILE` alike: the link is resolved first, and the temp sibling,
+  the `.lock` and the rename land beside its target, so the link survives and two
+  links to one file share one lock. The write is still a fresh `0600` file
+  renamed into place, never an in-place write. The target's directory is not
+  created or re-permissioned. A chain of links is followed hop by hop, and a
+  dangling hop, or ANY link in the chain owned by another user (whoever planted
+  it would otherwise choose which of your files is rewritten), is refused before
+  anything is touched (CC-CFG-73). The link is resolved again once the write
+  holds the lock; if it was re-pointed in between, nothing is written and the
+  command asks to be run again (CC-CFG-72).
 - The app secret is required only for: token exchange (`login`), `appsecret_proof`
   computation (Path B), and `debug_token`. It is stored with the same rules; the
   server never transmits it except to `graph.facebook.com`/`graph.instagram.com`
   over TLS as protocol parameters.
+- The env file is safe to `source` from a POSIX shell (`set -a; . <file>`) as well
+  as to read with dotenv: every value is written bare, single-quoted or — only for
+  a value holding `'` or a line break — double-quoted, and a value that would also
+  need a `$`, `` ` ``, `"` or `\` inside those double quotes is refused with a
+  `kind: validation` error naming the key (see
+  [troubleshooting.md](troubleshooting.md)). A line break is stored as the escape
+  `\n`, which dotenv turns back into a newline and a shell keeps as two characters.
+- Writes are serialised by a `.env.lock` sibling that records the writer's pid,
+  host and a random nonce; a waiting writer clears it only when that pid has
+  exited on this host, or — for a lock with no record or from another host — once
+  it is older than 30 s. A writer removes a lock (its own on release, or a stale
+  one) only while it still carries the record that was judged, so it never
+  deletes a lock another writer has since taken.
 
 ## 5. Open questions for implementation
 
@@ -137,7 +231,9 @@ versioned paths confirmed.
 D2, option (a); the XDG env file is the sole token home (see §3). The single
 token variable question is settled too: `IG_ACCESS_TOKEN` carries the token on
 **both** paths, and the path is inferred from `IG_APP_ID` + `IG_APP_SECRET`
-unless `IG_AUTH_MODE` pins it.
+unless `IG_AUTH_MODE` pins it. `login` and `refresh` store the path as
+`IG_AUTH_PATH`, which wins over `IG_AUTH_MODE` when both are set, so once a store
+exists it is `IG_AUTH_PATH` that pins the path.
 
 Still open:
 

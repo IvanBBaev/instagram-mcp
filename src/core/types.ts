@@ -168,6 +168,24 @@ export interface ResolvedProfile {
   accountId?: string;
   appId?: string;
   appSecret?: string;
+  /**
+   * Token expiry recorded by `login`/`refresh` (`IG_TOKEN_EXPIRES_AT` /
+   * `IG_PROFILE_<NAME>_TOKEN_EXPIRES_AT`), Unix seconds, `0` = never expires.
+   * Absent when no usable record exists. It describes the token that was
+   * persisted with it, so a token swapped in by hand without updating the line
+   * makes it stale.
+   */
+  tokenExpiresAtSec?: number;
+  /**
+   * Set (always `true`) when {@link tokenExpiresAtSec} came from a BARE record —
+   * `<seconds>` with no `:<fingerprint>`, as an operator writes it by hand or as
+   * records written before the fingerprint hold. Such a record is still read
+   * (it is the documented hand-set remedy), but nothing ties it to the token,
+   * so `token_status` and `doctor` report it as unverified (CC-AUTH-70). Absent
+   * for a fingerprinted record, which reads back only for its own token
+   * (CC-AUTH-59), and whenever `tokenExpiresAtSec` is absent.
+   */
+  tokenExpiryUnverified?: true;
 }
 
 /** Resolved runtime settings (every numeric/enum knob from architecture §12). */

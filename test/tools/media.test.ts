@@ -102,6 +102,16 @@ function tool(name: string): ToolSpec {
   return found;
 }
 
+/** The `.describe()` text of one declared argument (the model-facing contract). */
+function describeOf(shape: ToolSpec['input'], key: string): string {
+  return shape[key]?.description ?? '';
+}
+
+/** Assert a model-facing string still carries an exact contract fragment. */
+function assertMentions(body: string, fragment: string): void {
+  assert.ok(body.includes(fragment), `missing from the model-facing text: ${fragment}`);
+}
+
 test('mediaTools exposes exactly the two read-only specs from docs/tools.md', () => {
   assert.deepEqual(mediaTools.map((t) => t.name).sort(), [
     'instagram_get_media',
@@ -121,10 +131,13 @@ test('instagram_list_media caps at maxItems, marks truncated, and fences caption
     if (after === undefined)
       return {
         data: [{ id: '1', caption: 'hello @someone', media_type: 'IMAGE' }],
-        paging: { cursors: { after: 'A1' } },
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
       };
     if (after === 'A1')
-      return { data: [{ id: '2', caption: 'world' }], paging: { cursors: { after: 'A2' } } };
+      return {
+        data: [{ id: '2', caption: 'world' }],
+        paging: { cursors: { after: 'A2' }, next: 'https://graph.facebook.com/next' },
+      };
     throw new Error('unexpected');
   };
   const { req, calls } = fakeReq(responder);
@@ -135,15 +148,36 @@ test('instagram_list_media caps at maxItems, marks truncated, and fences caption
   assert.ok(Array.isArray(res.content));
   assert.equal(res.content[0]?.type, 'text');
 
-  const sc = res.structuredContent as {
-    items: Array<{ id: string; caption?: string }>;
-    paging: { after?: string; truncated: boolean };
-  };
-  assert.equal(sc.items.length, 1);
-  assert.equal(sc.items[0]?.id, '1');
-  assert.equal(sc.paging.truncated, true);
-  assert.equal(sc.paging.after, 'A1');
-  assert.equal(sc.items[0]?.caption, fence('hello @someone'));
+  // Pinned WHOLE rather than field by field, and this is the file's canonical
+  // site for the listing body. `json()` assigns its argument straight to
+  // `result.structuredContent` (`mcp/result.ts`) and nothing downstream
+  // validates a body against the declared output schema, so every key a handler
+  // puts into a listed item reaches the model verbatim. The reads this block
+  // used to carry -- `sc.items[0]?.id`, `sc.items[0]?.caption`,
+  // `sc.paging.truncated`, `sc.paging.after`, one `assert.equal` each -- pin
+  // what a listed post must CONTAIN and say nothing whatsoever about what else
+  // it may carry alongside.
+  //
+  // Measured, not assumed: rewriting the mapping as `items: page.items.map((m)
+  // => ({ ...mediaItemToRecord(m), profile: ctx.profile }))` -- which staples
+  // the operator's resolved profile, and with it the access token and the app
+  // secret, onto every post in the listing -- survived all 363 tests of the
+  // twelve files that observe this tool (exit code 0, not one `not ok` line).
+  // The key-set test further down ("omits paging.after and note rather than
+  // emitting undefined keys") closes exactly this hole one level up, on the
+  // payload and on `paging`; the item records inside it were watched by nobody.
+  //
+  // A whole pin is affordable here because every value is fixed at author time:
+  // the fake edge answers with one fixed page, `maxItems: 1` stops the walk
+  // after it, and `mediaItemToRecord` copies the Graph object through unchanged
+  // apart from the fenced caption. Nothing in the body is a clock, an id the
+  // suite did not choose, or a value the api layer is free to reshape, so there
+  // is no volatile slot to collapse -- and an added key now fails here with its
+  // own name in the diff instead of travelling to the model unremarked.
+  assert.deepEqual(res.structuredContent, {
+    items: [{ id: '1', caption: fence('hello @someone'), media_type: 'IMAGE' }],
+    paging: { truncated: true, after: 'A1' },
+  });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.path, '/999/media');
 });
@@ -158,7 +192,10 @@ test('instagram_list_media reads ONE page unless the caller asks for fetchAll', 
   // defaulted-on walk is directly visible as a second request.
   const responder = (opts: IgRequestOptions) =>
     opts.params?.after === undefined
-      ? { data: [{ id: '1' }], paging: { cursors: { after: 'A1' } } }
+      ? {
+          data: [{ id: '1' }],
+          paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+        }
       : { data: [{ id: '2' }], paging: {} };
   const { req, calls } = fakeReq(responder);
 
@@ -207,8 +244,11 @@ test('instagram_list_media surfaces the pager note and logs the fetchAll it was 
   // the model re-walks the same stuck edge instead of resuming from `after`.
   const { req } = fakeReq((opts) =>
     opts.params?.after === undefined
-      ? { data: [{ id: '1' }], paging: { cursors: { after: 'A1' } } }
-      : { data: [], paging: { cursors: { after: 'A2' } } },
+      ? {
+          data: [{ id: '1' }],
+          paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+        }
+      : { data: [], paging: { cursors: { after: 'A2' }, next: 'https://graph.facebook.com/next' } },
   );
 
   const res = await tool('instagram_list_media').handler(
@@ -217,7 +257,18 @@ test('instagram_list_media surfaces the pager note and logs the fetchAll it was 
   );
 
   const sc = res.structuredContent as { note?: string; paging: { after?: string } };
-  assert.match(String(sc.note), /resume from `after`/);
+  // Byte-exact, not a fragment. The note is FIRST-PARTY text and this layer's
+  // entire job with it is to hand it on untouched, so a substring match asserts
+  // the wrong thing: `/resume from `after`/` still passes when the handler
+  // prefixes the note, rewrites its punctuation, or — worst — runs it through
+  // `fence()`, which would stamp the server's own pagination guidance as
+  // untrusted Instagram user content and invite the model to discount the one
+  // instruction that gets it unstuck. Only equality can tell "passed through"
+  // from "passed through and edited".
+  assert.equal(
+    sc.note,
+    'a page returned no items while more remained (filtered or deleted) — resume from `after`',
+  );
   assert.equal(sc.paging.after, 'A2');
 
   // And the audit line states the walk mode on both sides — never `undefined`.
@@ -225,6 +276,103 @@ test('instagram_list_media surfaces the pager note and logs the fetchAll it was 
   assert.ok(fn);
   assert.equal(fn({ fetchAll: true }).fetchAll, true);
   assert.equal(fn({ limit: 10 }).fetchAll, false);
+});
+
+test('instagram_list_media omits paging.after and note rather than emitting undefined keys', async () => {
+  // A complete listing has no cursor to resume from and nothing to explain, so
+  // the handler guards both assignments and the keys are simply absent. Writing
+  // them unconditionally would be invisible in the rendered text —
+  // `JSON.stringify` drops a property whose value is `undefined` — but
+  // `structuredContent` is handed on as a live object, and there `'after' in
+  // paging` would be true while `paging.after` is `undefined`. That is the
+  // difference between "this edge is exhausted" and "here is your next cursor,
+  // it just has no value": a client that tests for the key, which is the natural
+  // way to ask whether another page exists, would keep asking for one. The same
+  // goes for `note`, whose presence is itself the signal that the pager stopped
+  // early and had a reason. Only the key set separates absent from
+  // present-and-undefined, so assert that rather than the values.
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }], paging: {} }));
+
+  const res = await tool('instagram_list_media').handler({}, makeCtx(req));
+
+  const payload = res.structuredContent as Record<string, unknown>;
+  assert.deepEqual(Object.keys(payload), ['items', 'paging']);
+  assert.equal('note' in payload, false, 'no pager note means no `note` key at all');
+
+  const paging = payload.paging as Record<string, unknown>;
+  assert.deepEqual(Object.keys(paging), ['truncated']);
+  assert.equal('after' in paging, false, 'an exhausted edge carries no `after` key');
+  assert.equal(paging.truncated, false);
+});
+
+test('a cleared caption is fenced too — empty is not the same as absent', async () => {
+  // An author who deletes their caption leaves `caption: ''` behind, and Graph
+  // returns that empty string rather than dropping the field. It is the one
+  // caption value that is present but falsy, so relaxing the fencing guard from
+  // `m.caption !== undefined` to `if (m.caption)` costs exactly this case: the
+  // empty caption escapes the envelope, and a caller reading the result can no
+  // longer tell a post with no caption from a post whose caption was cleared —
+  // the omitted-vs-empty distinction (CC-DATA-2) that the rest of this file
+  // works to preserve. It also punches a hole in the fencing rule itself
+  // (docs/security.md §7, finding F-2): every caption carries the envelope,
+  // including the boring ones, precisely so that nobody downstream has to work
+  // out which strings got it. Nothing upstream can rule the value out — `req`
+  // casts the Graph body without validating it — so this layer is where the
+  // guard has to hold, on both the list and the detail path.
+  const { req } = fakeReq((opts) =>
+    opts.path === '/999/media'
+      ? { data: [{ id: '1', caption: '', media_type: 'IMAGE' }], paging: {} }
+      : { id: 'M1', caption: '', media_type: 'IMAGE' },
+  );
+  const ctx = makeCtx(req);
+
+  const listed = await tool('instagram_list_media').handler({}, ctx);
+  const item = (listed.structuredContent as { items: Array<Record<string, unknown>> }).items[0];
+  assert.ok(item);
+  assert.equal('caption' in item, true, 'a cleared caption is still reported');
+  assert.equal(item.caption, fence(''), 'and it is fenced like any other caption');
+
+  const got = await tool('instagram_get_media').handler({ mediaId: 'M1' }, ctx);
+  assert.equal(
+    (got.structuredContent as { caption?: string }).caption,
+    fence(''),
+    'the detail view fences the cleared caption the same way',
+  );
+});
+
+test('opaque ids and cursors make the round trip byte for byte', async () => {
+  // Ids and cursors are opaque: Instagram assigns them and the only correct
+  // thing to do with one is give it back unchanged. Every other fixture in this
+  // file ('M1', 'A1', 'CURSOR-A1') is upper-case, which makes them all fixed
+  // points of case folding — a handler that upper-cased the outgoing id, the
+  // outgoing cursor or the returned one would satisfy every assertion here and
+  // then fail against the real Graph on the first token containing a lower-case
+  // letter, which for a base64url cursor is the first token. `GRAPH_ID_PATTERN`
+  // admits letters in ids for the same reason. The values below are mixed-case
+  // and punctuated so that any normalisation at all — folding, trimming,
+  // truncating — is visible as a difference.
+  const cursorIn = 'QVFIUmxfaG5rd2c9PQ';
+  const cursorOut = 'QVFIUnp5bkJvdHc9PQ';
+  const mediaId = 'aB9_x-Media7';
+
+  const { req: listReq, calls: listCalls } = fakeReq(() => ({
+    data: [{ id: '1' }],
+    paging: { cursors: { after: cursorOut }, next: 'https://graph.facebook.com/next' },
+  }));
+  const listed = await tool('instagram_list_media').handler({ after: cursorIn }, makeCtx(listReq));
+
+  assert.equal(listCalls[0]?.params?.after, cursorIn, 'the resume cursor goes out unaltered');
+  assert.equal(
+    (listed.structuredContent as { paging: { after?: string } }).paging.after,
+    cursorOut,
+    'and the next cursor comes back unaltered',
+  );
+
+  const { req: getReq, calls: getCalls } = fakeReq(() => ({ id: mediaId, media_type: 'IMAGE' }));
+  await tool('instagram_get_media').handler({ mediaId }, makeCtx(getReq));
+
+  assert.equal(getCalls.length, 1);
+  assert.equal(getCalls[0]?.path, `/${mediaId}`, 'the media id goes out unaltered');
 });
 
 test('instagram_get_media returns a fenced caption and inline carousel children', async () => {
@@ -435,6 +583,162 @@ test('real McpServer: an additive Meta field on a carousel CHILD survives output
   }
 });
 
+test('real McpServer: a loosely typed field costs the caller that field, not the listing (CC-DATA-48)', async () => {
+  // `api/media` casts the Graph body, so `caption: null` (which Meta sends for a
+  // post with no caption) used to reach `fence()` and throw a TypeError that the
+  // registry rendered as an `upstream` Instagram error, and a `null` count or
+  // URL failed output validation for the whole page. Only the bad field — or,
+  // for an entry no tool could address, the id-less entry — is dropped now,
+  // and the drop is counted and noted rather than silent: three of the five
+  // wire entries had no usable id, so the page is not a page of two.
+  const { req } = fakeReq(() => ({
+    data: [
+      { id: '1', caption: null, like_count: null, permalink: null, media_type: 'IMAGE' },
+      { id: '2', caption: 'kept', comments_count: '3', media_product_type: 7 },
+      { caption: 'no id' },
+      { id: '', caption: 'empty id' },
+      null,
+    ],
+    paging: {},
+  }));
+  const live = await liveMediaServer(req);
+  try {
+    const res = await live.client.callTool({ name: 'instagram_list_media', arguments: {} });
+
+    assert.equal(res.isError, undefined, `one bad field must not fail the page: ${callText(res)}`);
+    assert.deepEqual(res.structuredContent, {
+      items: [
+        { id: '1', media_type: 'IMAGE' },
+        { id: '2', caption: fence('kept') },
+      ],
+      paging: { truncated: false },
+      omittedWithoutId: 3,
+      note:
+        'omitted 3 items Instagram returned without a usable id (nothing can address an object ' +
+        'with no id), so the page held more objects than items lists',
+    });
+  } finally {
+    await live.close();
+  }
+});
+
+test('instagram_list_media counts one dropped id-less item beside the cap note, never replacing it', async () => {
+  // The drop note joins the paging note rather than overwriting it: the cap note
+  // is what tells the caller there is nothing to resume from, and losing it to a
+  // count would re-open the silent-truncation hole the note closes. Singular
+  // wording is pinned too, since "1 items" reads as a template bug to a model.
+  const { req } = fakeReq(() => ({
+    data: [{ caption: 'no id' }, { id: '1' }, { id: '2' }],
+    paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+  }));
+  const ctx = makeCtx(req, { settings: { maxItems: 2 } });
+
+  const res = await tool('instagram_list_media').handler({ fetchAll: true }, ctx);
+
+  assert.deepEqual(res.structuredContent, {
+    items: [{ id: '1' }],
+    paging: { truncated: true },
+    omittedWithoutId: 1,
+    note:
+      'stopped at the item cap part-way through a page — no cursor addresses the items dropped ' +
+      'here, so there is nothing to resume from; re-read with a smaller limit; omitted 1 item ' +
+      'Instagram returned without a usable id (nothing can address an object with no id), so the ' +
+      'page held more objects than items lists',
+  });
+});
+
+test('real McpServer: get_media survives a null caption and drops unusable carousel children', async () => {
+  const { req } = fakeReq(() => ({
+    id: 'M1',
+    caption: null,
+    timestamp: null,
+    media_type: 'CAROUSEL_ALBUM',
+    children: {
+      data: [{ id: 'c1', media_url: null, media_type: 'IMAGE' }, { media_type: 'VIDEO' }],
+    },
+  }));
+  const live = await liveMediaServer(req);
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_get_media',
+      arguments: { mediaId: 'M1' },
+    });
+
+    assert.equal(res.isError, undefined, `a null field must not fail the call: ${callText(res)}`);
+    assert.deepEqual(res.structuredContent, {
+      id: 'M1',
+      media_type: 'CAROUSEL_ALBUM',
+      children: [{ id: 'c1', media_type: 'IMAGE' }],
+      omittedWithoutId: 1,
+      note:
+        'omitted 1 carousel child Instagram returned without a usable id (nothing can address an ' +
+        'object with no id), so the album holds more items than children lists',
+    });
+  } finally {
+    await live.close();
+  }
+
+  // An inline `children.data` that is not a list is not published as one.
+  const odd = fakeReq(() => ({ id: 'M2', media_type: 'CAROUSEL_ALBUM', children: { data: 'x' } }));
+  const second = await liveMediaServer(odd.req);
+  try {
+    const res = await second.client.callTool({
+      name: 'instagram_get_media',
+      arguments: { mediaId: 'M2' },
+    });
+
+    assert.equal(
+      res.isError,
+      undefined,
+      `a malformed edge must not fail the call: ${callText(res)}`,
+    );
+    assert.deepEqual(res.structuredContent, { id: 'M2', media_type: 'CAROUSEL_ALBUM' });
+  } finally {
+    await second.close();
+  }
+});
+
+test('get_media counts every id-less carousel child instead of hiding it (CC-DATA-60)', async () => {
+  // An album whose children all came back without an id used to publish
+  // `children: []`, which reads as "an album with no items". The count and the
+  // plural note say the album holds items this list cannot show. Being inline
+  // and non-empty, the edge is not re-fetched through `/children` either.
+  const { req, calls } = fakeReq(() => ({
+    id: 'M1',
+    media_type: 'CAROUSEL_ALBUM',
+    children: { data: [{ media_type: 'IMAGE' }, { id: '' }, { id: 7 }] },
+  }));
+
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M1' }, makeCtx(req));
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(res.structuredContent, {
+    id: 'M1',
+    media_type: 'CAROUSEL_ALBUM',
+    children: [],
+    omittedWithoutId: 3,
+    note:
+      'omitted 3 carousel children Instagram returned without a usable id (nothing can address an ' +
+      'object with no id), so the album holds more items than children lists',
+  });
+});
+
+test('get_media publishes neither omittedWithoutId nor note for an album whose children all have ids', async () => {
+  const { req } = fakeReq(() => ({
+    id: 'M1',
+    media_type: 'CAROUSEL_ALBUM',
+    children: { data: [{ id: 'c1' }, { id: 'c2' }] },
+  }));
+
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M1' }, makeCtx(req));
+
+  assert.deepEqual(res.structuredContent, {
+    id: 'M1',
+    media_type: 'CAROUSEL_ALBUM',
+    children: [{ id: 'c1' }, { id: 'c2' }],
+  });
+});
+
 test('real McpServer: list_media publishes paging.truncated as a REQUIRED field', async () => {
   // `truncated` is the tool's only honest signal that a listing is incomplete.
   // Declaring it optional would let a client legitimately read `paging` with no
@@ -592,11 +896,14 @@ test('real McpServer: the published contract of instagram_list_media is pinned e
         name: 'instagram_list_media',
         title: 'List Instagram media',
         description:
-          "List the operated account's own media (feed posts, reels, stories, albums), newest first, " +
-          'cursor-paginated. Returns a single page by default; set fetchAll to aggregate pages up to the ' +
+          "List the operated account's own media (feed posts, reels, albums), newest first, " +
+          'cursor-paginated. Stories are not included: Instagram serves live stories on a separate edge ' +
+          'this tool does not read, so an empty or story-free page says nothing about active stories. ' +
+          'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
           "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more media remained. " +
-          'Captions are returned as fenced, untrusted text. Some fields (like_count, media_url, counts on ' +
-          'stories) may be absent when Instagram does not disclose them.',
+          'Captions are returned as fenced, untrusted text. Some fields (like_count, media_url) may be ' +
+          'absent when Instagram does not disclose them. An item Instagram returns without ' +
+          'an id is left out, and omittedWithoutId plus note say how many were.',
         // Exactly two hints, and no more: an *added* hint is as dangerous as a
         // dropped one. `destructiveHint: false` or `idempotentHint: true` on a
         // reader is noise a host may act on, and a spurious `readOnlyHint: false`
@@ -651,6 +958,7 @@ test('real McpServer: the published contract of instagram_list_media is pinned e
               additionalProperties: true,
             },
             note: { type: 'string' },
+            omittedWithoutId: { type: 'integer' },
           },
           required: ['items', 'paging'],
           additionalProperties: false,
@@ -693,7 +1001,9 @@ test('real McpServer: the published contract of instagram_get_media is pinned ex
         description:
           'Fetch a single media object by id, including its carousel children (album items) under `children`. ' +
           'The caption is returned as fenced, untrusted text. Fields Instagram does not disclose are omitted ' +
-          'rather than nulled; a deleted object or an expired story (stories last 24h) returns an error.',
+          'rather than nulled; a deleted object or an expired story (stories last 24h) returns an error. ' +
+          'A carousel child Instagram returns without an id is left out, and omittedWithoutId plus note ' +
+          'say how many were.',
         annotations: { readOnlyHint: true, openWorldHint: true },
         inputSchema: {
           type: 'object',
@@ -701,6 +1011,11 @@ test('real McpServer: the published contract of instagram_get_media is pinned ex
             mediaId: {
               type: 'string',
               minLength: 1,
+              // The id charset is published, not merely enforced server-side:
+              // the model sees `pattern` and can stop guessing. It is also the
+              // tool-layer half of the path-injection defence (`tools/ids.ts`),
+              // so losing it here would be a real loosening, not cosmetics.
+              pattern: '^[A-Za-z0-9_-]{1,64}$',
               description:
                 'The Instagram media object id to fetch (e.g. an id from instagram_list_media).',
             },
@@ -732,6 +1047,8 @@ test('real McpServer: the published contract of instagram_get_media is pinned ex
                 additionalProperties: true,
               },
             },
+            omittedWithoutId: { type: 'integer' },
+            note: { type: 'string' },
           },
           required: ['id'],
           additionalProperties: false,
@@ -942,8 +1259,14 @@ test('instagram_list_media caps a fetchAll walk with the SERVER item cap, not th
   // passing limit=100 walk far past a cap of 3.
   const responder = (opts: IgRequestOptions) =>
     opts.params?.after === undefined
-      ? { data: [{ id: '1' }, { id: '2' }], paging: { cursors: { after: 'A1' } } }
-      : { data: [{ id: '3' }, { id: '4' }], paging: { cursors: { after: 'A2' } } };
+      ? {
+          data: [{ id: '1' }, { id: '2' }],
+          paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+        }
+      : {
+          data: [{ id: '3' }, { id: '4' }],
+          paging: { cursors: { after: 'A2' }, next: 'https://graph.facebook.com/next' },
+        };
   const { req } = fakeReq(responder);
 
   const res = await tool('instagram_list_media').handler(
@@ -988,7 +1311,7 @@ test('both media tools emit compact JSON whose text mirror matches structuredCon
   // hundred items at once.
   const listReq = fakeReq(() => ({
     data: [{ id: '1', caption: 'c' }],
-    paging: { cursors: { after: 'A1' } },
+    paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
   }));
   const listRes = await tool('instagram_list_media').handler({}, makeCtx(listReq.req));
   const listText = listRes.content[0]?.type === 'text' ? listRes.content[0].text : '';
@@ -1034,4 +1357,239 @@ test('mediaTools advertises the listing before the fetch', () => {
     mediaTools.map((t) => t.name),
     ['instagram_list_media', 'instagram_get_media'],
   );
+});
+
+// --- model-facing contracts -------------------------------------------------
+// A tool description and its `.describe()` texts are not documentation: they are
+// the only instructions the model gets before it decides whether, and with what
+// arguments, to spend a call. Each fragment below is pinned because a model that
+// reads the opposite of it behaves differently.
+
+test('list_media describes whose media it lists, that stories are not among them (CC-DATA-118), the paging default, and the fencing', () => {
+  const spec = tool('instagram_list_media');
+  assert.equal(spec.title, 'List Instagram media');
+  const d = spec.description;
+  // Two claims a model acts on immediately. The account is the operated one, so
+  // there is no handle to pass; and the order is newest first, so "what did we
+  // post last?" is answerable from the head of page one. Reversed, that question
+  // is answered with the oldest post the account ever published.
+  assertMentions(
+    d,
+    "List the operated account's own media (feed posts, reels, albums), newest first, " +
+      'cursor-paginated.',
+  );
+  // CC-DATA-118: Meta's IG User Media edge does not return stories (its reference
+  // points to GET /{ig-user-id}/stories instead). A description that promised
+  // them had a model answer "are there live stories?" with "none" off a page that
+  // could never have held one. The exclusion is stated, and "stories" is never
+  // listed among the media kinds again.
+  assertMentions(
+    d,
+    'Stories are not included: Instagram serves live stories on a separate edge this tool does ' +
+      'not read, so an empty or story-free page says nothing about active stories.',
+  );
+  assert.doesNotMatch(d, /reels, stories|counts on stories/);
+  // One page unless asked. A model that reads the default as a full walk presents
+  // the first page as the account's complete history and never sets fetchAll.
+  assertMentions(
+    d,
+    'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
+      "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more media " +
+      'remained.',
+  );
+  assertMentions(d, 'Captions are returned as fenced, untrusted text.');
+  // Absence is normal here, not a failure. A model that expects like_count on a
+  // post whose owner hid it retries a call that can never carry it, or reports the post as having
+  // none of the engagement Instagram merely declined to disclose.
+  assertMentions(
+    d,
+    'Some fields (like_count, media_url) may be absent when Instagram does not disclose them.',
+  );
+  // A dropped entry is announced, not hidden: without this a model reads a page
+  // of eight usable items as the whole page and never looks at `omittedWithoutId`.
+  assertMentions(
+    d,
+    'An item Instagram returns without an id is left out, and omittedWithoutId plus note say how ' +
+      'many were.',
+  );
+
+  const limitDesc = describeOf(spec.input, 'limit');
+  assertMentions(limitDesc, 'Page-size hint forwarded to Instagram (1');
+  // Two different knobs. A model that reads `limit` as the item cap raises it to
+  // 100 expecting more items and is handed the same capped result back.
+  assertMentions(limitDesc, '100). Independent of the server item cap that bounds fetchAll.');
+  // Where the cursor comes from is the whole instruction: read as "any offset",
+  // the model invents one and Graph rejects the call it spent.
+  assertMentions(
+    describeOf(spec.input, 'after'),
+    "Opaque pagination cursor from a previous response's paging.after. Omit to start from the " +
+      'newest media.',
+  );
+  // `truncated` is the only completeness signal an aggregated walk carries.
+  assertMentions(
+    describeOf(spec.input, 'fetchAll'),
+    'When true, follow cursors and aggregate pages up to the server item cap (IG_MAX_ITEMS). The ' +
+      'result sets paging.truncated=true when the cap is reached while more media remained.',
+  );
+});
+
+test('get_media describes the album children, the fencing, and what an error means', () => {
+  const spec = tool('instagram_get_media');
+  assert.equal(spec.title, 'Get Instagram media');
+  const d = spec.description;
+  // The carousel items come back in this one call. A model told otherwise goes
+  // looking for a children tool that does not exist and reports albums as empty.
+  assertMentions(
+    d,
+    'Fetch a single media object by id, including its carousel children (album items) under ' +
+      '`children`.',
+  );
+  assertMentions(d, 'The caption is returned as fenced, untrusted text.');
+  // For a deleted object, or a story past its 24 hours, the error IS the answer.
+  // A model that reads it as a transport failure retries a call that can only
+  // fail the same way; one that expects an empty result reports the post as blank.
+  assertMentions(
+    d,
+    'Fields Instagram does not disclose are omitted rather than nulled; a deleted object or an ' +
+      'expired story (stories last 24h) returns an error.',
+  );
+
+  // Naming the source tool is what stops a permalink, a username or an invented
+  // id from being handed to `graphObjectId()` as if it were a media id.
+  assertMentions(
+    describeOf(spec.input, 'mediaId'),
+    'The Instagram media object id to fetch (e.g. an id from instagram_list_media).',
+  );
+});
+
+test('real McpServer: list_media reports a single page ending on an unusable cursor as truncated (CC-DATA-11)', async () => {
+  // The default single-page read used to drop a null cursor and publish
+  // `truncated: false`, which reads as "this is every post". A cursor that is
+  // present and cannot be sent back proves nothing about the end of the edge.
+  const { req } = fakeReq(() => ({
+    data: [{ id: '1' }],
+    paging: { cursors: { after: null }, next: 'https://graph.facebook.com/next' },
+  }));
+  const live = await liveMediaServer(req);
+  try {
+    const res = await live.client.callTool({ name: 'instagram_list_media', arguments: {} });
+
+    assert.equal(res.isError, undefined, callText(res));
+    assert.deepEqual(res.structuredContent, {
+      items: [{ id: '1' }],
+      paging: { truncated: true },
+      note: 'the edge returned an unusable cursor (no way to continue) — the listing may be incomplete',
+    });
+  } finally {
+    await live.close();
+  }
+});
+
+test('instagram_get_media falls back to /children when the inline edge is not a list (CC-DATA-66)', async () => {
+  // `children: { data: 'x' }` is truthy, so it used to count as "expanded": the
+  // fallback never fired and the album lost its items.
+  const responder = (opts: IgRequestOptions) => {
+    if (opts.path === '/M6')
+      return { id: 'M6', media_type: 'CAROUSEL_ALBUM', children: { data: 'x' } };
+    if (opts.path === '/M6/children') return { data: [{ id: 'k1', media_type: 'IMAGE' }] };
+    throw new Error(`unexpected ${opts.path}`);
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M6' }, makeCtx(req));
+
+  const sc = res.structuredContent as { children?: Array<{ id: string }> };
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.path, '/M6/children');
+  assert.deepEqual(
+    sc.children?.map((c) => c.id),
+    ['k1'],
+  );
+});
+
+test('instagram_get_media omits `children` when both the inline edge and the fallback are empty (CC-DATA-68)', async () => {
+  // Same state as an absent inline edge with an empty fallback, which already
+  // omits the key: an empty inline list must not turn it into the positive
+  // claim `children: []`.
+  const responder = (opts: IgRequestOptions) => {
+    if (opts.path === '/M5')
+      return { id: 'M5', media_type: 'CAROUSEL_ALBUM', children: { data: [] } };
+    if (opts.path === '/M5/children') return { data: [] };
+    throw new Error(`unexpected ${opts.path}`);
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M5' }, makeCtx(req));
+
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.equal(calls.length, 2, 'the fallback was attempted');
+  assert.equal('children' in sc, false, 'an empty album is omitted, never []');
+});
+
+test('real McpServer: an unreadable list_media page is a noted, truncated result, not a failed call (CC-DATA-73)', async () => {
+  // A page whose `data` is not a list used to throw out of the api walk, and
+  // the whole tool call came back as an `upstream` error. The degraded result
+  // must also survive output validation as shipped, and must not read like an
+  // account with no media: `truncated: true` plus a note that says why.
+  const { req } = fakeReq(() => ({ data: { id: '1' }, paging: {} }));
+  const live = await liveMediaServer(req);
+  try {
+    const res = await live.client.callTool({ name: 'instagram_list_media', arguments: {} });
+
+    assert.equal(res.isError, undefined, `an unreadable page must not fail: ${callText(res)}`);
+    const sc = res.structuredContent as Record<string, unknown>;
+    assert.deepEqual(sc.items, []);
+    assert.deepEqual(sc.paging, { truncated: true });
+    assert.match(String(sc.note), /unreadable page/);
+  } finally {
+    await live.close();
+  }
+});
+
+test('list_media leaves out and counts null and scalar rows, like every other id-less row (CC-DATA-74)', async () => {
+  // `listMedia` hands rows through untouched, so a `null` or a bare scalar in
+  // `data` reaches this layer. It has no id, so it is dropped and counted — the
+  // same rule `list_comments`, `list_tagged_media` and `list_linked_accounts`
+  // apply — rather than crashing the record builder or vanishing silently.
+  const res = await tool('instagram_list_media').handler(
+    {},
+    makeCtx(fakeReq(() => ({ data: [null, 'x', 7, { id: '1' }], paging: {} })).req),
+  );
+
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.deepEqual(sc.items, [{ id: '1' }]);
+  assert.equal(sc.omittedWithoutId, 3);
+});
+
+test('real McpServer: get_media publishes the requested id when Meta sends no usable one (CC-DATA-77)', async () => {
+  // `id` is REQUIRED in get_media's output, so an id-less body failed the whole
+  // call as MCP error -32602 and every field that did arrive was lost. The read
+  // is `GET /{mediaId}`, so the requested id names the object that answered.
+  for (const id of [undefined, null, 17, '']) {
+    const live = await liveMediaServer(fakeReq(() => ({ id, media_type: 'IMAGE' })).req);
+    try {
+      const res = await live.client.callTool({
+        name: 'instagram_get_media',
+        arguments: { mediaId: 'M1' },
+      });
+      assert.equal(res.isError, undefined, `id=${String(id)}: ${callText(res)}`);
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(res.structuredContent)),
+        { id: 'M1', media_type: 'IMAGE' },
+        `id=${String(id)}`,
+      );
+    } finally {
+      await live.close();
+    }
+  }
+});
+
+test('get_media keeps the id Meta sends over the requested one (CC-DATA-77)', async () => {
+  // The fallback applies only to an unusable wire id; a real one is reported as
+  // Meta resolved it, as instagram_get_account and get_container_status do.
+  const res = await tool('instagram_get_media').handler(
+    { mediaId: 'M-REQ' },
+    makeCtx(fakeReq(() => ({ id: 'M-GRAPH', media_type: 'IMAGE' })).req),
+  );
+  assert.equal(res.structuredContent?.id, 'M-GRAPH');
 });

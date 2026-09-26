@@ -3,11 +3,22 @@
  * `ToolSpec` object (tools-as-data); `tools/` files export these and `mcp/
  * registry.ts` turns them into MCP registrations. See docs/architecture.md §3.
  */
+// Equivalent-mutant note: dropping `type` from this import (`import { z } from 'zod'`)
+// cannot be observed. `z` is referenced only in type positions in this file, so TypeScript
+// elides the binding either way and the emitted JavaScript is byte-identical — there is no
+// runtime import to detect and no type-check difference to assert on.
 import type { z } from 'zod';
 import type { AuthPath, IgRequestFn, Logger, ResolvedProfile, Settings } from '../core/types.js';
 import type { Clock } from '../core/clock.js';
 
-/** MCP tool annotations surfaced to clients for permission UX. */
+/**
+ * MCP tool annotations surfaced to clients for permission UX.
+ *
+ * Equivalent-mutant note: writing `ToolSpec.annotations` as `Partial<ToolAnnotationSet>`
+ * is unobservable, because every member below is already optional — `Partial` is the
+ * identity mapping over this type, so both spellings accept and produce exactly the same
+ * values and no assertion can separate them.
+ */
 export interface ToolAnnotationSet {
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
@@ -21,6 +32,12 @@ export interface ToolTextContent {
   text: string;
 }
 
+/**
+ * Equivalent-mutant note: `ToolContent` is a bare alias, so restating `ToolResult.content`
+ * as `ToolTextContent[]` names the identical type. The alias exists to mark the extension
+ * point for future content kinds (image, resource); until a second member joins the union
+ * the two spellings are the same type and nothing can tell them apart.
+ */
 export type ToolContent = ToolTextContent;
 
 /** MCP `CallToolResult` subset the handlers produce. */
@@ -75,7 +92,20 @@ export interface ToolSpec<S extends z.ZodRawShape = z.ZodRawShape> {
   handler: (args: ToolInputArgs<S>, ctx: ToolContext) => ToolResult | Promise<ToolResult>;
 }
 
-/** Identity helper preserving the generic `S` at definition sites. */
+/**
+ * Identity helper preserving the generic `S` at definition sites.
+ *
+ * Equivalent-mutant note: rewriting this declaration as an arrow constant
+ * (`export const defineTool = <S extends z.ZodRawShape>(spec: ToolSpec<S>) => spec`) is
+ * unobservable from outside the module. Arity, `Function.prototype.name`, the returned
+ * reference and the inferred type are all unchanged. What does change is hoisting, and
+ * `.prototype`/constructability — an arrow has no `.prototype` and `new defineTool(…)`
+ * throws. Nothing calls `defineTool` above this line and nothing constructs it, so none
+ * of the three is reachable from outside.
+ *
+ * Equivalent-mutant note: `return spec as ToolSpec<S>` is equally unobservable. `spec` is
+ * already declared `ToolSpec<S>`, so the assertion narrows nothing and erases at emit.
+ */
 export function defineTool<S extends z.ZodRawShape>(spec: ToolSpec<S>): ToolSpec<S> {
   return spec;
 }

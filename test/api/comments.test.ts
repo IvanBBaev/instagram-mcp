@@ -11,6 +11,7 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { InstagramError } from '../../src/core/types.js';
 import type { IgRequestFn, IgRequestOptions } from '../../src/core/types.js';
+import { loadFixture } from '../helpers/fixtures.js';
 import {
   createComment,
   deleteComment,
@@ -50,7 +51,7 @@ function fakeReq(responder: (opts: IgRequestOptions) => unknown): {
 /**
  * Transport-shape invariants every call in this module must satisfy.
  *
- * These three fields are optional, so leaving them out is invisible to the
+ * These four fields are optional, so leaving them out is invisible to the
  * compiler and to any assertion about method/path/params — yet each one changes
  * what the transport is allowed to do with the request:
  *
@@ -63,12 +64,28 @@ function fakeReq(responder: (opts: IgRequestOptions) => unknown): {
  * - `body`: this API is query-parameter based. A body appearing alongside the
  *   params means the same values travel twice, and a form body is not covered by
  *   the param-key assertions below — a smuggled field would never be noticed.
+ * - `signal`: the timeout belongs to the transport, not to this layer.
+ *   `core/http` builds a per-attempt `AbortSignal.timeout` from the operator's
+ *   configured budget and combines it with the CALLER's signal
+ *   (`AbortSignal.any([opts.signal, timeout])`), then treats
+ *   `opts.signal?.aborted` as "stop, do not retry". A signal minted inside
+ *   `api/comments.ts` therefore imposes a deadline nobody configured and, once
+ *   it fires, cancels the retry loop with it.
+ *
+ * Together with the `method`/`path`/`params` assertions at each call site these
+ * four cover every slot on `IgRequestOptions`, which is what makes the helper a
+ * real guard against an ADDED key rather than a reminder about a known list.
+ * The `signal` line is the one that was missing, and its absence was measured
+ * rather than assumed: adding `signal: AbortSignal.timeout(30_000)` to the
+ * `getComment` request in `api/comments.ts` ran the api, tools and registry
+ * suites with 479 tests passing, 0 failures and exit 0.
  */
 function assertPlainGraphCall(opts: IgRequestOptions | undefined): void {
   assert.ok(opts, 'expected a request to have been issued');
   assert.equal(opts.host, undefined, 'must not override the configured Graph host');
   assert.equal(opts.idempotent, undefined, 'idempotency must be derived from the method');
   assert.equal(opts.body, undefined, 'this API is query-parameter based — no request body');
+  assert.equal(opts.signal, undefined, 'the abort deadline belongs to the transport');
 }
 
 // --- wire field sets -------------------------------------------------------
@@ -101,7 +118,7 @@ test('listComments returns a single page, forwards fields/limit, and flattens in
       },
       { id: 'c2', text: 'ok' },
     ],
-    paging: { cursors: { after: 'CUR' } },
+    paging: { cursors: { after: 'CUR' }, next: 'https://graph.facebook.com/next' },
   };
   const { req, calls } = fakeReq(() => page);
 
@@ -207,13 +224,19 @@ test('listComments tells an absent reply edge apart from an empty one', async ()
   assert.equal('replies' in (res.items[2] ?? {}), true);
 });
 
-test('listComments fetchAll caps at maxItems and reports truncated with a resume cursor', async () => {
+test('listComments fetchAll caps at maxItems and withholds the cursor it cut a page on', async () => {
   const responder = (opts: IgRequestOptions) => {
     const after = opts.params?.after;
     if (after === undefined)
-      return { data: [{ id: '1' }, { id: '2' }], paging: { cursors: { after: 'A1' } } };
+      return {
+        data: [{ id: '1' }, { id: '2' }],
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+      };
     if (after === 'A1')
-      return { data: [{ id: '3' }, { id: '4' }], paging: { cursors: { after: 'A2' } } };
+      return {
+        data: [{ id: '3' }, { id: '4' }],
+        paging: { cursors: { after: 'A2' }, next: 'https://graph.facebook.com/next' },
+      };
     throw new Error(`unexpected cursor ${String(after)}`);
   };
   const { req, calls } = fakeReq(responder);
@@ -225,7 +248,16 @@ test('listComments fetchAll caps at maxItems and reports truncated with a resume
     ['1', '2', '3'],
   );
   assert.equal(res.truncated, true);
-  assert.equal(res.after, 'A2');
+  // The cap fell between comment `3` and comment `4`, so `A2` — the boundary at
+  // the END of that page — is not a position the caller can resume from without
+  // losing `4`. Comments share `fetchPagedEdge` with media, so the CC-DATA-47
+  // verdict reaches this listing too: no cursor, and a note that says why.
+  assert.equal('after' in res, false, 'a cursor past the dropped comment is worse than none');
+  assert.equal(
+    res.note,
+    'stopped at the item cap part-way through a page — no cursor addresses the items ' +
+      'dropped here, so there is nothing to resume from; re-read with a smaller limit',
+  );
   assert.equal(calls.length, 2);
   // `maxItems` is the walk cap, not a page size. Leaking it into Graph's `limit`
   // makes every request ask for a page sized to the whole budget — an edge that
@@ -240,7 +272,10 @@ test('listComments fetchAll stopping exactly at the cap with no more data is NOT
   const responder = (opts: IgRequestOptions) => {
     const after = opts.params?.after;
     if (after === undefined)
-      return { data: [{ id: '1' }, { id: '2' }], paging: { cursors: { after: 'A1' } } };
+      return {
+        data: [{ id: '1' }, { id: '2' }],
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+      };
     if (after === 'A1') return { data: [{ id: '3' }, { id: '4' }], paging: {} };
     throw new Error('unexpected');
   };
@@ -256,7 +291,10 @@ test('listComments fetchAll stopping exactly at the cap with no more data is NOT
 test('listComments fetchAll keeps a partial result when a cursor goes stale mid-listing (CC-DATA-1)', async () => {
   const responder = (opts: IgRequestOptions) => {
     if (opts.params?.after === undefined)
-      return { data: [{ id: '1' }, { id: '2' }], paging: { cursors: { after: 'A1' } } };
+      return {
+        data: [{ id: '1' }, { id: '2' }],
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+      };
     throw new InstagramError('cursor invalid', { kind: 'validation', code: 100 });
   };
   const { req, calls } = fakeReq(responder);
@@ -266,6 +304,25 @@ test('listComments fetchAll keeps a partial result when a cursor goes stale mid-
   assert.equal(res.items.length, 2);
   assert.equal(res.truncated, true);
   assert.ok(res.note?.includes('stale'));
+  assert.equal(calls.length, 2);
+});
+
+test('listComments propagates a mid-walk rate limit instead of calling it a stale cursor (CC-DATA-105)', async () => {
+  // The shared walk swallows only a stale cursor (`validation`). A rate limit
+  // on page 2 is not one, and "restart the listing" is the wrong advice for it.
+  const { req, calls } = fakeReq((opts: IgRequestOptions) => {
+    if (opts.params?.after === undefined)
+      return {
+        data: [{ id: '1' }, { id: '2' }],
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+      };
+    throw new InstagramError('slow down', { kind: 'rate_limit', code: 4 });
+  });
+
+  await assert.rejects(
+    () => listComments(req, { mediaId: 'M1', maxItems: 100, fetchAll: true }),
+    (e: unknown) => e instanceof InstagramError && e.kind === 'rate_limit',
+  );
   assert.equal(calls.length, 2);
 });
 
@@ -289,8 +346,15 @@ test('listComments fetchAll stops when a page returns no items but still adverti
   const responder = (opts: IgRequestOptions) => {
     guard();
     const after = opts.params?.after;
-    if (after === undefined) return { data: [{ id: 'c1' }], paging: { cursors: { after: 'A1' } } };
-    return { data: [], paging: { cursors: { after: `${String(after)}+` } } };
+    if (after === undefined)
+      return {
+        data: [{ id: 'c1' }],
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
+      };
+    return {
+      data: [],
+      paging: { cursors: { after: `${String(after)}+` }, next: 'https://graph.facebook.com/next' },
+    };
   };
   const { req, calls } = fakeReq(responder);
 
@@ -310,7 +374,10 @@ test('listComments fetchAll stops when the edge repeats the same cursor (no forw
   const guard = runawayGuard(6);
   const responder = () => {
     guard();
-    return { data: [{ id: 'c1' }, { id: 'c2' }], paging: { cursors: { after: 'STUCK' } } };
+    return {
+      data: [{ id: 'c1' }, { id: 'c2' }],
+      paging: { cursors: { after: 'STUCK' }, next: 'https://graph.facebook.com/next' },
+    };
   };
   const { req, calls } = fakeReq(responder);
 
@@ -421,6 +488,62 @@ test('getComment tells an empty reply edge apart from a dataless envelope', asyn
   assert.deepEqual(await getComment(dataless.req, { commentId: 'C2' }), { id: 'C2' });
 });
 
+test('getComment refuses a body that is not an object instead of throwing a TypeError (CC-DATA-83)', async () => {
+  // `req` casts the body. `null` used to be destructured into a raw TypeError,
+  // and a scalar or a list was spread into an id-less record (a list even into
+  // `{ "0": … }`). Each is now the same `upstream` refusal `getMedia` gives.
+  for (const body of [null, 'x', 7, true, [], [{ id: 'C1' }]]) {
+    const { req, calls } = fakeReq(() => body);
+    await assert.rejects(
+      () => getComment(req, { commentId: 'C1' }),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'upstream' &&
+        e.message === 'Instagram returned no comment object for this id. Retry later.',
+      `body=${JSON.stringify(body)}`,
+    );
+    assert.equal(calls.length, 1, 'the read is issued once and not retried here');
+  }
+});
+
+test('a reply thread Graph cut at its first page is marked, and a complete one is not (CC-COM-15)', async () => {
+  // The inline `replies` edge is paged like any other: with more replies than
+  // fit, Graph sends the first page plus `paging.next`. The envelope used to be
+  // dropped whole, so a thread cut at its first page read as the whole
+  // conversation — and moderation judges a thread by what it contains. Only
+  // `next` proves a further page: `cursors` ride on the last page too, and an
+  // empty or non-string `next` points nowhere.
+  const next = 'https://graph.instagram.com/v25.0/C1/replies?after=QVFI&access_token=IGQ_SECRET';
+  const { req } = fakeReq(() => ({
+    data: [
+      { id: 'C1', replies: { data: [{ id: 'R1' }], paging: { cursors: { after: 'A' }, next } } },
+      { id: 'C2', replies: { data: [{ id: 'R2' }], paging: { cursors: { after: 'B' } } } },
+      { id: 'C3', replies: { data: [], paging: { next: '' } } },
+      { id: 'C4', replies: { data: [{ id: 'R4' }], paging: { next: 7 } } },
+      { id: 'C5', replies: { paging: { next } } },
+    ],
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 10 });
+
+  assert.deepEqual(res.items, [
+    { id: 'C1', replies: [{ id: 'R1' }], repliesTruncated: true },
+    { id: 'C2', replies: [{ id: 'R2' }] },
+    { id: 'C3', replies: [] },
+    { id: 'C4', replies: [{ id: 'R4' }] },
+    // No readable page, but a further one announced: the thread is still cut.
+    { id: 'C5', repliesTruncated: true },
+  ]);
+  assert.equal(JSON.stringify(res).includes('IGQ_SECRET'), false, 'the next URL is never kept');
+
+  const detail = fakeReq(() => ({ id: 'C1', replies: { data: [{ id: 'R1' }], paging: { next } } }));
+  assert.deepEqual(await getComment(detail.req, { commentId: 'C1' }), {
+    id: 'C1',
+    replies: [{ id: 'R1' }],
+    repliesTruncated: true,
+  });
+});
+
 test('getComment propagates an InstagramError for a deleted comment (CC-DATA-5)', async () => {
   const { req } = fakeReq(() => {
     throw new InstagramError('object no longer exists', { kind: 'validation', code: 100 });
@@ -440,7 +563,7 @@ test('listTaggedMedia lists the /tags edge with the tagged-media field set and p
     if (after === undefined)
       return {
         data: [{ id: 't1', caption: 'tagged', username: 'friend' }],
-        paging: { cursors: { after: 'A1' } },
+        paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
       };
     if (after === 'A1') return { data: [{ id: 't2' }], paging: {} };
     throw new Error('unexpected');
@@ -500,7 +623,7 @@ test('listTaggedMedia reads one page unless the caller asked to walk them all', 
   // never asked for. `fetchAll` is the caller's decision, not the module's.
   const { req, calls } = fakeReq(() => ({
     data: [{ id: 't1' }],
-    paging: { cursors: { after: 'A1' } },
+    paging: { cursors: { after: 'A1' }, next: 'https://graph.facebook.com/next' },
   }));
 
   const res = await listTaggedMedia(req, { igId: '999', maxItems: 100 });
@@ -596,4 +719,242 @@ test('setCommentsEnabled POSTs comment_enabled to the media node in both directi
   assert.deepEqual(calls[1]?.params, { comment_enabled: true });
   assertPlainGraphCall(calls[0]);
   assertPlainGraphCall(calls[1]);
+});
+
+/**
+ * The text a write posts is model- or operator-authored, and this layer is a
+ * transport: it must forward the message exactly as given.
+ *
+ * Every other message assertion in this file uses a short plain word ('hello',
+ * 'nice post'), and a plain word is a fixed point of almost every string
+ * transformation — trimming it, Unicode-normalizing it or truncating it to a
+ * hundred characters all leave it unchanged. So a builder that quietly edits the
+ * message passes the whole file. On a real reply that costs the operator a
+ * public post they did not write: a long answer silently cut in half mid-
+ * sentence, a deliberate blank line before a signature stripped, or a ligature
+ * or combining accent rewritten inside a customer's own name.
+ *
+ * The fixture is therefore chosen to be a fixed point of NOTHING, and the three
+ * self-checks below keep it that way — they fail if the constant is ever
+ * softened into something a transformation would pass through untouched.
+ */
+const VERBATIM_MESSAGE =
+  '  Thanks for flagging this — the fix is live now.\n\n' +
+  'Full details: https://example.invalid/changelog#comments\n' +
+  'Written for a customer whose name carries a \uFB01 ligature and a combining ' +
+  'accent (e\u0301), plus an emoji \u{1F44D}, and long enough to run past any ' +
+  'well-meant truncation an api layer might be tempted to apply.  ';
+
+test('a comment write posts the message byte-for-byte — no trim, no truncation, no normalization', async () => {
+  assert.notEqual(
+    VERBATIM_MESSAGE,
+    VERBATIM_MESSAGE.trim(),
+    'the fixture must have surrounding whitespace, or it cannot catch a trim',
+  );
+  assert.notEqual(
+    VERBATIM_MESSAGE,
+    VERBATIM_MESSAGE.normalize('NFKC'),
+    'the fixture must contain a character NFKC rewrites, or it cannot catch normalization',
+  );
+  assert.ok(
+    VERBATIM_MESSAGE.length > 100,
+    'the fixture must be long enough that a truncating builder produces a different string',
+  );
+
+  const reply = fakeReq(() => ({ id: 'reply-1' }));
+  await replyToComment(reply.req, { commentId: 'C1', message: VERBATIM_MESSAGE });
+  assert.deepEqual(reply.calls[0]?.params, { message: VERBATIM_MESSAGE });
+
+  const created = fakeReq(() => ({ id: 'comment-1' }));
+  await createComment(created.req, { mediaId: 'M1', message: VERBATIM_MESSAGE });
+  assert.deepEqual(created.calls[0]?.params, { message: VERBATIM_MESSAGE });
+});
+
+test('the acknowledging writes return what Graph answered, never a locally invented success', async () => {
+  // hide/unhide, delete and the comment toggle are typed to return Graph's
+  // acknowledgement, but every other assertion about them in this file looks at
+  // the REQUEST they build. That leaves the response path completely unpinned: a
+  // body synthesized here after an `await` — `{ success: true }` — satisfies the
+  // declared return type, the request assertions and the compiler alike, while
+  // reporting a write that Graph explicitly refused as a write that happened.
+  // The `deepEqual` is against the whole answer, extra Graph keys included, so a
+  // reshaped acknowledgement fails too: this layer passes the ack through, it
+  // does not decide what an ack means.
+  const denial = { success: false, error_user_msg: 'the caller does not own this object' };
+
+  assert.deepEqual(await deleteComment(fakeReq(() => denial).req, { commentId: 'C1' }), denial);
+  assert.deepEqual(
+    await setCommentHidden(fakeReq(() => denial).req, { commentId: 'C1', hide: true }),
+    denial,
+  );
+  assert.deepEqual(
+    await setCommentsEnabled(fakeReq(() => denial).req, { mediaId: 'M1', enabled: true }),
+    denial,
+  );
+
+  // CC-DATA-2 on the write side: an acknowledgement with no `success` key is
+  // Meta disclosing nothing, and must not be back-filled into a positive one.
+  const silentAck = await deleteComment(fakeReq(() => ({})).req, { commentId: 'C2' });
+  assert.deepEqual(silentAck, {});
+  assert.equal('success' in silentAck, false, 'an unstated result stays unstated');
+});
+
+// --- request shape: the whole parameter object, not a sample of it ----------
+
+test('each read sends exactly the parameters it declares — nothing rides along', async () => {
+  // `params` becomes the query string verbatim, so every key here reaches Meta.
+  // The assertions elsewhere in this file read individual keys, which leaves the
+  // object open at the top: an extra `fields`, `since`, `access_token` or
+  // `appsecret_proof` smuggled into a builder passes every value-by-value check
+  // while changing what the call asks for — or, for an auth key, which
+  // credentials it travels with, since `core/http` appends the real ones to
+  // whatever is already there. Pinning the object whole is the only assertion
+  // that fails on an ADDED key. The `limit`/`after` keys are asserted present
+  // with an `undefined` value on purpose: that is the literal shape a first,
+  // unhinted page builds, and deepStrictEqual compares own keys, so writing
+  // them out is what keeps the pin honest in both directions.
+  const { req: r1, calls: c1 } = fakeReq(() => ({ data: [], paging: {} }));
+  await listComments(r1, { mediaId: 'M1', maxItems: 50 });
+  assert.deepEqual(c1[0]?.params, {
+    fields: EXPECTED_COMMENT_FIELDS,
+    limit: undefined,
+    after: undefined,
+  });
+
+  const { req: r2, calls: c2 } = fakeReq(() => ({ id: 'C1' }));
+  await getComment(r2, { commentId: 'C1' });
+  assert.deepEqual(c2[0]?.params, { fields: EXPECTED_DETAIL_FIELDS });
+
+  const { req: r3, calls: c3 } = fakeReq(() => ({ data: [], paging: {} }));
+  await listTaggedMedia(r3, { igId: '999', maxItems: 50, limit: 25, after: 'CUR' });
+  assert.deepEqual(c3[0]?.params, {
+    fields: EXPECTED_TAGGED_FIELDS,
+    limit: 25,
+    after: 'CUR',
+  });
+});
+
+// --- reply envelope: the third shape Graph can send ------------------------
+
+test('a reply envelope carrying a null data is read as "not disclosed", never dereferenced', async () => {
+  // `req` casts the Graph body rather than validating it, so the declared
+  // `{ data?: RawComment[] }` records what Meta documents, not what arrives.
+  // Alongside the absent key and `{ data: [] }` there is a third shape in the
+  // wild — `{ "data": null }` — and it means the same thing as the first: the
+  // edge was not disclosed. The guard is a truthiness test precisely so that
+  // shape lands in the "absent" bucket; testing the key for `!== undefined`
+  // instead would let `null` through to `.map()` and turn one odd comment in a
+  // page into a TypeError that fails the entire listing.
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'c1', text: 'hi', replies: { data: null } }],
+    paging: {},
+  }));
+
+  const page = await listComments(req, { mediaId: 'M1', maxItems: 10 });
+
+  assert.deepEqual(page.items, [{ id: 'c1', text: 'hi' }]);
+  assert.equal('replies' in (page.items[0] ?? {}), false, 'no key, not an empty array');
+});
+
+test('getComment reads a null reply data the same way, without crashing the read', async () => {
+  // Same wire shape, second normalizer. The two flatteners are separate
+  // functions, so this guard can drift on its own: a detail read that throws on
+  // `{ "data": null }` makes a single moderation lookup fail outright, which is
+  // the read a model performs right before deciding whether to hide or delete.
+  const { req } = fakeReq(() => ({ id: 'C1', hidden: false, replies: { data: null } }));
+
+  const detail = await getComment(req, { commentId: 'C1' });
+
+  assert.deepEqual(detail, { id: 'C1', hidden: false });
+  assert.equal('replies' in detail, false, 'an undisclosed thread stays undisclosed');
+});
+
+test('a reply envelope whose data is not an array is read as "not disclosed", never mapped', async () => {
+  // The body is cast, not validated: `{ "data": {} }` is truthy, so a truthiness
+  // guard handed it to `.map()` and one odd comment failed the whole listing
+  // (and the single-comment read) with a TypeError.
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'c1', text: 'hi', replies: { data: {} } }],
+    paging: {},
+  }));
+  const page = await listComments(req, { mediaId: 'M1', maxItems: 10 });
+  assert.deepEqual(page.items, [{ id: 'c1', text: 'hi' }]);
+
+  const detail = await getComment(fakeReq(() => ({ id: 'C1', replies: { data: 'x' } })).req, {
+    commentId: 'C1',
+  });
+  assert.deepEqual(detail, { id: 'C1' });
+});
+
+test('listComments hands a null entry through for the tool layer to count, not a crashed page (CC-COM-16)', async () => {
+  // The body is cast, so `data` can hold `null` — at the top level or inside an
+  // inline reply edge. Destructuring it threw a TypeError out of the walk, which
+  // failed the whole listing; the entry is now passed through untouched, and
+  // `tools/comments` leaves it out and counts it.
+  const { req } = fakeReq(() => ({
+    data: [null, 'junk', { id: 'c1', replies: { data: [null, { id: 'r1' }] } }],
+    paging: {},
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200 });
+
+  // A non-object entry is handed through as-is too — spreading a string would
+  // turn it into an object of characters.
+  assert.deepEqual(res, {
+    items: [null, 'junk', { id: 'c1', replies: [null, { id: 'r1' }] }],
+    truncated: false,
+  });
+});
+
+test('listComments reports a single page ending on an unusable cursor as truncated (CC-DATA-11)', async () => {
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'c1' }],
+    paging: { cursors: { after: '' }, next: 'https://graph.facebook.com/next' },
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200 });
+
+  assert.deepEqual(res, {
+    items: [{ id: 'c1' }],
+    truncated: true,
+    note: 'the edge returned an unusable cursor (no way to continue) — the listing may be incomplete',
+  });
+});
+
+test('listComments and listTaggedMedia report an unreadable page instead of crashing (CC-DATA-71)', async () => {
+  // Both edges walk through the shared `fetchPagedEdge`, so a `data` that is not
+  // a list (or a body that is not an envelope) used to throw a raw TypeError out
+  // of both. It must come back as an empty, truncated page that says why — never
+  // as the plain `{ items: [] }` a post with no comments gets.
+  for (const body of [{ data: { id: 'c1' } }, { data: null }, { data: 'abc' }, null, 7]) {
+    const label = `body=${JSON.stringify(body)}`;
+    const comments = await listComments(fakeReq(() => body).req, { mediaId: 'M1', maxItems: 200 });
+    assert.deepEqual(comments.items, [], label);
+    assert.equal(comments.truncated, true, label);
+    assert.match(comments.note ?? '', /unreadable page/, label);
+
+    const tagged = await listTaggedMedia(fakeReq(() => body).req, {
+      igId: 'me',
+      maxItems: 200,
+      fetchAll: true,
+    });
+    assert.deepEqual(tagged.items, [], label);
+    assert.equal(tagged.truncated, true, label);
+    assert.match(tagged.note ?? '', /unreadable page/, label);
+  }
+});
+
+test('listComments reads the example fixtures by `paging.next`: cursors without `next` end the listing (CC-DATA-115)', async () => {
+  // `example-list-comments.json` is a last page: `cursors.after` and no `next`.
+  const last = loadFixture<unknown>('example-list-comments.json');
+  const done = await listComments(fakeReq(() => last).req, { mediaId: 'M1', maxItems: 200 });
+  assert.equal(done.items.length, 2);
+  assert.equal(done.truncated, false);
+  assert.equal('after' in done, false, 'the last page publishes no resume cursor');
+
+  // `example-list-media.json` carries `next`, so its `cursors.after` resumes.
+  const more = loadFixture<unknown>('example-list-media.json');
+  const page = await listComments(fakeReq(() => more).req, { mediaId: 'M1', maxItems: 200 });
+  assert.equal(page.truncated, false);
+  assert.equal(page.after, 'SYNTHETIC_OPAQUE_2');
 });

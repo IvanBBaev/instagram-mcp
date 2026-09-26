@@ -62,6 +62,23 @@ export default tseslint.config(
     },
   },
   {
+    files: ['src/mcp/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/core/http*', '**/core/auth*', '**/tools/**'],
+              message:
+                'mcp is Layer 2 glue — it must not reach into the network (core/http, core/auth) or into the tool catalogue it is handed.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/tools/**/*.ts'],
     rules: {
       'no-restricted-imports': [

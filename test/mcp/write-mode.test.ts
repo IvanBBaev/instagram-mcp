@@ -21,7 +21,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   buildConfirmPrompt,
@@ -214,9 +214,65 @@ test('an applied write appends a journal line; a preview does not', async () => 
     const lines = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean);
     assert.equal(lines.length, 1);
     const rec = JSON.parse(lines[0]!) as Record<string, unknown>;
-    assert.equal(rec.action, 'publish_media');
-    assert.equal(rec.targetId, 'pub-42');
-    assert.equal(rec.account, 'default');
+    // The WHOLE record, not three fields of it. The journal is an append-only
+    // audit file that outlives the process and is read by people, so every key
+    // it carries is a promise about what is on disk: a field-by-field check
+    // would let an extra key slip in unnoticed — and the one extra key that is
+    // in scope here is the profile's own credential (`ctx.profile.accessToken`),
+    // which would put a live token into a plain-text file next to the account
+    // name. The key set is the contract, the values are the fixed clock, the
+    // fixed profile and this intent, and nothing else may appear.
+    assert.deepEqual(rec, {
+      ts: '2023-11-14T22:13:20.000Z',
+      action: 'publish_media',
+      account: 'default',
+      authPath: 'ig-login',
+      summary: 'Publish container 42',
+      targetId: 'pub-42',
+      destructive: false,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the journal carries the outcome a perform reports, and only when it reports one', async () => {
+  // A target id cannot say what happened to it. The publish flow ends in three
+  // different ways — a post went live, a resumed container was already live and
+  // nothing was re-sent, or the media was still processing at the deadline — and
+  // all three journal the same `publish_media` action against an id. Without the
+  // outcome the trail answers "did this actually post?" with a shrug, and the one
+  // arm that published nothing reads exactly like the one that did. A write whose
+  // action already names its only outcome reports none, and then the key is
+  // absent rather than `null` (CC-PROC-73).
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-status-'));
+  const path = join(dir, 'writes.jsonl');
+  const ctx = ctxWith({ settings: { writeJournal: path } });
+  try {
+    await withWriteGate(intent, { apply: true }, ctx, async () => ({
+      result: json({ published: 'C-42' }),
+      targetId: 'C-42',
+      status: 'already_published',
+    }));
+    // The whole record again, for the reason the first journal test gives: the
+    // outcome must arrive as its own key beside the target, not folded into the
+    // summary and not displacing anything the record already promises.
+    const first = JSON.parse(readFileSync(path, 'utf8').trim()) as Record<string, unknown>;
+    assert.deepEqual(first, {
+      ts: '2023-11-14T22:13:20.000Z',
+      action: 'publish_media',
+      account: 'default',
+      authPath: 'ig-login',
+      summary: 'Publish container 42',
+      targetId: 'C-42',
+      status: 'already_published',
+      destructive: false,
+    });
+
+    await withWriteGate(intent, { apply: true }, ctx, performOk('pub-42'));
+    const lines = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean);
+    const second = JSON.parse(lines[1]!) as Record<string, unknown>;
+    assert.equal('status' in second, false, 'no outcome reported, no key on disk');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -348,8 +404,16 @@ test('a journal seam that throws a non-Error is reported, and the write still st
   assert.equal(res.structuredContent?.published, 'pub-9', 'the write itself is unaffected');
   assert.equal(res.isError, undefined);
   assert.equal(warns.length, 1);
-  assert.match(warns[0]!.msg, /NOT audited/);
-  assert.equal(warns[0]!.fields?.error, 'journal path resolver exploded');
+  // The whole record: this line is the only trace the operator ever gets of a
+  // dead audit trail, so its wording is part of the contract — "the APPLIED
+  // write was NOT audited" says both that the mutation went through and that
+  // the journal missed it. A fragment match on `NOT audited` accepts a rewrite
+  // that drops the first half, and a field-by-field check accepts a record
+  // that carries an extra key.
+  assert.deepEqual(warns[0], {
+    msg: 'write journal append failed — the applied write was NOT audited',
+    fields: { action: 'publish_media', error: 'journal path resolver exploded' },
+  });
 });
 
 test('a failed perform result is not journaled', async () => {
@@ -553,9 +617,18 @@ test('elicitation: a refusal of a detail-less intent omits `details` rather than
     Promise.reject(new Error('a declined write must never perform')),
   );
 
-  assert.equal(res.structuredContent?.mode, 'refused');
-  assert.equal('details' in (res.structuredContent ?? {}), false);
-  assert.equal(res.structuredContent?.summary, 'Publish the pending container');
+  // Whole, for the reason given on the preview payload below: the refusal body
+  // is where an added field does the most damage, because the write did NOT run
+  // and anything echoed here describes an action Instagram never saw.
+  assert.deepEqual(res.structuredContent, {
+    mode: 'refused',
+    action: 'publish_media',
+    summary: 'Publish the pending container',
+    reason: 'declined',
+    note:
+      'Refused at the human confirmation prompt (declined). Nothing was sent to Instagram. ' +
+      'Re-run and approve the prompt to perform it.',
+  });
 });
 
 test('elicitation: capability present + the human cancels -> refused with reason=cancelled', async () => {
@@ -582,6 +655,12 @@ test('elicitation: accept without an explicit confirm:true is a refusal (fail cl
     { action: 'accept', content: { confirm: false } } as ConfirmAnswer,
     { action: 'accept', content: { confirm: 'true' } } as ConfirmAnswer,
     { action: 'accept', content: { confirm: 1 } } as ConfirmAnswer,
+    // Present-but-falsy forms: a box that IS in the payload with a value that
+    // is not `true`. A presence test (`!== undefined`) or a nullish test
+    // (`!= null`) reads every one of these as consent.
+    { action: 'accept', content: { confirm: '' } } as ConfirmAnswer,
+    { action: 'accept', content: { confirm: 0 } } as ConfirmAnswer,
+    { action: 'accept', content: { confirm: null } } as ConfirmAnswer,
   ]) {
     const { confirmer } = fakeConfirmer({ answer });
     let ran = false;
@@ -621,11 +700,17 @@ test('elicitation: a transport error is NOT consent — the write is refused and
   assert.equal(res.structuredContent?.mode, 'refused');
   assert.equal(res.structuredContent?.reason, 'unavailable');
   assert.equal(warns.length, 1, 'the operator is told the confirmation could not be obtained');
-  assert.equal(warns[0]!.fields?.action, 'publish_media');
-  // The error's own message, verbatim — no `Error: ` prefix from stringifying
-  // the object. The operator greps this line to tell a timeout apart from a
-  // protocol error, and a wrapped prefix is what makes those greps miss.
-  assert.equal(warns[0]!.fields?.error, 'MCP error -32001: Request timed out');
+  // The whole record, message included. The error's own text goes in verbatim —
+  // no `Error: ` prefix from stringifying the object — because the operator
+  // greps this line to tell a timeout apart from a protocol error, and a
+  // wrapped prefix is what makes those greps miss. The message is pinned for
+  // the same reason: it is the search key the runbook names, and a paraphrase
+  // ("was not obtained") is exactly what a grep for the documented wording
+  // would no longer find.
+  assert.deepEqual(warns[0], {
+    msg: 'write refused — human confirmation could not be obtained',
+    fields: { action: 'publish_media', error: 'MCP error -32001: Request timed out' },
+  });
 });
 
 test('elicitation: a throwing capability probe fails closed without asking', async () => {
@@ -646,6 +731,16 @@ test('elicitation: a throwing capability probe fails closed without asking', asy
   assert.equal(calls.asks, 0);
   assert.equal(res.structuredContent?.reason, 'unavailable');
   assert.equal(warns.length, 1);
+  // The whole record. The two refusal warnings in this module share the
+  // `write refused —` prefix and the same fields, so only the full sentence
+  // tells the operator WHICH seam failed: this one says the capability probe
+  // itself broke (no prompt was ever shown), the other says a prompt was shown
+  // and went unanswered. The probe error is the seam's own message, redacted
+  // and unwrapped, like the other two sinks.
+  assert.deepEqual(warns[0], {
+    msg: 'write refused — the confirmation capability could not be determined',
+    fields: { action: 'publish_media', error: 'capability probe exploded' },
+  });
 });
 
 test('elicitation: a seam that throws a bare string is still refused and still reported', async () => {
@@ -713,6 +808,78 @@ test('elicitation: an error message that carries the token is redacted in the lo
   const logged = String(warns[0]!.fields?.error);
   assert.equal(logged.includes('EAAsecrettoken1234'), false, 'the token must not reach the log');
   assert.match(logged, /\[redacted\]/);
+});
+
+test('elicitation: a broken capability PROBE cannot leak the token into the log either', async () => {
+  // The probe is the client SDK's code, and SDK/transport errors are composed
+  // out of request URLs — Graph carries `access_token` in the query string. This
+  // catch is the same kind of sink as the `ask` catch above it and sits at the
+  // same distance from the operator's log file, so it must be inside the same
+  // redaction boundary: a sink that skips the redactor is a hole in a control
+  // the rest of the server treats as enforced (docs/security.md §2).
+  const secretProfile: ResolvedProfile = {
+    name: 'default',
+    authPath: 'ig-login',
+    accessToken: 'PROBE-PROFILE-TOKEN-0123456789',
+  };
+  const { log, warns } = recordingLog();
+  const probeConfirmer: WriteConfirmer = {
+    isSupported(): boolean {
+      throw new Error(
+        `probe failed: GET https://graph.example.test/me?access_token=${secretProfile.accessToken}`,
+      );
+    },
+    ask() {
+      throw new Error('the human must never be asked after a broken probe');
+    },
+  };
+
+  let ran = false;
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: probeConfirmer, log, profile: secretProfile }),
+    () => {
+      ran = true;
+      return Promise.resolve({ result: json({ published: 'x' }) });
+    },
+  );
+
+  // Redacting is string work on the way to the log — it must not touch the
+  // decision, which was already fixed as a refusal before the line was written.
+  assert.equal(ran, false, 'an undeterminable capability still refuses');
+  assert.equal(res.structuredContent?.reason, 'unavailable');
+  const logged = String(warns[0]?.fields?.error);
+  assert.equal(logged.includes(secretProfile.accessToken), false, 'the token stays out of the log');
+  assert.match(logged, /\[redacted\]/);
+  // The operator still gets the diagnosis they grep for; only the secret is gone.
+  assert.match(logged, /^probe failed: GET https:\/\/graph\.example\.test\/me\?access_token=/);
+});
+
+test('elicitation: a token belonging to NO profile in hand is masked by shape', async () => {
+  // The profile-scoped pass only knows the credentials of the account this call
+  // selected. A shared HTTP layer relaying a *second* profile's token, or one
+  // minted between start-up and this call, would sail straight through it — so
+  // the error text also goes through a real `core/redact.ts` redactor, which
+  // masks every registered secret plus anything token-shaped. `profile` here
+  // holds none of these values.
+  const foreign = `EAA${'z'.repeat(40)}`;
+  const { confirmer } = fakeConfirmer({
+    rejectWith: new Error(`elicitation POST failed (access_token=${foreign})`),
+  });
+  const { log, warns } = recordingLog();
+
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: confirmer, log }),
+    () => Promise.reject(new Error('perform must never run after a failed confirmation')),
+  );
+
+  assert.equal(res.structuredContent?.reason, 'unavailable');
+  const logged = String(warns[0]?.fields?.error);
+  assert.equal(logged.includes(foreign), false, 'a foreign token is masked by shape');
+  assert.ok(logged.includes(REDACTED));
 });
 
 test('backward compatibility: a client without the capability behaves exactly as before', async () => {
@@ -1097,14 +1264,46 @@ test('prompt: an absurdly long target id is cut to a scannable length', () => {
   // Every character here is id-safe, so the charset filter cannot shorten it —
   // only the length cap can. An uncapped id would push the framing lines the
   // human actually reads off the visible dialog.
-  const id = 'A'.repeat(500);
+  //
+  // `z` and not `A`: the cap is 64 characters, which is exactly the length of an
+  // `appsecret_proof`, so a capped id made of hex characters would come out of
+  // the redactor masked and this test would be measuring the mask instead of the
+  // cut. `z` is id-safe and not hex. The masking itself is pinned separately, in
+  // 'prompt: a target id shaped like an appsecret_proof is masked, not rendered'.
+  const id = 'z'.repeat(500);
   const prompt = buildConfirmPrompt(
     { action: 'hide_comment', summary: 'Hide it', details: { commentId: id } },
     ctxWith(),
   );
   const line = prompt.message.split('\n').find((l) => l.startsWith('Target id:'));
   assert.ok(line !== undefined);
-  assert.equal(line.replace(/^Target id:\s+/, ''), 'A'.repeat(64));
+  assert.equal(line.replace(/^Target id:\s+/, ''), 'z'.repeat(64));
+});
+
+test('prompt: a target id shaped like an appsecret_proof is masked, not rendered', () => {
+  // The accepted cost of running the shape backstop over the *whole* message,
+  // framing included. It is the right side to err on: a real Instagram object id
+  // is 17-18 digits and can never match `EAA…`, `IG…{20,}` or 64 hex characters,
+  // so the only "ids" this masks are ones that look like a credential — which is
+  // exactly when the human must not be shown the value. The framing line itself
+  // survives, so the operator still sees *that* the target is unreadable and can
+  // decline; the failure direction is a refused write, never a silent leak.
+  const proofShaped = 'a'.repeat(64);
+  const prompt = buildConfirmPrompt(
+    { action: 'hide_comment', summary: 'Hide it', details: { commentId: proofShaped } },
+    ctxWith(),
+  );
+  const line = prompt.message.split('\n').find((l) => l.startsWith('Target id:'));
+  assert.ok(line !== undefined);
+  assert.equal(line.replace(/^Target id:\s+/, ''), REDACTED);
+
+  // An ordinary Instagram id is untouched — the over-redaction is confined to
+  // credential-shaped values, not to real targets.
+  const real = buildConfirmPrompt(
+    { action: 'hide_comment', summary: 'Hide it', details: { commentId: '17912345678901234' } },
+    ctxWith(),
+  );
+  assert.match(real.message, /Target id:\s+17912345678901234\b/);
 });
 
 test('prompt: a secret exactly at the redaction floor is still masked', () => {
@@ -1146,6 +1345,59 @@ test('prompt: EVERY occurrence of a secret is masked, not just the first', () =>
   assert.equal(prompt.message.split('[redacted]').length - 1, 3, 'all three are masked');
 });
 
+test("prompt: a SECOND profile's registered secret never reaches the human", () => {
+  // The profile-scoped pass only knows the credentials of the account THIS call
+  // selected. A server configured with several profiles — or a shared HTTP layer
+  // that relayed another account's token into an error string a tool then put in
+  // its summary — holds secrets the active profile has never heard of.
+  //
+  // The elicitation prompt is a second, independent handler->client channel: it
+  // travels through `elicitInput`, not through the tool result, so the registry's
+  // per-call `redactResult` wrapper cannot cover it by construction. This module
+  // has to close it, with the same two-pass discipline `logSafeError` already
+  // uses two functions away.
+  const otherProfilesToken = 'SECOND-PROFILE-TOKEN-NOT-A-REAL-CREDENTIAL-0123456789';
+  registerSecret(otherProfilesToken);
+
+  const prompt = buildConfirmPrompt(
+    {
+      action: 'publish_media',
+      summary: `Publish container 42 (upstream said: access_token=${otherProfilesToken})`,
+      details: { id: '42' },
+    },
+    // The ACTIVE profile's token is `tok` — it knows nothing about the above.
+    ctxWith(),
+  );
+
+  assert.equal(
+    prompt.message.includes(otherProfilesToken),
+    false,
+    "another profile's registered secret must not be rendered to the operator",
+  );
+  assert.ok(prompt.message.includes(REDACTED), 'and the mask is visible in its place');
+});
+
+test('prompt: a token-shaped string belonging to NO configured profile is masked', () => {
+  // The mint->register window, and every credential this process never owned: a
+  // token pasted into a caption by the operator, or one echoed back by Graph in
+  // an error a tool relayed into its summary. Neither the active profile nor the
+  // global registry has the value, so only the token-SHAPE backstop in
+  // `core/redact.ts` can catch it — which is precisely why the prompt has to run
+  // through a real redactor rather than a module-private substring pass.
+  const foreign = `EAA${'q'.repeat(40)}`;
+  const prompt = buildConfirmPrompt(
+    {
+      action: 'post_image',
+      summary: 'Publish a feed image',
+      details: { imageUrl: `https://cdn.example.test/x.jpg?access_token=${foreign}` },
+    },
+    ctxWith(),
+  );
+
+  assert.equal(prompt.message.includes(foreign), false, 'a foreign token is masked by shape');
+  assert.ok(prompt.message.includes(REDACTED));
+});
+
 test('prompt: the rendered details blob is capped and stripped like any untrusted text', () => {
   // `JSON.stringify` escapes control characters below U+0020 but passes format
   // characters such as U+202E (RIGHT-TO-LEFT OVERRIDE) through untouched, so the
@@ -1162,6 +1414,50 @@ test('prompt: the rendered details blob is capped and stripped like any untruste
   assert.equal(prompt.message.includes('D'.repeat(801)), false, 'the blob is capped');
   assert.ok(prompt.message.includes('…'), 'and the cut is visible');
   assert.match(prompt.message, /Action:\s+post_image/, 'the framing survives the flood');
+});
+
+test('prompt: a secret straddling the length cap is masked, not cut into a readable prefix', () => {
+  // Both redaction passes match WHOLE values. Capping first and redacting second
+  // cut the secret at the 800th character, and the surviving prefix matched
+  // neither the exact-value pass nor the token-shape backstop — so 20 characters
+  // of the app secret reached the human verbatim.
+  const appSecret = 'fixture-app-secret-not-real-0001';
+  const secretProfile: ResolvedProfile = {
+    name: 'default',
+    authPath: 'fb-login',
+    accessToken: 'fixture-access-value',
+    appId: 'app',
+    appSecret,
+  };
+  const prompt = buildConfirmPrompt(
+    { action: 'post_image', summary: `${'x'.repeat(780)}${appSecret}` },
+    ctxWith({ profile: secretProfile }),
+  );
+  assert.equal(prompt.message.includes(appSecret.slice(0, 12)), false, 'no prefix survives');
+  assert.ok(prompt.message.includes('[redacted]'), 'the mask is shown in its place');
+
+  // The same holds for the target id, which is cut at 64 characters.
+  const longToken = `fixture-long-access-value-${'z'.repeat(60)}`;
+  const target = buildConfirmPrompt(
+    { action: 'hide_comment', summary: 'Hide it', details: { commentId: longToken } },
+    ctxWith({ profile: { name: 'default', authPath: 'ig-login', accessToken: longToken } }),
+  );
+  assert.equal(target.message.includes(longToken.slice(0, 20)), false, 'no id prefix survives');
+  assert.match(target.message, /^Target id:\s+\[redacted\]$/m);
+});
+
+test('prompt: a length cap never splits a surrogate pair into a lone surrogate', () => {
+  // The caps count UTF-16 code units. An emoji straddling one left its high
+  // surrogate at the cut — a `\p{C}` character, the very class the sanitizer
+  // promises to strip, and malformed Unicode that a strict client may refuse to
+  // decode, turning the confirmation into a transport error.
+  const prompt = buildConfirmPrompt(
+    { action: `${'x'.repeat(199)}\u{1F600}`, summary: `${'y'.repeat(799)}\u{1F600}tail` },
+    ctxWith(),
+  );
+  assert.equal(/\p{Cs}/u.test(prompt.message), false, 'no lone surrogate reaches the dialog');
+  assert.ok(prompt.message.includes(`${'x'.repeat(199)}…`), 'the action cut is still marked');
+  assert.ok(prompt.message.includes(`${'y'.repeat(799)}…`), 'the summary cut is still marked');
 });
 
 test('the confirmation budget is a human-scale timeout, not an open-ended wait', () => {
@@ -1261,6 +1557,49 @@ test('the journal masks token-shaped text even for a secret that was never regis
     const raw = readFileSync(path, 'utf8');
     assert.equal(raw.includes(unregistered), false, 'token-shaped text is masked');
     assert.ok(raw.includes(REDACTED));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the journal-FAILURE warning is redacted too, not just the journal line', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('errno strings for a file-as-directory are POSIX-specific');
+    return;
+  }
+  // The record that lands on disk is redacted (above), but the warning emitted
+  // when it does NOT land was not: `node:fs` composes its message out of the
+  // configured journal path, which is operator-supplied data like any other.
+  // The property under test is the boundary, not the plausibility of a
+  // credential in a path — every string this module hands to a sink is masked,
+  // whichever sink it is. Note the profile's token is deliberately NOT
+  // registered globally: only the profile-scoped pass can catch it.
+  const secret = 'JOURNAL-PATH-SECRET-0123456789';
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-warn-redact-'));
+  const blocker = join(dir, `not-a-dir-${secret}`);
+  writeFileSync(blocker, 'x');
+  const { log, warns } = recordingLog();
+  try {
+    const res = await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({
+        log,
+        settings: { writeJournal: join(blocker, 'writes.jsonl') },
+        profile: { name: 'default', authPath: 'ig-login', accessToken: secret },
+      }),
+      performOk('still-ok'),
+    );
+
+    // Best-effort stays best-effort: the write the operator authorized still
+    // returns its own result, redaction or not.
+    assert.equal(res.structuredContent?.published, 'still-ok');
+    assert.equal(warns.length, 1);
+    const logged = String(warns[0]?.fields?.error);
+    assert.equal(logged.includes(secret), false, 'the credential must not reach the log');
+    assert.match(logged, /\[redacted\]/);
+    // ...and the errno the operator needs to fix the mount is still there.
+    assert.match(logged, /ENOTDIR/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1392,6 +1731,16 @@ test('prompt: a credential below the redaction floor does not shred the dialog',
   assert.equal(prompt.message.includes('[redacted]'), false, 'nothing was masked');
 });
 
+/** Repo root: the nearest ancestor of the cwd that holds a `package.json`. */
+function repoRoot(): string {
+  let dir = process.cwd();
+  for (let parent = dirname(dir); parent !== dir; parent = dirname(dir)) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+    dir = parent;
+  }
+  return dir;
+}
+
 test('prompt: every documented id key names the target, including numeric ids', () => {
   // Each key is the id a different write tool puts in `details`. If one key is
   // not consulted, that tool's prompt says "(none — this call creates new
@@ -1414,6 +1763,30 @@ test('prompt: every documented id key names the target, including numeric ids', 
     const prompt = buildConfirmPrompt({ action: 'act', summary: 's', details }, ctxWith());
     assert.ok(prompt.message.includes(`Target id:   ${expected}\n`), `${what} names the target`);
   }
+
+  // "Every documented id key" has to mean the source's list, not the list typed
+  // above. Until 2026-09-23 nothing tied the two together and the population under
+  // test was "the nine strings I typed" (CC-PROC-127). Two ordinary edits kept the
+  // whole suite green: a key appended to `TARGET_ID_KEYS` for a new write tool —
+  // "every" quietly stops being true and that tool's prompt says "(none)" for a
+  // call that edits an existing object — and alphabetising the array, which
+  // destroys the most-specific-first order it encodes, so an intent carrying both
+  // `targetId` and `mediaId` would name the container instead of the object the
+  // human is consenting to. The comparison below is order-sensitive for that
+  // second reason.
+  const source = readFileSync(join(repoRoot(), 'src', 'mcp', 'write-mode.ts'), 'utf8');
+  const declared = /const TARGET_ID_KEYS = \[([\s\S]*?)\] as const;/.exec(source)?.[1];
+  assert.ok(
+    declared !== undefined,
+    'TARGET_ID_KEYS is no longer a literal array this test can enumerate; re-point this scrape ' +
+      'at whatever replaced it, because without it the case list above is unanchored',
+  );
+  assert.deepEqual(
+    [...(declared ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1]),
+    cases.filter(([what]) => what !== 'a numeric id').map(([, details]) => Object.keys(details)[0]),
+    'every key `targetIdOf` consults has a case here, in the order it consults them \u2014 that ' +
+      'order is the most-specific-first rule the prompt depends on, not cosmetics',
+  );
 });
 
 test('prompt: the target id is a bare token that cannot pad or forge the framing line', () => {
@@ -1513,9 +1886,42 @@ test('elicitation: an approval is logged at info, naming the action approved', a
 
   await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
 
-  const approved = infos.filter((entry) => entry.msg === 'write confirmed by the operator');
-  assert.equal(approved.length, 1, 'the approval is visible at the default level');
-  assert.equal(approved[0]?.fields?.action, 'publish_media', 'and names the action, not its prose');
+  // The whole info STREAM, not the record matching this message. The record's
+  // own shape matters — a field added here (the summary, the details, anything
+  // from the intent) would be broadcast on every approval — but filtering by
+  // `msg` first makes a record added under a DIFFERENT message invisible, and
+  // that is the same leak by another door: an extra
+  // `log.info('write intent received', { summary })` on this path survived all
+  // 92 tests in this file while both of these assertions stayed green.
+  assert.deepEqual(
+    infos,
+    [{ msg: 'write confirmed by the operator', fields: { action: 'publish_media' } }],
+    'the approval is visible at the default level and names the action, not its prose',
+  );
+});
+
+test('the write gate stays silent at debug — the level an intent dump would hide in', async () => {
+  // The info stream is pinned whole just above, and that pin is what kills a
+  // record added under a different message. Nothing pinned the debug stream:
+  // `recordingLog()` has recorded `debugs` since it was written and no assertion
+  // in this file — or any other — ever read it. Measured 2026-09-22: an extra
+  // `ctx.log.debug('write gate entered', { details: intent.details })` on the
+  // shared apply path, broadcasting the caller's raw write arguments (the
+  // caption, the media URLs, the ids) on every applied write, survived all 451
+  // tests of the six files that observe the gate (test/mcp/write-mode,
+  // test/mcp/registry, test/tools/log-fields, test/tools/publishing,
+  // test/tools/comments, test/tools/media) with exit 0 and not one `not ok`
+  // line — while the SAME line at info was killed by two tests immediately.
+  // Below the default level is a filter, not a boundary: `IG_LOG_LEVEL=debug` is
+  // a documented operator setting, and the logs are the artifact pasted into bug
+  // reports. The gate has nothing to say at debug, and the empty stream is the
+  // contract that keeps it that way.
+  const { confirmer } = fakeConfirmer({ answer: { action: 'accept', content: { confirm: true } } });
+  const { log, debugs } = recordingLog();
+
+  await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
+
+  assert.deepEqual(debugs, [], 'the write gate logs nothing at debug');
 });
 
 test('elicitation: a refusal is logged with the answer the human actually gave', async () => {
@@ -1528,11 +1934,16 @@ test('elicitation: a refusal is logged with the answer the human actually gave',
 
   await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer, log }), performOk());
 
-  const refused = infos.filter((entry) => entry.msg === 'write refused at the confirmation prompt');
-  assert.equal(refused.length, 1);
-  assert.equal(refused[0]?.fields?.action, 'publish_media');
-  assert.equal(refused[0]?.fields?.answer, 'cancel', 'the raw client answer');
-  assert.equal(refused[0]?.fields?.reason, 'cancelled', "and the gate's verdict, separately");
+  // Pinned whole: `action`, the raw client `answer` and the gate's `reason` —
+  // and no other field, on a stream that carries no other record. Unfiltered for
+  // the reason given above: the prose this line refuses to carry must not arrive
+  // on a neighbouring one instead.
+  assert.deepEqual(infos, [
+    {
+      msg: 'write refused at the confirmation prompt',
+      fields: { action: 'publish_media', answer: 'cancel', reason: 'cancelled' },
+    },
+  ]);
 });
 
 test('elicitation: a broken capability probe is warned about with the action and raw message', async () => {
@@ -1600,9 +2011,27 @@ test('preview: the payload restates the caller-supplied summary and details verb
   // asking for apply:true. Substituting the action verb for the prose summary,
   // or dropping the details, means the next turn's "yes, do it" is consent to a
   // description the user never saw.
+  //
+  // Pinned WHOLE, both shapes. This body is the most broadcast object in the
+  // server — every write tool in dry-run mode returns it — and until this line
+  // it was only ever read one field at a time (`?.mode`, `?.summary`, `?.note`)
+  // across all 329 tests of the gate and its callers. A
+  // `debugIntent: JSON.stringify(intent)` planted in BOTH builders survived
+  // every one of them, and that is not a cosmetic field: the intent carries
+  // `details`, i.e. the caller's raw arguments, so the refusal branch would ship
+  // the payload of a write that deliberately did not happen. The key set is the
+  // only assertion that can see it. It also subsumes the `'details' in ...`
+  // negative this test used to make, because `deepEqual` compares own keys.
   const res = await withWriteGate(intent, {}, ctxWith(), performOk());
-  assert.equal(res.structuredContent?.summary, 'Publish container 42');
-  assert.deepEqual(res.structuredContent?.details, { id: '42' });
+  assert.deepEqual(res.structuredContent, {
+    mode: 'preview',
+    action: 'publish_media',
+    summary: 'Publish container 42',
+    details: { id: '42' },
+    note:
+      'Preview only. Re-run with apply:true (or set IG_WRITE_MODE=apply) to perform this ' +
+      'publish_media.',
+  });
 
   const bare = await withWriteGate(
     { action: 'publish_media', summary: 'Publish the pending container' },
@@ -1610,9 +2039,16 @@ test('preview: the payload restates the caller-supplied summary and details verb
     ctxWith(),
     performOk(),
   );
-  assert.equal(
-    'details' in (bare.structuredContent ?? {}),
-    false,
+  assert.deepEqual(
+    bare.structuredContent,
+    {
+      mode: 'preview',
+      action: 'publish_media',
+      summary: 'Publish the pending container',
+      note:
+        'Preview only. Re-run with apply:true (or set IG_WRITE_MODE=apply) to perform this ' +
+        'publish_media.',
+    },
     'a detail-free intent omits the key instead of declaring undefined details',
   );
 });
@@ -1658,4 +2094,343 @@ test('apply is a boolean gate: the string "false" is a refusal, not consent', as
 
   assert.equal(ran, false, 'a non-boolean apply must never perform the write');
   assert.equal(res.structuredContent?.mode, 'preview');
+});
+
+test("prompt: the active profile's own pass masks its token before the global backstop can", () => {
+  // The two passes leave DIFFERENT markers — the profile pass writes
+  // `[redacted]`, `core/redact.ts` writes `[REDACTED]` — and the order is a
+  // documented property of this prompt: the human is told the account they
+  // selected had a credential masked, not that some anonymous token-shaped
+  // string was scrubbed. Running the global pass first silently takes that
+  // attribution away for every profile whose token also matches the shape
+  // backstop, which is every real Instagram or Facebook token.
+  const shapedToken = `EAA${'x'.repeat(40)}`;
+  const secretProfile: ResolvedProfile = {
+    name: 'default',
+    authPath: 'fb-login',
+    accessToken: shapedToken,
+  };
+  const prompt = buildConfirmPrompt(
+    {
+      action: 'publish_media',
+      summary: `Publish container 42 (upstream said: access_token=${shapedToken})`,
+      details: { id: '42' },
+    },
+    ctxWith({ profile: secretProfile }),
+  );
+
+  assert.equal(prompt.message.includes(shapedToken), false, 'the token must not reach the human');
+  assert.ok(prompt.message.includes('[redacted]'), "the profile's own marker is what is shown");
+  assert.equal(
+    prompt.message.includes(REDACTED),
+    false,
+    'the global backstop ran first and took the attribution away from the active profile',
+  );
+});
+
+test("elicitation: a failed confirmation is masked by the profile's pass first, too", async () => {
+  // Same ordering property, on the other half of the pair: `logSafeError` and
+  // the prompt builder run the identical two passes, and an operator correlating
+  // a masked prompt with the masked log line behind it has to see the same
+  // marker in both. The existing coverage uses a token too short to match the
+  // shape backstop, so nothing pinned which pass did the masking.
+  const shapedToken = `EAA${'y'.repeat(40)}`;
+  const secretProfile: ResolvedProfile = {
+    name: 'default',
+    authPath: 'ig-login',
+    accessToken: shapedToken,
+  };
+  const { confirmer } = fakeConfirmer({
+    rejectWith: new Error(`POST /me/media failed: access_token=${shapedToken}`),
+  });
+  const { log, warns } = recordingLog();
+
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: confirmer, log, profile: secretProfile }),
+    performOk(),
+  );
+
+  assert.equal(res.structuredContent?.reason, 'unavailable');
+  const logged = String(warns[0]?.fields?.error);
+  assert.equal(logged.includes(shapedToken), false, 'the token stays out of the log');
+  assert.ok(logged.includes('[redacted]'), "the profile's own marker is what is logged");
+  assert.equal(
+    logged.includes(REDACTED),
+    false,
+    'the global backstop ran first and took the attribution away from the active profile',
+  );
+});
+
+test('elicitation: the human is asked about THIS write, in THIS account', async () => {
+  // Consent is only consent to what the person was shown. Nothing else pins the
+  // prompt that actually crosses the confirmer seam — every other test asserts
+  // on `buildConfirmPrompt` directly — so a gate that asked about a different
+  // account, a different action, or handed over a prompt it built from anything
+  // but this call's context would pass the whole suite while collecting a
+  // signature for a write the operator never saw.
+  const askedProfile: ResolvedProfile = {
+    name: 'brand-account',
+    authPath: 'fb-login',
+    accessToken: 'tok',
+  };
+  const { confirmer, prompts, calls } = fakeConfirmer();
+  const ctx = ctxWith({ confirm: confirmer, profile: askedProfile });
+
+  const res = await withWriteGate(intent, { apply: true }, ctx, performOk('pub-9'));
+
+  assert.equal(res.structuredContent?.published, 'pub-9');
+  assert.equal(calls.asks, 1, 'exactly one human was asked');
+  assert.deepEqual(
+    prompts[0],
+    buildConfirmPrompt(intent, ctx),
+    'the prompt the human answered is not the one this intent and context describe',
+  );
+  // Stated in its own right, so the assertion above cannot be satisfied by two
+  // equally wrong prompts.
+  assert.match(String(prompts[0]?.message), /Action:\s+publish_media/);
+  assert.match(String(prompts[0]?.message), /Account:\s+brand-account \(auth path: fb-login\)/);
+});
+
+test('refusal: the payload still describes the write that did NOT happen', async () => {
+  // A refusal is an answer to the caller, not just a status: it has to carry the
+  // same action/summary/details the preview would have, or the agent that got
+  // refused cannot tell the operator what it was about to do — and cannot
+  // re-propose it without rebuilding the request from scratch.
+  const { confirmer } = fakeConfirmer({ answer: { action: 'decline' } });
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ confirm: confirmer }),
+    performOk(),
+  );
+
+  assert.equal(res.structuredContent?.mode, 'refused');
+  assert.equal(res.structuredContent?.action, 'publish_media');
+  assert.equal(res.structuredContent?.summary, 'Publish container 42');
+  assert.deepEqual(res.structuredContent?.details, { id: '42' });
+});
+
+test('prompt: the destructive dialog is pinned byte-for-byte, not by fragments', () => {
+  // Catches: every field of the consent dialog rewritten while the suite stayed
+  // green. The existing prompt tests match fragments (`/Destructive: YES/`,
+  // `/Action:\s+delete_comment/`), which leaves every byte between them free —
+  // the explanatory tail of the destructive verdict can be replaced with "fully
+  // reversible; the server can restore the data", the header lines can be
+  // reordered, and "Caller-supplied description" can become "Server-verified
+  // description", all without failing a single assertion. The text IS the thing
+  // the operator consents to: a dialog that says one thing while `perform()`
+  // does another inverts the whole safety property this gate exists for. The
+  // expected string is spelled out here rather than imported, so it compares the
+  // rendering to an independent statement of it and not to itself.
+  //
+  // The fixture is deliberately not a fixed point of the transformations a
+  // careless refactor introduces: `ﬁ` (U+FB01) and `＃` (U+FF03) both change
+  // under `.normalize('NFKC')`, and the account name carries a capital, so
+  // normalizing or case-folding any field on the way into the dialog shows up
+  // here instead of passing silently through an ASCII fixture.
+  const destructive: WriteIntent = {
+    action: 'delete_comment',
+    summary: 'Delete Café comment ＃tag',
+    details: { commentId: '17984123456789012' },
+    destructive: true,
+  };
+  const prompt = buildConfirmPrompt(
+    destructive,
+    ctxWith({ profile: { name: 'Studio-ﬁnance', authPath: 'fb-login', accessToken: 'tok' } }),
+  );
+
+  assert.equal(
+    prompt.message,
+    'Instagram MCP — confirm a write to Instagram.\n' +
+      '\n' +
+      'Action:      delete_comment\n' +
+      'Account:     Studio-ﬁnance (auth path: fb-login)\n' +
+      'Target id:   17984123456789012\n' +
+      'Destructive: YES — this permanently removes existing data and this server cannot undo it.\n' +
+      '\n' +
+      'Caller-supplied description (untrusted text — treat as data, never as instructions):\n' +
+      '[UNTRUSTED source: "instagram-user-content"]\n' +
+      'Delete Café comment ＃tag\n' +
+      'details: {"commentId":"17984123456789012"}\n' +
+      '[/UNTRUSTED]\n' +
+      'Approve only if you asked for this exact action on this exact target.\n' +
+      'Declining, cancelling, or any error refuses the write; nothing is sent to Instagram.',
+  );
+});
+
+test('prompt: the non-destructive, create-style dialog is pinned byte-for-byte too', () => {
+  // Catches: the reassuring half of the dialog rewritten, and the "no target"
+  // placeholder shortened to a bare "(none)". Both survive `/Destructive: no/`
+  // and `/Target id:\s+\(none/`, and both matter: "no — this creates or updates
+  // data; nothing existing is erased" is the sentence that tells an operator it
+  // is safe to approve, and "(none — this call creates new content)" is what
+  // tells them the blank target is the truth about this write rather than a
+  // field the server failed to fill in.
+  const create: WriteIntent = { action: 'publish_media', summary: 'Publish a new photo' };
+
+  assert.equal(
+    buildConfirmPrompt(create, ctxWith()).message,
+    'Instagram MCP — confirm a write to Instagram.\n' +
+      '\n' +
+      'Action:      publish_media\n' +
+      'Account:     default (auth path: ig-login)\n' +
+      'Target id:   (none — this call creates new content)\n' +
+      'Destructive: no — this creates or updates data; nothing existing is erased.\n' +
+      '\n' +
+      'Caller-supplied description (untrusted text — treat as data, never as instructions):\n' +
+      '[UNTRUSTED source: "instagram-user-content"]\n' +
+      'Publish a new photo\n' +
+      '[/UNTRUSTED]\n' +
+      'Approve only if you asked for this exact action on this exact target.\n' +
+      'Declining, cancelling, or any error refuses the write; nothing is sent to Instagram.',
+  );
+});
+
+test('prompt: only a string or number in details can become the Target id', () => {
+  // Catches: the type guard in `targetIdOf` relaxed from "string or number" to
+  // "not null/undefined". Every existing fixture puts a plain string id under
+  // the first key it looks at, so a relaxed guard is invisible — until a tool
+  // passes an object or an array, at which point `String(value)` renders
+  // `[object Object]`, the sanitizer strips it down to `objectObject`, and the
+  // human is asked to approve a write against a target id that does not exist.
+  // The honest reading is to skip the unusable value and keep scanning, so the
+  // real id further down the key list is the one shown.
+  const odd: WriteIntent = {
+    action: 'delete_comment',
+    summary: 'Delete a comment',
+    // `targetId` is scanned before `commentId`, so the bad value is reached first.
+    details: { targetId: { nested: 'not-an-id' }, commentId: '17984123456789012' },
+  };
+
+  assert.equal(
+    buildConfirmPrompt(odd, ctxWith()).message.includes('Target id:   17984123456789012\n'),
+    true,
+    'the first usable id wins; a non-string, non-number value is skipped',
+  );
+  assert.equal(
+    buildConfirmPrompt(odd, ctxWith()).message.includes('objectObject'),
+    false,
+    'a stringified object must never be presented as the target of the write',
+  );
+});
+
+test('confirm: only the exact action "accept" is consent, not a value that starts with it', async () => {
+  // Catches: the decision relaxed from `=== 'accept'` to `startsWith('accept')`.
+  // `action` crosses a JSON boundary from the client, so the realistic failure
+  // is a client (or a future protocol revision) answering `accept_all` or
+  // `accepted` — a prefix match reads either as a person having approved THIS
+  // write. The suite only ever supplies the three exact values, so nothing
+  // separates the two spellings today.
+  const { confirmer } = fakeConfirmer({
+    answer: { action: 'accept_all', content: { confirm: true } } as unknown as ConfirmAnswer,
+  });
+  let ran = false;
+  const res = await withWriteGate(intent, { apply: true }, ctxWith({ confirm: confirmer }), () => {
+    ran = true;
+    return Promise.resolve({ result: json({ published: 'x' }) });
+  });
+
+  assert.equal(ran, false, 'an unrecognised answer must never perform the write');
+  assert.equal(res.structuredContent?.mode, 'refused');
+});
+
+test('confirm: only the exact action "cancel" is a cancellation; a near miss is a decline', async () => {
+  // The mirror of the case above, on the OTHER branch of the decision. `reason`
+  // is what the model and the operator read to tell "the person dismissed the
+  // prompt" (`cancelled`) from "the person answered and it was not consent"
+  // (`declined`). With `=== 'cancel'` relaxed to a prefix or substring match,
+  // an unrecognised `cancel_all` / `cancelled` answer from a client would be
+  // reported as a deliberate dismissal — and the existing near-miss test only
+  // pins `mode`, so the two reasons were never told apart for such an answer.
+  // Anything that is not the exact `cancel` token is a decline: the write does
+  // not run either way, and the reason must say what actually happened.
+  for (const action of ['cancel_all', 'cancelled', ' cancel', 'Cancel']) {
+    const { confirmer } = fakeConfirmer({
+      answer: { action, content: { confirm: true } } as unknown as ConfirmAnswer,
+    });
+    let ran = false;
+    const res = await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({ confirm: confirmer }),
+      () => {
+        ran = true;
+        return Promise.resolve({ result: json({ published: 'x' }) });
+      },
+    );
+
+    assert.equal(ran, false, `${JSON.stringify(action)} must never perform the write`);
+    assert.equal(res.structuredContent?.mode, 'refused');
+    assert.equal(
+      res.structuredContent?.reason,
+      'declined',
+      `${JSON.stringify(action)} is not the exact cancel token, so it is a decline`,
+    );
+  }
+});
+
+test('apply gate: only the exact write mode "apply" opens the gate', async () => {
+  // Catches: `settings.writeMode === 'apply'` relaxed to `startsWith('apply')`
+  // or to a trimming comparison. `IG_WRITE_MODE` is operator input; the enum
+  // parser in core/settings.ts clamps it today, but this gate is the last line
+  // that decides whether a write leaves the process, and it must key on the
+  // exact token rather than on anything a near-miss spelling also satisfies.
+  for (const writeMode of ['apply_all', ' apply ', 'applied', 'APPLY']) {
+    let ran = false;
+    const res = await withWriteGate(
+      intent,
+      {},
+      ctxWith({ settings: { writeMode: writeMode as Settings['writeMode'] } }),
+      () => {
+        ran = true;
+        return Promise.resolve({ result: json({ published: 'x' }) });
+      },
+    );
+    assert.equal(ran, false, `write mode '${writeMode}' must not be read as apply`);
+    assert.equal(res.structuredContent?.mode, 'preview');
+  }
+});
+
+test('apply gate: under IG_WRITE_MODE=apply only the literal false forces preview back', async () => {
+  // Catches: an extra `args.apply !== 'false'` (or any other truthiness) clause
+  // grafted onto the second half of the gate. The documented contract is narrow
+  // on purpose — "an explicit `apply: false` always forces preview" — and the
+  // sibling case is pinned above ("the string \"false\" is a refusal"). Without
+  // this test the apply-mode half of that pair is unstated, so the gate could be
+  // widened or narrowed on non-boolean input in either direction and stay green.
+  const args = { apply: 'false' } as unknown as { apply?: boolean };
+  let ran = false;
+  const res = await withWriteGate(
+    intent,
+    args,
+    ctxWith({ settings: { writeMode: 'apply' } }),
+    () => {
+      ran = true;
+      return Promise.resolve({ result: json({ published: 'x' }) });
+    },
+  );
+
+  assert.equal(ran, true, 'only the boolean false narrows a global apply default');
+  assert.equal(res.structuredContent?.published, 'x');
+});
+
+test('journal: a result that says isError:false explicitly is still audited', async () => {
+  // Catches: `result.isError !== true` relaxed to `result.isError === undefined`.
+  // `isError` is optional in a ToolResult, so a handler stating success
+  // explicitly is as legal as one omitting the flag — and every fixture in this
+  // file omits it, which makes the two readings indistinguishable. Under the
+  // relaxed reading a write that really was applied to Instagram leaves no line
+  // in the audit journal, which is the one record that the write happened.
+  const path = join(journalDir, 'is-error-false.jsonl');
+  const ctx = ctxWith({ settings: { writeJournal: path } });
+  await withWriteGate(intent, { apply: true }, ctx, async () => ({
+    result: { ...json({ published: 'ok' }), isError: false },
+    targetId: 'pub-77',
+  }));
+
+  const lines = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1, 'the applied write must be journalled');
+  assert.equal((JSON.parse(lines[0]!) as Record<string, unknown>).targetId, 'pub-77');
 });

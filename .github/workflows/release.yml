@@ -6,9 +6,10 @@ name: Release
 # package.json only works through this workflow.
 #
 # Trigger: cut a GitHub Release (its tag should match package.json version, e.g.
-# v0.0.1). `workflow_dispatch` allows a manual re-run. `npm publish` runs
-# `prepublishOnly` (= `npm run check`: lint + format + build + test) before it
-# packs, so the release gate re-runs in the clean CI checkout.
+# v0.0.1). `workflow_dispatch` allows a manual re-run — dispatched FROM THAT TAG,
+# since the version check below applies to it too. The release gate
+# (`npm run check`: lint + format + build + corpus + coverage + audit) re-runs in
+# the clean CI checkout as its own step, before the npm token is in scope.
 #
 # Requires the repo secret `NPM_TOKEN` (an npm automation/granular token with
 # publish rights to `instagram-mcp-ai`). The MCP-registry submission is a
@@ -45,10 +46,12 @@ jobs:
       # npm rejects a duplicate version, but a tag/version mismatch would
       # silently publish something other than what the release announces — and
       # the git tag is what the changelog and provenance point at. Fail early.
+      # Unconditional: a `workflow_dispatch` has no release, so its ref must BE
+      # the tag — otherwise a dispatch from any branch would publish that branch
+      # as `latest` with no version check at all.
       - name: Verify release tag matches package.json version
-        if: github.event_name == 'release'
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
           if [ "$RELEASE_TAG" != "$PKG_VERSION" ]; then
@@ -57,8 +60,13 @@ jobs:
           fi
           echo "Release tag '$RELEASE_TAG' matches package.json."
       - run: npm ci
-      # Runs prepublishOnly (npm run check) internally, then publishes with
-      # provenance (publishConfig.provenance + the id-token permission above).
-      - run: npm publish
+      # The full gate, as its own step so it runs WITHOUT the npm token. Left to
+      # `prepublishOnly` it would run inside the publish step, where every dev
+      # dependency and every test child inherits NODE_AUTH_TOKEN.
+      - run: npm run check
+      # `--ignore-scripts`: the gate already passed above, and re-running it via
+      # `prepublishOnly` here would put the token back in its reach. Publishes
+      # with provenance (publishConfig.provenance + the id-token permission above).
+      - run: npm publish --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

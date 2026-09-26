@@ -13,7 +13,7 @@
 > (task IDs `T-*`, integration gates G1–G5 mapped to the M-phases below). The
 > roadmap stays the milestone view; the workplan is the execution view.
 
-## Current state (updated 2026-07-29)
+## Current state (updated 2026-09-23)
 
 Status vocabulary used throughout this file and [workplan.md](workplan.md):
 **DONE** · **PARTIAL** (some of it shipped, rest named below) · **BLOCKED**
@@ -21,20 +21,40 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 
 | Phase | Status | What is actually left |
 |---|---|---|
-| M0 Scaffold | **PARTIAL** | Everything green except the npm name reservation: `instagram-mcp-ai` is **not on the registry** (404 as of 2026-07-29), so the M0 exit claim "npm name owned" is currently false. |
+| M0 Scaffold | **DONE** | Closed 2026-08-25: the last open item, the npm name, was claimed by publishing the real `instagram-mcp-ai@0.7.0` rather than the planned `0.0.1` stub. The exit claim "npm name owned" now holds. |
 | M1 Core read path | **PARTIAL** | All code shipped and unit-tested; **no live run has ever happened** — the exit gate ("works on both paths against a real account") is unmet, and the PCA probe is unanswered. |
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
-| M3 Moderation | **PARTIAL** | 9 comment tools + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
+| M3 Moderation | **PARTIAL** | 8 comment tools (plus the `media`-tagged comment toggle) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
-| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **Not done:** the npm publish itself, the MCP-registry submission, and clean-machine install testing of all four channels. Those are outward, irreversible acts awaiting an explicit go-ahead. |
+| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle, the plugin-marketplace listing, and clean-machine install testing of any channel. Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
-**Cross-cutting blocker.** The whole of Lane E (live QA, `T-E1`–`T-E4`) is
-**BLOCKED**: there are no live Meta credentials in this environment, and no probe
-has ever been run. Consequently *every* `[verify]` marker in
+**Where the project stands (2026-09-23).** `instagram-mcp-ai` 0.7.0 has been on
+npm since 2026-08-25. Seven audit waves have since run over the tree; the suite
+is at 2101 tests with 100% coverage on every axis, and every module has been
+through mutation testing. None of that changes a milestone status below: M1–M4
+stay **PARTIAL** because each exit gate names a live account, and no live run
+has happened yet.
+
+**Cross-cutting blocker.** Lane E (live QA, `T-E1`–`T-E4`) is **harness done,
+execution blocked**: there are no live Meta credentials in this environment, so
+no probe has ever run against Meta. Consequently *every* `[verify]` marker in
 [corner-cases.md](corner-cases.md) §9 is still open, and no milestone whose exit
 gate says "live" or "against a real account" can honestly be called DONE. What
-exists is a complete, unit-tested implementation that has never met the platform.
+exists is a complete, unit-tested implementation that has never met the platform,
+plus two harnesses ready to run the moment a token exists:
+
+- `scripts/live-probe.mjs` (2026-08-07) answers the §9 rows **at the wire**:
+  26 probes across 7 lanes, calling the api layer directly.
+- `scripts/live-qa.mjs` (2026-09-23) answers the milestone exit gates **through
+  the product**: it spawns the built server over stdio and drives it with an MCP
+  client, reporting PASS/FAIL/SKIP per probe, per task (`T-E1`–`T-E4`) and per
+  gate (M1–M4). It is read-only by default; writes need `--write`, a typed
+  confirmation and a yes at every elicitation prompt. It can fold the wire
+  probes into the same report.
+
+[live-qa.md](live-qa.md) lists what the owner must provide, the exact commands,
+and the rule for flipping M1–M4 once a run comes back green.
 
 **Named open risk — `discovery` shipped ahead of its gate — DECIDED 2026-07-29:
 it stays registered.** M4 below stated the `discovery` package ships "only if the
@@ -71,6 +91,11 @@ this file claimed. It now really is
 passed as `c8` CLI flags (c8 v10 does **not** read a `c8` key from
 `package.json`, so a config block there would have been silently ignored).
 
+**Floor added 2026-09-23.** A `test:corpus` step now sits between `build` and
+`coverage`, because the reconciled chain above was still satisfiable by a tree in
+which no test ran at all — a glob that matches nothing exits 0, and c8 then
+measured zero statements of zero files. See CC-PROC-164.
+
 ## Design decisions to ratify before coding (Gate D)
 
 These came out of the six-role review as load-bearing and unresolved. Each gets a
@@ -85,13 +110,14 @@ none needs a prototype first.
 
 Recorded alongside (no debate expected, written down so they are deliberate):
 v1 MCP surface is **tools-only** (no Resources/Prompts); **no proxy support**
-in v1 (`igRequest` talks straight to Meta); `doctor` surfaces the Meta app's
+in v1 (`createIgRequest` talks straight to Meta); `doctor` surfaces the Meta app's
 **Development vs Live mode** (dev-mode apps may face lower limits — `[verify]`).
 
-## M0 — Scaffold (size M) — **PARTIAL**
+## M0 — Scaffold (size M) — **DONE**
 
-**Left:** work item 4 only — the npm name is **not reserved** (`instagram-mcp-ai`
-returns 404 on the registry as of 2026-07-29). Items 1–3 and 5 are done.
+**Closed 2026-08-25.** Items 1–3 and 5 were done long before; work item 4 (the
+npm name) closed when `instagram-mcp-ai@0.7.0` was published — see the note on
+that item below for why the planned stub was never the thing that shipped.
 
 **Goal:** a repo where `npm run check` is green with zero tools registered.
 
@@ -106,7 +132,10 @@ Work items:
    `npm audit`, CodeQL.
 4. **Reserve the npm name**: publish a `0.0.1` stub of `instagram-mcp-ai`
    (verified available 2026-07-21; adjacent names are squatted — this is the
-   cheapest insurance in the plan).
+   cheapest insurance in the plan). **Done differently, 2026-08-25:** the stub was
+   never published; the name stayed free for the five weeks it went unclaimed and
+   what finally took it was the real `0.7.0` package. The insurance was cheap but
+   it was also never bought — do not read this item as validated advice.
 5. `.env.example` generated from the architecture §12 env catalog (sync test
    stubbed now, enforced from M1).
 
@@ -130,7 +159,7 @@ paths, with the full safety substrate underneath.
 Work items:
 1. `core/`: settings, config + profiles (`AsyncLocalStorage`), errors
    (`InstagramError` with `kind`), stderr JSON logging, redaction, host allowlist,
-   `igRequest` with retry matrix + usage-header parsing + semaphore +
+   `createIgRequest` with retry matrix + usage-header parsing + semaphore +
    AbortSignal (CC-PROC-2), **injectable clock** (qa F1; CC-AUTH-13).
 2. Auth providers per **D1/D2** decisions: token-in-env for both paths,
    per-profile auth-mode resolution (CC-CFG-2), startup validation
@@ -139,10 +168,12 @@ Work items:
    registry + PACKAGES manifest + snapshot test; package-resolution order test
    (CC-CFG-7).
 4. Pagination + truncation: cursor rebuild (never follow `paging.next` raw),
-   `fetchAll` caps (CC-DATA-1/3/4), open enums + passthrough output schemas
-   (CC-DATA-6/7); **injection fencing** for untrusted text in results
+   `fetchAll` caps (CC-DATA-1/3/4), open enums + additive-safe output schemas
+   (CC-DATA-6/7 — the mechanism is field-by-field normalisation, not passthrough;
+   see the corrected CC-DATA-7); **injection fencing** for untrusted text in results
    (comments/captions marked as data, not instructions — security C2).
-5. `doctor` CLI (token validity, account resolution, scopes, usage snapshot).
+5. `doctor` CLI (token validity, account resolution, scopes, usage snapshot —
+   the usage snapshot did not ship; `doctor` reports none).
 6. **Fixture capture** — **DONE 2026-07-29** (harness only). `scripts/capture-fixtures.mjs`
    records live responses, `test/helpers/sanitize.ts` strips IDs/tokens/PII,
    `test/helpers/fixtures.ts` loads them into unit tests, and
@@ -204,8 +235,9 @@ no code path can publish twice from one instruction.
 
 ## M3 — Moderation (size M) — **PARTIAL**
 
-**Left:** the live half only. The `comments` package ships **9** tools (the plan
-said 8 — `instagram_set_comments_enabled` landed here rather than in `media`),
+**Left:** the live half only. The `comments` package ships **8** tools as planned
+(`src/tools/comments.ts` also defines `instagram_set_comments_enabled`, but that
+tool is tagged `media` — CC-PROC-9),
 the `IG_ALLOW_DESTRUCTIVE` double gate is implemented and unit-tested, and
 hide-vs-delete guidance is in the docs. The live probes for hide rules and length
 caps (CC-COM-5/6) are **BLOCKED**, so the exit gate ("moderation flow exercised
@@ -258,7 +290,7 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   OIDC release workflow.
 - **DONE 2026-07-29, completed 2026-08-07:** the **Claude Code plugin channel**, a
   fourth install channel, now whole rather than a lone manifest.
-  `.claude-plugin/plugin.json` declares the stdio server and — since 2026-08-07 —
+  `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` declares the stdio server and — since 2026-08-07 —
   a `userConfig.IG_ACCESS_TOKEN` entry (`sensitive` → OS keychain, `required`)
   wired to the server through `env: { IG_ACCESS_TOKEN: "${user_config.…}" }`, so
   installing prompts for the credential exactly like the MCPB bundle instead of
@@ -267,13 +299,20 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   requires — without it the manifest alone was not installable. Both files
   validate against their published JSON schemas and are locked by
   `test/release/plugin-manifest.test.ts` (16 tests) plus the four-channel drift
-  test. `.claude-plugin/` stays deliberately **outside** the npm tarball's `files`
-  allowlist — the plugin channel installs from git, not from `node_modules` — and
-  a test locks that exclusion in.
-- **NOT DONE:** the npm publish itself (nothing is on the registry at all — not
-  even the M0 stub); the MCP-registry submission. The npm publish now gates **two**
-  channels: `npx instagram-mcp-ai` directly, and the plugin, whose manifest
-  launches the server through that same unpublished name.
+  test. `.claude-plugin/` and `plugins/` stay deliberately **outside** the npm
+  tarball's `files` allowlist — the plugin channel installs from git, not from
+  `node_modules` — and a test locks that exclusion in. Since 2026-09-24 the plugin
+  root is `plugins/instagram-mcp-ai/` rather than the repo root (marketplace
+  `"source": "./plugins/instagram-mcp-ai"`): with `"source": "./"` Claude Code
+  copied the whole repo into its plugin cache and ran `npm ci` against the root
+  `package.json` on every install (~88 MB of dev dependencies, measured with Claude
+  Code 2.1.280). The plugin root carries no `package.json`, and a test keeps it so.
+- **DONE 2026-08-25:** the npm publish. `instagram-mcp-ai@0.7.0` is on the registry
+  with build provenance. That unblocked **two** channels at once: `npx
+  instagram-mcp-ai` directly, and the plugin, whose manifest launches the server
+  through that same name — a pin that until then resolved to nothing.
+- **NOT DONE:** the MCP-registry submission; the MCPB bundle build and attach; the
+  plugin-marketplace listing. All three are manual, outward acts.
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
   users, and the exit gate's install testing of all **four** channels — including
   proving that the plugin's `${user_config.IG_ACCESS_TOKEN}` interpolation really
@@ -284,7 +323,7 @@ matrix (D1) enforced end-to-end and snapshot-tested.
 
 Work items: npm publish with provenance (trusted publishing / OIDC) + `.cjs`
 launcher; `server.json` + MCP-registry publish (`io.github.IvanBBaev/instagram-mcp-ai`);
-Claude Code plugin manifest (`.claude-plugin/plugin.json`);
+Claude Code plugin manifest (`plugins/instagram-mcp-ai/.claude-plugin/plugin.json`);
 MCPB bundle with keychain-backed `user_config` + a token-acquisition story for
 non-CLI users (devops condition); README generated sections (tool table, env
 catalog) with sync tests; SECURITY.md, CHANGELOG.md, release checklist,
@@ -342,6 +381,19 @@ and re-issuing the verdict there.
    owned by the phase listed there. **ALL STILL OPEN** — Lane E has never run.
 4. Messaging path + policy constraints — M6 design review.
    **ANSWERED — [messaging.md](messaging.md), verdict DEFER.**
-5. *(new)* npm name reservation — `instagram-mcp-ai` is unclaimed on the registry
-   (404, 2026-07-29). The M0 plan called this "the cheapest insurance in the
-   plan"; it has not been bought. Adjacent names were already squatted in 2026-07.
+5. *(new)* npm name reservation — **CLOSED 2026-08-25.** `instagram-mcp-ai` is
+   owned; `0.7.0` is the first published version. The M0 plan called the stub "the
+   cheapest insurance in the plan" and it was never bought — the name simply
+   stayed free while adjacent ones were squatted. The risk was real and the
+   mitigation was skipped; the outcome was luck, not judgement.
+6. *(new)* Open **owner decisions** — [corner-cases.md](corner-cases.md) §10,
+   consolidated 2026-09-02. Eighteen cases where the behaviour is measured, pinned
+   by test and deliberately unchanged because the cost is a published surface, a
+   documented CLI contract, or bytes on the wire — plus three settled in passing
+   with no case row at all, one of which has since been acted on (CC-PROC-73). **NONE ARE BUGS**; each is the current tested behaviour, gathered so the
+   choice stays a choice. Sharpest three, in the order I would take them:
+   **CC-AUTH-15** (a static `appsecret_proof` replays indefinitely — the time-bound
+   form costs one parameter), **CC-AUTH-23** (a dead token with no recognised code
+   is classified `upstream` and retried three times instead of telling the operator
+   to re-authenticate), **CC-PROC-25** (every write travels in the query string
+   while the documented body sink is dead code).

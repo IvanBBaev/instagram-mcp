@@ -43,6 +43,14 @@
  * and those constants are not exported. When a field set changes in `src/api/`,
  * update it here and re-capture — a stale field list yields a fixture that no
  * longer matches what the server actually asks Graph for.
+ *
+ * That paragraph used to be the whole enforcement, and it was not enough: the
+ * `content_publishing_limit` list below had already drifted out of field order
+ * against `src/api/publishing.ts` by the time anyone looked. Nothing in this
+ * repository RUNS this file — `scripts/` is outside `tsconfig`, outside every
+ * c8 `--include` root and outside the test corpus — so the duplication is now
+ * pinned from the outside instead, by `test/release/capture-tooling.test.ts`,
+ * which reads both sides as text and compares them.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -292,7 +300,7 @@ const CAPTURES = [
     build: (ctx) => ({
       method: 'GET',
       path: `/${ctx.igId}/content_publishing_limit`,
-      params: { fields: 'config,quota_usage' },
+      params: { fields: 'quota_usage,config' },
     }),
   },
   {
@@ -451,7 +459,7 @@ async function main() {
   for (const capture of selected) {
     const skip = capture.needs?.(ctx);
     if (skip !== undefined) {
-      results.push({ name: capture.name, status: `skipped (${skip})` });
+      results.push({ name: capture.name, status: `skipped (${skip})`, ok: true });
       continue;
     }
 
@@ -459,7 +467,14 @@ async function main() {
     try {
       raw = await req(capture.build(ctx));
       if (capture.expectError) {
-        results.push({ name: capture.name, status: 'skipped (call unexpectedly succeeded)' });
+        // A capture declared `expectError` that SUCCEEDS is a refuted assumption
+        // about the API, not a skip: the fixture this run was asked for does not
+        // exist and the plan that asked for it is now wrong.
+        results.push({
+          name: capture.name,
+          status: 'failed (expected an error, the call succeeded)',
+          ok: false,
+        });
         continue;
       }
     } catch (err) {
@@ -471,6 +486,7 @@ async function main() {
         results.push({
           name: capture.name,
           status: `failed (${kind}: ${String(redact(err?.message ?? err))})`,
+          ok: false,
         });
         continue;
       }
@@ -494,7 +510,11 @@ async function main() {
     }
 
     writeFileSync(join(outDir, `${capture.name}.json`), serialized);
-    results.push({ name: capture.name, status: `written (${serialized.length} bytes)` });
+    results.push({
+      name: capture.name,
+      status: `written (${serialized.length} bytes)`,
+      ok: true,
+    });
   }
 
   say('');
@@ -508,7 +528,16 @@ async function main() {
       'test/helpers/sanitize.ts (DEFAULT_FIELD_POLICY) — reviewed like any code.\n' +
       'Read the fixture diff before committing it.',
   );
-  return 0;
+
+  // The whole point of the `ok` flag above. Until 2026-09-23 this returned 0
+  // unconditionally, so a run in which every single capture failed printed a
+  // wall of `failed (...)` lines and reported success to whatever invoked it.
+  // `live-probe.mjs` has always got this right; this is the same shape.
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length > 0) {
+    say(`\n${failed.length} capture(s) failed. No fixture was written for them.`);
+  }
+  return failed.length > 0 ? 1 : 0;
 }
 
 main()

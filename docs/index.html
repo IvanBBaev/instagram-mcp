@@ -119,7 +119,7 @@
           "name": "Can it post or delete things without my say-so?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. Every write previews by default: it returns exactly what it would do and changes nothing unless you pass apply: true (and the server runs with IG_WRITE_MODE=apply). Deleting a comment is double-gated — it additionally requires IG_ALLOW_DESTRUCTIVE=true. Applied writes are appended to a local JSONL audit journal."
+            "text": "No. Every write previews by default: it returns exactly what it would do and changes nothing unless the call passes apply: true (or the server runs with the standing IG_WRITE_MODE=apply). Deleting a comment is double-gated — it additionally requires IG_ALLOW_DESTRUCTIVE=true. Applied writes are appended to a local JSONL audit journal."
           }
         },
         {
@@ -521,7 +521,7 @@ instagram_post_image {
         <span class="c-ico" aria-hidden="true">💡</span>
         <p>
           <strong>Writes preview by default.</strong> Even after setup, the server changes nothing on
-          Instagram until you pass <code>apply: true</code> and run with <code>IG_WRITE_MODE=apply</code>.
+          Instagram until a call passes <code>apply: true</code> (or you set the standing <code>IG_WRITE_MODE=apply</code>).
           Start in preview mode and promote to apply when you trust the calls.
         </p>
       </div>
@@ -541,7 +541,7 @@ instagram_post_image {
             <tr><th>You need</th><th>Why</th><th>Where it goes</th></tr>
           </thead>
           <tbody>
-            <tr><td>Instagram professional account</td><td>Business or Creator — personal accounts aren't exposed by the Graph API</td><td><code>IG_ACCOUNT_ID</code> (optional; auto-resolved when possible)</td></tr>
+            <tr><td>Instagram professional account</td><td>Business or Creator — personal accounts aren't exposed by the Graph API</td><td><code>IG_ACCOUNT_ID</code> (optional on Path A, where calls address <code>me</code>)</td></tr>
             <tr><td>A Meta app (id + secret)</td><td>Required to run OAuth and, on Path B, to sign requests</td><td><code>IG_APP_ID</code>, <code>IG_APP_SECRET</code></td></tr>
             <tr><td>An access token</td><td>Authorizes every Graph API call — one variable for both paths</td><td><code>IG_ACCESS_TOKEN</code></td></tr>
           </tbody>
@@ -628,7 +628,8 @@ npx instagram-mcp-ai refresh</code></pre>
       <h2>Configuration <a class="anchor" href="#configuration" aria-label="Link to this section">#</a></h2>
       <p>
         Everything is configured through <code>IG_*</code> environment variables (loaded from the
-        process env and, optionally, an env file via <code>IG_ENV_FILE</code>). A
+        process env, then the credential store <code>login</code> writes and a project
+        <code>.env</code> — or only the file <code>IG_ENV_FILE</code> names). A
         <span class="req">*</span> marks a value you'll usually need to set.
       </p>
       <div class="table-wrap">
@@ -639,15 +640,15 @@ npx instagram-mcp-ai refresh</code></pre>
           <tbody>
             <tr><td><code>IG_AUTH_MODE</code></td><td><em>inferred</em></td><td>Pin the auth path: <code>ig-login</code> or <code>fb-login</code>. Inferred as <code>fb-login</code> when <code>IG_APP_ID</code> + <code>IG_APP_SECRET</code> are set.</td></tr>
             <tr><td><code>IG_ACCESS_TOKEN</code> <span class="req">*</span></td><td>—</td><td>The account's long-lived token, on either path — an Instagram-Login token (Path A) or a Page / system-user token (Path B).</td></tr>
-            <tr><td><code>IG_ACCOUNT_ID</code></td><td><em>resolved</em></td><td>The Instagram professional-account id to operate.</td></tr>
+            <tr><td><code>IG_ACCOUNT_ID</code></td><td><code>me</code></td><td>The Instagram professional-account id to operate.</td></tr>
             <tr><td><code>IG_APP_ID</code> / <code>IG_APP_SECRET</code></td><td>—</td><td>Meta app credentials — required for <code>login</code> and for Path B request signing.</td></tr>
-            <tr><td><code>IG_ENV_FILE</code></td><td>—</td><td>Path to an env file to load before resolving settings.</td></tr>
+            <tr><td><code>IG_ENV_FILE</code></td><td>—</td><td>Absolute path of the one env file to load, instead of the credential store and project <code>.env</code>; <code>login</code> and <code>refresh</code> write there too.</td></tr>
             <tr><td><code>IG_ACTIVE_PROFILE</code></td><td><code>default</code></td><td>Which named profile is active.</td></tr>
             <tr><td><code>IG_PROFILE_&lt;NAME&gt;_*</code></td><td>—</td><td>Per-profile overrides (token, account id, app id/secret) for multi-account setups.</td></tr>
-            <tr><td><code>IG_TOOL_PACKAGES</code></td><td><code>core</code></td><td>A profile (<code>core</code>/<code>reader</code>/<code>publisher</code>/<code>all</code>) or a comma/space list of package names.</td></tr>
+            <tr><td><code>IG_TOOL_PACKAGES</code></td><td><code>core</code></td><td>A profile (<code>core</code>/<code>reader</code>/<code>publisher</code>/<code>all</code>) or a comma-separated list of package names.</td></tr>
             <tr><td><code>IG_PACKAGES_DENY</code></td><td>—</td><td>Packages to remove from the selection.</td></tr>
             <tr><td><code>IG_PACKAGES_READONLY</code></td><td>—</td><td>Packages forced to expose only their read tools.</td></tr>
-            <tr><td><code>IG_WRITE_MODE</code></td><td><code>preview</code></td><td><code>preview</code> refuses to apply writes; <code>apply</code> allows them (still needs <code>apply: true</code> per call).</td></tr>
+            <tr><td><code>IG_WRITE_MODE</code></td><td><code>preview</code></td><td><code>preview</code>: a write applies only when its call passes <code>apply: true</code>; <code>apply</code>: standing consent — every write applies unless its call passes <code>apply: false</code>.</td></tr>
             <tr><td><code>IG_ALLOW_DESTRUCTIVE</code></td><td><code>false</code></td><td>Second gate required to delete a comment.</td></tr>
             <tr><td><code>IG_TRANSPORT</code></td><td><code>stdio</code></td><td>Transport: <code>stdio</code> or <code>http</code>.</td></tr>
             <tr><td><code>IG_HTTP_HOST</code> / <code>IG_PORT</code></td><td><code>127.0.0.1</code> / <code>3000</code></td><td>Bind address for the optional loopback HTTP transport.</td></tr>
@@ -655,7 +656,7 @@ npx instagram-mcp-ai refresh</code></pre>
             <tr><td><code>IG_MAX_CONCURRENT</code></td><td><code>4</code></td><td>Max concurrent Graph API requests.</td></tr>
             <tr><td><code>IG_MAX_ITEMS</code></td><td><code>200</code></td><td>Server-side cap on items returned from paginated reads.</td></tr>
             <tr><td><code>IG_REFRESH_AFTER_DAYS</code></td><td><code>45</code></td><td>When the doctor starts warning that a token is expiring soon.</td></tr>
-            <tr><td><code>IG_TIMEOUT_MS</code></td><td><code>30000</code></td><td>Per-request timeout in milliseconds.</td></tr>
+            <tr><td><code>IG_TIMEOUT_MS</code></td><td><code>30000</code></td><td>Timeout per Graph HTTP attempt in milliseconds, not per call (retries and backoff are extra).</td></tr>
             <tr><td><code>IG_LOG_LEVEL</code></td><td><code>info</code></td><td>Log verbosity (<code>debug</code> … <code>error</code>). Secrets are always redacted.</td></tr>
             <tr><td><code>IG_PRETTY_JSON</code></td><td><code>false</code></td><td>Pretty-print JSON in tool results.</td></tr>
           </tbody>
@@ -664,8 +665,9 @@ npx instagram-mcp-ai refresh</code></pre>
       <h3>Write mode &amp; the destructive gate</h3>
       <p>
         Two independent switches guard mutations. <code>IG_WRITE_MODE</code> is the server-wide gate
-        (default <code>preview</code>); each write tool additionally needs <code>apply: true</code>.
-        Deleting a comment is <strong>double-gated</strong> — it requires <code>apply: true</code>
+        (default <code>preview</code>); in preview a write acts only when its call passes <code>apply: true</code>, while <code>apply</code> makes that the default (a call can still opt out with <code>apply: false</code>).
+        Deleting a comment is <strong>double-gated</strong> — it requires an applied call
+        (<code>apply: true</code>, or <code>IG_WRITE_MODE=apply</code>)
         <em>and</em> <code>IG_ALLOW_DESTRUCTIVE=true</code>.
       </p>
       <div class="codeblock" data-lang="dotenv">
@@ -734,7 +736,9 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
         </details>
         <details class="tool">
           <summary><code>instagram_list_linked_accounts</code> <span class="pill ro">read</span><span class="pill pb">Path B</span><span class="tool-sum">List the Facebook Pages and Instagram accounts linked to the token. Facebook Login only.</span></summary>
-          <div class="tool-params"><p class="noparams">No parameters.</p></div>
+          <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
+            <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor from a previous call.</td></tr>
+          </tbody></table></div>
         </details>
         <details class="tool">
           <summary><code>instagram_token_status</code> <span class="pill ro">read</span><span class="tool-sum">Report the access token's type and expiry. Path B resolves expiry via debug_token; on Path A expiry may be reported as unknown.</span></summary>
@@ -904,8 +908,8 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
             <tr><td><code>metrics</code></td><td>enum[]</td><td><span class="opt">optional</span></td><td>Post-2025 metrics; defaults to all. Legacy names (impressions, profile_views, video_views) are rejected.</td></tr>
             <tr><td><code>period</code></td><td>enum</td><td><span class="opt">optional</span></td><td>Aggregation period; defaults to <code>day</code>.</td></tr>
-            <tr><td><code>metric_type</code></td><td>enum</td><td><span class="opt">optional</span></td><td><code>total_value</code> (default) or <code>time_series</code>.</td></tr>
-            <tr><td><code>since</code> / <code>until</code></td><td>number</td><td><span class="opt">optional</span></td><td>Unix seconds. Fully-expired ranges are rejected; partial ranges are clamped and flagged.</td></tr>
+            <tr><td><code>metric_type</code></td><td>enum</td><td><span class="opt">optional</span></td><td><code>total_value</code> (default) or <code>time_series</code>, which Meta serves for <code>reach</code> only — another metric with it is refused.</td></tr>
+            <tr><td><code>since</code> / <code>until</code></td><td>number</td><td><span class="opt">optional</span></td><td>Unix seconds. Fully-expired ranges are rejected; partial ranges are clamped and flagged; a <code>since</code> after <code>until</code> is refused.</td></tr>
           </tbody></table></div>
         </details>
         <details class="tool">
@@ -943,6 +947,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
             <tr><td><code>hashtagId</code></td><td>string</td><td><span class="req">required</span></td><td>From <code>instagram_search_hashtag</code>.</td></tr>
             <tr><td><code>edge</code></td><td>enum</td><td><span class="req">required</span></td><td>One of: <code>top</code> · <code>recent</code>.</td></tr>
             <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor from a previous call.</td></tr>
           </tbody></table></div>
         </details>
         <details class="tool">
@@ -950,6 +955,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
             <tr><td><code>username</code></td><td>string</td><td><span class="req">required</span></td><td>1–30 chars, without a leading <code>@</code>. Private/personal/unknown handles error.</td></tr>
             <tr><td><code>mediaLimit</code></td><td>number</td><td><span class="opt">optional</span></td><td>0–100 recent media; defaults to min(25, server cap).</td></tr>
+            <tr><td><code>mediaAfter</code></td><td>string</td><td><span class="opt">optional</span></td><td>The <code>mediaPaging.after</code> cursor from a previous call, to read the next page of media.</td></tr>
           </tbody></table></div>
         </details>
       </div>
@@ -1005,7 +1011,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
         <div class="card">
           <div class="ico" aria-hidden="true">👁️</div>
           <h3>Preview by default</h3>
-          <p>Every write returns what it would do and changes nothing until <code>apply: true</code> and <code>IG_WRITE_MODE=apply</code>.</p>
+          <p>Every write returns what it would do and changes nothing until <code>apply: true</code> (or the standing <code>IG_WRITE_MODE=apply</code>).</p>
         </div>
         <div class="card">
           <div class="ico" aria-hidden="true">🚧</div>
@@ -1015,7 +1021,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
         <div class="card">
           <div class="ico" aria-hidden="true">📝</div>
           <h3>Audit journal</h3>
-          <p>Applied writes are appended to a local JSONL journal at <code>~/.local/state/instagram-mcp-ai/writes.jsonl</code>.</p>
+          <p>Applied writes are appended to a local JSONL journal, by default <code>~/.local/state/instagram-mcp-ai/writes.jsonl</code> (<code>IG_WRITE_JOURNAL</code> or an absolute <code>XDG_STATE_HOME</code> moves it).</p>
         </div>
         <div class="card">
           <div class="ico" aria-hidden="true">🧷</div>
@@ -1131,7 +1137,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           </thead>
           <tbody>
             <tr><td>"No account profile is configured"</td><td>No token has been persisted yet</td><td>Run <code>login --path &lt;ig|fb&gt;</code> to create the default profile.</td></tr>
-            <tr><td>A write "previews" but never posts</td><td>Server is in preview mode, or <code>apply</code> was omitted</td><td>Set <code>IG_WRITE_MODE=apply</code> and pass <code>apply: true</code>.</td></tr>
+            <tr><td>A write "previews" but never posts</td><td>Server is in preview mode, or <code>apply</code> was omitted</td><td>Pass <code>apply: true</code> on the call, or set <code>IG_WRITE_MODE=apply</code> (and check the call did not pass <code>apply: false</code>).</td></tr>
             <tr><td>Delete is refused even with <code>apply: true</code></td><td>The destructive gate is closed</td><td>Set <code>IG_ALLOW_DESTRUCTIVE=true</code> (only when you mean it).</td></tr>
             <tr><td>Discovery tools aren't listed</td><td>On Path A, or <code>discovery</code> not selected</td><td>Use Facebook Login and include <code>discovery</code> (e.g. <code>IG_TOOL_PACKAGES=reader</code>).</td></tr>
             <tr><td>Discovery calls error with a permissions message</td><td>Missing "Instagram Public Content Access"</td><td>Request the feature for your Meta app; it may be App-Review-gated.</td></tr>
@@ -1164,7 +1170,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
       <p>Instagram Login (Path A) is the simplest setup for publishing and engagement — <code>graph.instagram.com</code>, granular scopes, and a 60-day long-lived token. Facebook Login (Path B) uses <code>graph.facebook.com</code> v25.0 with an <code>appsecret_proof</code>, can issue a never-expiring system-user token, and is the only path that unlocks the discovery package.</p>
 
       <h3>Can it post or delete things without my say-so?</h3>
-      <p>No. Every write previews by default and acts only when you pass <code>apply: true</code> (with <code>IG_WRITE_MODE=apply</code>). Deleting a comment is double-gated — it additionally requires <code>IG_ALLOW_DESTRUCTIVE=true</code> — and applied writes are appended to a local JSONL audit journal.</p>
+      <p>No. Every write previews by default and acts only when you pass <code>apply: true</code> (or set the standing <code>IG_WRITE_MODE=apply</code>). Deleting a comment is double-gated — it additionally requires <code>IG_ALLOW_DESTRUCTIVE=true</code> — and applied writes are appended to a local JSONL audit journal.</p>
 
       <h3>Do I need to build or host anything?</h3>
       <p>No. Run it locally with <code>npx instagram-mcp-ai</code> on Node.js 22 or newer. It speaks MCP over stdio to your client (Claude Desktop, Cursor, and other MCP-capable apps); an optional loopback HTTP transport is available for local development.</p>

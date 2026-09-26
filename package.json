@@ -1,6 +1,6 @@
 {
   "name": "instagram-mcp-ai",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
   "mcpName": "io.github.IvanBBaev/instagram-mcp-ai",
   "type": "module",
@@ -42,12 +42,13 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "node --test \"dist/**/*.test.js\"",
-    "test:full": "npm run build && npm test",
-    "coverage": "c8 --reporter=text --reporter=lcov --check-coverage --statements=100 --branches=100 --functions=100 --lines=100 npm test",
+    "test:corpus": "node scripts/assert-test-corpus.mjs",
+    "test:full": "npm run build && npm run test:corpus && npm test",
+    "coverage": "c8 --all --include='dist/src/**/*.js' --include='dist/test/helpers/**/*.js' --include='bin/**/*.cjs' --reporter=text --reporter=lcov --check-coverage --statements=100 --branches=100 --functions=100 --lines=100 npm test",
     "audit": "npm audit --audit-level=high --omit=dev",
     "audit:dev": "npm audit --audit-level=high",
     "gen:readme": "npm run build && node scripts/gen-readme.mjs",
-    "check": "npm run lint && npm run format:check && npm run build && npm run coverage && npm run audit",
+    "check": "npm run lint && npm run format:check && npm run build && npm run test:corpus && npm run coverage && npm run audit",
     "prepublishOnly": "npm run check"
   },
   "dependencies": {

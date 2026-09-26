@@ -1,13 +1,13 @@
 /**
  * Tests for the MCP result builders (src/mcp/result.ts): text, json (object →
  * structuredContent; array/primitive → none; pretty vs compact), errorResult
- * for InstagramError and plain values (isError, no token leakage), and the
+ * for InstagramError and plain values (isError, text only, no token leakage), and the
  * prompt-injection fence (delimiters, provenance marker, breakout defanging).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { text, json, errorResult, fence } from '../../src/mcp/result.js';
+import { json, errorResult, fence } from '../../src/mcp/result.js';
 import type { ToolResult } from '../../src/mcp/define.js';
 import { InstagramError } from '../../src/core/types.js';
 import type { ErrorKind } from '../../src/core/types.js';
@@ -33,28 +33,30 @@ const FENCE_CLOSE = '[/UNTRUSTED]';
 const FENCE_OPEN_DEFANGED = '[ UNTRUSTED source: "instagram-user-content"]';
 const FENCE_CLOSE_DEFANGED = '[ /UNTRUSTED]';
 
-test('text: single text-content result, no error, no structuredContent', () => {
-  const r = text('hello');
-  assert.equal(onlyText(r), 'hello');
-  assert.equal(r.isError, undefined);
-  assert.equal(r.structuredContent, undefined);
-});
-
-test('text: the body is passed through byte-for-byte, never trimmed', () => {
-  // `text()` also renders untrusted third-party content (a caption, a comment),
-  // and `fence()` bounds that content with newlines. Trimming here would eat a
-  // leading/trailing blank line that the fence relies on to keep its delimiters
-  // on lines of their own, so the builder must not "tidy" what it is handed.
-  const body = '  leading and trailing space  \n';
-  assert.equal(onlyText(text(body)), body);
-});
-
 test('json: plain object sets structuredContent and compact text', () => {
+  // Pinned as ONE object instead of three field reads. `onlyText(r)` plus
+  // `r.structuredContent` plus `r.isError === undefined` names every key this
+  // builder is meant to set, and is blind to a key it is NOT meant to set:
+  // measured, `return Object.assign(result, { debugX: 'x' })` on the last line
+  // of `json()` survived all 1880 tests of this suite before this assertion
+  // existed. The type system does not object either — `ToolResult` refuses an
+  // extra key in a LITERAL, but `Object.assign` yields an assignable
+  // intersection, which is the shape an added field actually arrives in.
+  //
+  // An added top-level key is not inert here. The registry hands the handler's
+  // finished record to the redactor and forwards it to the client as it stands
+  // (`mcp/registry.ts`), so a stray field is unreviewed data put in front of the
+  // model and a member no MCP result schema declares put in front of a strict
+  // client.
+  //
+  // The whole pin is also stronger than `assert.equal(r.isError, undefined)`:
+  // `deepEqual` counts an own key whose value is `undefined`, so this says
+  // `isError` is ABSENT, not merely undefined-valued.
   const data = { a: 1, b: 'two' };
-  const r = json(data);
-  assert.equal(onlyText(r), '{"a":1,"b":"two"}');
-  assert.deepEqual(r.structuredContent, data);
-  assert.equal(r.isError, undefined);
+  assert.deepEqual(json(data), {
+    content: [{ type: 'text', text: '{"a":1,"b":"two"}' }],
+    structuredContent: data,
+  });
 });
 
 test('json: pretty option indents with two spaces', () => {
@@ -105,7 +107,7 @@ test('json: primitives and null do not set structuredContent', () => {
   assert.equal(json(true).structuredContent, undefined);
 });
 
-test('errorResult: InstagramError renders kind + message and structured error', () => {
+test('errorResult: InstagramError renders kind, message, code and subcode as text only (CC-DATA-61)', () => {
   const err = new InstagramError('Invalid OAuth access token', {
     kind: 'auth',
     status: 401,
@@ -115,14 +117,27 @@ test('errorResult: InstagramError renders kind + message and structured error', 
   });
   const r = errorResult(err);
 
-  assert.equal(r.isError, true);
-  const body = onlyText(r);
-  assert.ok(body.includes('auth'), 'kind present');
-  assert.ok(body.includes('Invalid OAuth access token'), 'message present');
-
-  assert.deepEqual(r.structuredContent, {
-    error: { kind: 'auth', message: 'Invalid OAuth access token', code: 190, subcode: 460 },
+  // The WHOLE result in one pin. Reading `isError`, then the text, then
+  // checking for `structuredContent` names each key the builder sets and sees nothing that
+  // sits BESIDE them: measured, `return Object.assign(result, { debugX: 'x' })`
+  // on this branch survived all 1880 tests of this suite before this assertion
+  // existed. This is the model-facing shape of every failed tool call, and the
+  // registry forwards the handler's record as-is — an added key would ride out
+  // on every error of every tool, carrying whatever the line that added it
+  // happened to have in scope.
+  assert.deepEqual(r, {
+    isError: true,
+    content: [
+      {
+        type: 'text',
+        text: 'Instagram error (auth): Invalid OAuth access token (code 190, subcode 460)',
+      },
+    ],
   });
+  // No `structuredContent` on an error (CC-DATA-61): the SDK client validates it
+  // against the tool's outputSchema even when `isError` is set, so an
+  // `{ error }` envelope turned every typed error into a -32602 rejection.
+  assert.equal(Object.hasOwn(r, 'structuredContent'), false);
 
   // The cause (holding token-shaped secrets) must never surface anywhere.
   const serialized = JSON.stringify(r);
@@ -134,9 +149,7 @@ test('errorResult: InstagramError renders kind + message and structured error', 
 test('errorResult: InstagramError omits absent code/subcode', () => {
   const err = new InstagramError('rate limited', { kind: 'rate_limit' });
   const r = errorResult(err);
-  assert.deepEqual(r.structuredContent, {
-    error: { kind: 'rate_limit', message: 'rate limited' },
-  });
+  assert.equal(onlyText(r), 'Instagram error (rate_limit): rate limited');
 });
 
 test('errorResult: a ZERO code/subcode is still reported', () => {
@@ -149,9 +162,10 @@ test('errorResult: a ZERO code/subcode is still reported', () => {
     code: 0,
     subcode: 0,
   });
-  assert.deepEqual(errorResult(err).structuredContent, {
-    error: { kind: 'upstream', message: 'An unexpected error has occurred', code: 0, subcode: 0 },
-  });
+  assert.equal(
+    onlyText(errorResult(err)),
+    'Instagram error (upstream): An unexpected error has occurred (code 0, subcode 0)',
+  );
 });
 
 test('errorResult: the visible text is EXACTLY kind + message, with no cause appended', () => {
@@ -170,13 +184,26 @@ test('errorResult: the visible text is EXACTLY kind + message, with no cause app
 });
 
 test('errorResult: plain Error is generic and leaks nothing', () => {
+  // The fallback branch pinned whole. `isError`, the body, and
+  // "structuredContent is undefined" read the three keys this branch is allowed
+  // to have; a FOURTH is invisible to all three. Measured: assembling this
+  // return as `const generic: ToolResult = { ... }` and returning
+  // `Object.assign(generic, { debugX: 'x' })` survived all 1880 tests of this
+  // suite before this assertion existed. This branch renders a throw nobody
+  // recognised — a bug, a library's own error — which is exactly where a
+  // debugging field gets added and never taken out again.
+  //
+  // The pin also separates an ABSENT `structuredContent` from a
+  // present-but-undefined one, which `assert.equal(r.structuredContent,
+  // undefined)` cannot: `deepEqual` counts an own undefined-valued key.
   const err = new Error('boom with EAAleakytoken inside');
   const r = errorResult(err);
-  assert.equal(r.isError, true);
-  const body = onlyText(r);
-  assert.equal(body, 'Unexpected error');
+  assert.deepEqual(r, {
+    isError: true,
+    content: [{ type: 'text', text: 'Unexpected error' }],
+  });
+  // Nothing of the thrown value travels with it.
   assert.ok(!JSON.stringify(r).includes('EAAleakytoken'));
-  assert.equal(r.structuredContent, undefined);
 });
 
 test('errorResult: non-error thrown value is generic', () => {
@@ -256,17 +283,6 @@ test('fence: a forged open delimiter ON ITS OWN LINE is defanged too', () => {
   assert.equal(out.split(FENCE_OPEN).length - 1, 1);
 });
 
-test('text: the body keeps its case, character for character', () => {
-  // Everything this server round-trips through `text()` is case-significant:
-  // media/container IDs are opaque strings, `@handles` and `#hashtags` are
-  // echoed back to the operator, and a permalink path is case-sensitive. A
-  // builder that normalizes case would hand the model an identifier that no
-  // longer resolves upstream, and the failure would surface much later as a
-  // "not found" from Graph rather than as a bug in the result layer.
-  const body = 'Container 17841400000000000 — #TravelTuesday for @MyHandle';
-  assert.equal(onlyText(text(body)), body);
-});
-
 test('json: an EXPLICIT pretty:false stays compact', () => {
   // `pretty` is opt-in, and the option object is routinely passed for other
   // reasons (or built from a caller flag that happens to be false). If the
@@ -292,19 +308,42 @@ test('json: an unserializable payload THROWS instead of degrading to a fake succ
   assert.throws(() => json({ impressions: 10n }), TypeError);
 });
 
-test('json: an undefined payload is NOT papered over with a JSON null', () => {
-  // Pins today's real behaviour rather than endorsing it: `JSON.stringify(undefined)`
-  // returns `undefined`, so the content block ends up with no `text` at all.
-  // See the FINDING in the report — this is a latent defect, and the point of
-  // the test is that a `?? 'null'` style patch is a BEHAVIOUR change (the model
-  // would start reading a literal "null" as data) and must be a deliberate one.
-  const r = json(undefined);
-  assert.equal(r.content.length, 1);
-  const c = r.content[0];
-  assert(c);
-  assert.equal(c.type, 'text');
-  assert.strictEqual(c.text, undefined);
-  assert.equal(r.structuredContent, undefined);
+test('json: an undefined payload cannot be written, and is refused if it is forced', () => {
+  // MCP requires `text` to be a string. `JSON.stringify(undefined)` returns
+  // `undefined`, so the old builder emitted a `{ type: 'text' }` block with no
+  // `text` at all — a response a strict client may reject wholesale.
+  //
+  // Compile-time half: `undefined` is no longer assignable to the parameter, so
+  // the malformed block cannot be constructed from any call site. The
+  // `@ts-expect-error` below is the assertion: if the parameter is ever widened
+  // back to `unknown`, the directive becomes unused and the BUILD fails.
+  assert.throws(() => {
+    // @ts-expect-error — `undefined` is not a JsonPayload (src/mcp/result.ts).
+    json(undefined);
+  }, TypeError);
+
+  // Runtime half: the type still admits the other values `JSON.stringify` drops
+  // instead of rendering. They take the same route as a cyclic object — a
+  // TypeError the registry turns into an `isError` result — rather than a
+  // `?? 'null'` fallback, which would hand the model a literal "null" to read
+  // as data and call the malformed payload a success.
+  assert.throws(() => json(() => 'a function is not data'), TypeError);
+  assert.throws(() => json(Symbol('a symbol is not data')), TypeError);
+
+  // The message is not decoration. A cyclic object or a BigInt throws from
+  // `JSON.stringify` itself and arrives carrying V8's own explanation; these
+  // values do not — `stringify` returns `undefined` quite happily and the guard
+  // below is the only thing that speaks. Nobody catches this TypeError to
+  // inspect it either: the registry renders it into an `isError` text block that
+  // the operator and the model read, so this sentence IS the whole diagnostic,
+  // and "renders to nothing" is what distinguishes a payload JSON refuses to
+  // serialize from one it silently declines to write.
+  // Exact, not a regex: an unanchored pattern would accept any suffix bolted
+  // onto this sentence, and the sentence is the whole diagnostic.
+  assert.throws(() => json(Symbol('a symbol is not data')), {
+    name: 'TypeError',
+    message: 'json(): payload is not JSON-serializable (it renders to nothing)',
+  });
 });
 
 test('json: structuredContent IS the payload object, read exactly once', () => {
@@ -338,12 +377,26 @@ test('errorResult: EVERY error kind is flagged isError, none is reported as succ
   // hands the model a failure dressed as data: it reads the message as a
   // RESULT, keeps going, and for a write tool that means a retry loop or a
   // second publish attempt against a request that may already have landed.
-  const kinds: ErrorKind[] = ['auth', 'permission', 'rate_limit', 'validation', 'upstream'];
-  for (const kind of kinds) {
+  // `satisfies Record<ErrorKind, true>` is what makes this list EVERY kind
+  // rather than merely five valid ones: an `ErrorKind[]` annotation checks
+  // membership, so a sixth member of the union compiles here and is simply never
+  // probed — and `isError` is a bit nothing else in the suite re-derives per
+  // kind. Written this way, adding a kind to `core/types.ts` fails the build
+  // until this loop covers it.
+  const kinds = {
+    auth: true,
+    permission: true,
+    rate_limit: true,
+    validation: true,
+    upstream: true,
+  } satisfies Record<ErrorKind, true>;
+  for (const kind of Object.keys(kinds) as ErrorKind[]) {
     const r = errorResult(new InstagramError(`${kind} failed`, { kind }));
     assert.equal(r.isError, true, `${kind} must be flagged as an error`);
-    assert.equal(onlyText(r), `Instagram error (${kind}): ${kind} failed`);
-    assert.deepEqual(r.structuredContent, { error: { kind, message: `${kind} failed` } });
+    assert.deepEqual(r, {
+      isError: true,
+      content: [{ type: 'text', text: `Instagram error (${kind}): ${kind} failed` }],
+    });
   }
 });
 
@@ -357,16 +410,18 @@ test('errorResult: a code without a subcode — and a subcode without a code —
   const codeOnly = errorResult(
     new InstagramError('Application request limit reached', { kind: 'rate_limit', code: 4 }),
   );
-  assert.deepEqual(codeOnly.structuredContent, {
-    error: { kind: 'rate_limit', message: 'Application request limit reached', code: 4 },
-  });
+  assert.equal(
+    onlyText(codeOnly),
+    'Instagram error (rate_limit): Application request limit reached (code 4)',
+  );
 
   const subcodeOnly = errorResult(
     new InstagramError('Permissions error', { kind: 'permission', subcode: 33 }),
   );
-  assert.deepEqual(subcodeOnly.structuredContent, {
-    error: { kind: 'permission', message: 'Permissions error', subcode: 33 },
-  });
+  assert.equal(
+    onlyText(subcodeOnly),
+    'Instagram error (permission): Permissions error (subcode 33)',
+  );
 });
 
 test('fence: a forged CLOSE delimiter is defanged IN PLACE, byte-exactly', () => {

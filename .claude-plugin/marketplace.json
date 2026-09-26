@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "instagram-mcp-ai",
-      "source": "./",
-      "version": "0.7.0",
+      "source": "./plugins/instagram-mcp-ai",
+      "version": "0.8.0",
       "description": "MCP server for the Instagram Platform (Meta Graph API) — professional-account tools.",
       "author": {
         "name": "Ivan Baev",

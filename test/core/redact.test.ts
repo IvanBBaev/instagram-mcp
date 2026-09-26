@@ -478,6 +478,116 @@ test('the IG backstop takes at least 20 characters after the prefix', () => {
   assert.equal(redact(belowFloor), belowFloor);
 });
 
+test('an IG_* environment-variable name is not a token and is printed verbatim', () => {
+  // The character right after `IG` is a family letter in every token Meta mints
+  // (`IGQ…`, `IGAA…`). In this server's own environment-variable names it is an
+  // underscore — and the profile keys are long enough to clear the floor, so
+  // until 2026-09-19 the startup warning that names an unrecognised key printed
+  // `[REDACTED]` for exactly the profile-key typos it exists to catch, and an
+  // error telling the operator which key to set masked the key (CC-PROC-72).
+  // The narrowing is one character wide: a hyphen is not a token either, but
+  // `_` and `-` remain legal INSIDE a body, and a long `IGNORE_…` identifier is
+  // still over-redacted by design.
+  const redact = createRedactor();
+  const envName = 'IG_PROFILE_DEFAULT_ACCESS_TOKEN';
+  const hyphenated = 'IG-' + 'x'.repeat(25);
+  const bodyWithUnderscores = 'IGQ' + '_'.repeat(25);
+  const identifier = 'IGNORE_THIS_VERY_LONG_CONSTANT_NAME';
+  assert.equal(redact(`set ${envName} to continue`), `set ${envName} to continue`);
+  assert.equal(redact(hyphenated), hyphenated);
+  assert.equal(redact(bodyWithUnderscores), REDACTED);
+  assert.equal(redact(identifier), REDACTED);
+});
+
+test('an IG_* name whose profile slug hides a second IG is printed verbatim too', () => {
+  // The rule above only ever looked at two characters, and a profile slug can
+  // spell `IG` anywhere inside itself. Three of the five profiles on the machine
+  // this was found on do — `DIGITALSTORE`, `ZIGZAGMEDIA`, `BIGWAVESURF` — and
+  // each puts a token-shaped run in the MIDDLE of its key: `IG`, an alphanumeric
+  // third character, then 22 more name characters. The backstop matched there and
+  // swallowed the rest of the line, so the startup warning that exists to name a
+  // mistyped profile key (CC-CFG-13) reported `IG_PROFILE_D[REDACTED]` and named
+  // nothing, and neither did the error telling the operator which key to set.
+  //
+  // The two fixtures this file carried before are `DEFAULT` and `BRAND` —
+  // precisely the two spellings with no embedded `IG`, which is how a suite of
+  // 1974 tests agreed the exemption worked (CC-PROC-186).
+  const redact = createRedactor();
+  for (const slug of ['DIGITALSTORE', 'ZIGZAGMEDIA', 'BIGWAVESURF', 'IGNITEMEDIA']) {
+    const envName = `IG_PROFILE_${slug}_ACCESS_TOKEN`;
+    assert.equal(redact(`set ${envName} and retry`), `set ${envName} and retry`);
+  }
+});
+
+test('the IG_ exemption covers only the name itself, never a token beside it', () => {
+  // The exemption keys on the RUN the match sits in, so it stops at the first
+  // character that cannot be part of a name. That is what keeps it from costing
+  // the backstop anything: a token is still masked when an `IG_*` key names it,
+  // when it is glued onto an unrelated identifier, and when only a delimiter
+  // precedes it — which is every shape a leak actually arrives in (CC-PROC-186).
+  const redact = createRedactor();
+  const token = 'IGQ' + 'x'.repeat(25);
+  const key = 'IG_PROFILE_DIGITALSTORE_ACCESS_TOKEN';
+  assert.equal(redact(`${key}=${token}`), `${key}=${REDACTED}`);
+  assert.equal(redact(`cursor_${token}`), `cursor_${REDACTED}`);
+  assert.equal(redact(`"${token}"`), `"${REDACTED}"`);
+});
+
+// Each character that can sit in front of `IG_` inside a longer run — an
+// uppercase letter, a lowercase one, a digit, `_` and `-` — makes that `IG_`
+// someone else's, and each has its own entry: dropping any one from the anchor
+// class re-opens the leak for exactly that spelling.
+const GLUED_IG_PREFIXES = [
+  'CONFIG_',
+  'SIG_',
+  'cacheIG_',
+  'v2IG_',
+  'key_IG_',
+  'key-IG_',
+  'ig_user_',
+];
+
+test('the IG_ exemption holds only when IG_ starts the run, not wherever it appears in it', () => {
+  // "The run begins `IG_`" is the whole rule. Unanchored, the lookbehind found
+  // the `IG_` inside `CONFIG_`, `SIG_` and `ORIG_` and exempted the token glued
+  // after them — a cache key or signed-state value printed with the credential
+  // in the clear. A lowercase `ig_` run (Graph field names such as `ig_user`)
+  // is not a name this server owns either.
+  const redact = createRedactor();
+  const token = 'IGQ' + 'x'.repeat(25);
+  for (const prefix of GLUED_IG_PREFIXES) {
+    assert.equal(redact(`k ${prefix}${token} e`), `k ${prefix}${REDACTED} e`);
+  }
+  // The anchor is "no name character in front", not "whitespace in front": the
+  // name is still exempt at the very start of a string, inside quotes and after
+  // `=` — every place a diagnostic prints a key.
+  const key = 'IG_PROFILE_DIGITALSTORE_ACCESS_TOKEN';
+  for (const shown of [key, `"${key}"`, `unknown=${key}`]) {
+    assert.equal(redact(shown), shown);
+  }
+});
+
+test('the IG_ exemption spans a profile slug of any length and alphabet', () => {
+  // A slug is whatever follows `IG_PROFILE_` in the environment, so the run
+  // behind an embedded `IG` can hold digits and hyphens and be arbitrarily long.
+  // Each of those is a separate way to stop the exemption short and truncate the
+  // key again: a digit- or hyphen-free run class, or a bounded `{0,64}` one.
+  const redact = createRedactor();
+  const spelled = 'IG_PROFILE_SHOP-2-DIGITALSTORE_ACCESS_TOKEN';
+  const long = `IG_PROFILE_${'A'.repeat(60)}DIGITALSTORE_ACCESS_TOKEN`;
+  assert.equal(redact(`set ${spelled} and retry`), `set ${spelled} and retry`);
+  assert.equal(redact(`set ${long} and retry`), `set ${long} and retry`);
+});
+
+test('the IG backstop accepts a digit as the family character', () => {
+  // The third position is `[A-Za-z0-9]`, not `[A-Za-z]`. Nothing in this file
+  // pinned the digit half, so narrowing that class survived the entire redaction
+  // suite and died only across a module boundary, in the errors.ts drift corpus —
+  // a kill this file should never have had to borrow (CC-PROC-186).
+  const redact = createRedactor();
+  assert.equal(redact('t IG7' + 'x'.repeat(30) + ' e'), `t ${REDACTED} e`);
+});
+
 // --- Shape backstop: the appsecret_proof pattern ----------------------------
 
 test('every appsecret_proof in a string is masked', () => {
@@ -571,6 +681,28 @@ test('a non-iterable extraSecrets fails loudly instead of silently redacting not
   assert.doesNotThrow(() => createRedactor({ extraSecrets: undefined }));
 });
 
+test('a non-string element of extraSecrets is ignored rather than turned into a needle', () => {
+  // The element-level twin of "registering a non-string is a no-op". `registerSecret`
+  // has that guard tested; `createRedactor`'s copy of it did not, and the two are not
+  // interchangeable — `extraSecrets` is assembled at runtime by `doctor` from a parsed
+  // profile and by the MCP registry from a loaded config, so a field that came back as
+  // `null` from a hand-edited credential file, or as an ARRAY from a JSON document that
+  // spelled one secret as a list, lands here with nothing between it and the redactor.
+  //
+  // The length filter alone does not cover it, which is the whole point: `(42).length`
+  // and `({}).length` are `undefined` and fall out on their own, but `null.length` and
+  // `undefined.length` THROW — `createRedactor` would blow up at construction time,
+  // inside `doctor`, on the one command an operator runs when their credentials are
+  // already suspect. And anything carrying a `length` of 8 or more gets through: an
+  // eight-element array becomes the needle `a,b,c,d,e,f,g,h` and a `{ length: 9 }`
+  // becomes `[object Object]`, so the redactor starts blanking out unrelated text in
+  // every log line it ever touches while masking no secret at all.
+  const junk = [null, undefined, 42, {}, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'], { length: 9 }];
+  const redact = createRedactor({ extraSecrets: junk as unknown as string[] });
+  const probe = 'null 42 [object Object] a,b,c,d,e,f,g,h and ordinary text';
+  assert.equal(redact(probe), probe);
+});
+
 test('two different secrets in one string are both masked', () => {
   // The loop accumulates: each round must mask into the *result* of the previous
   // round, not into the original input. Restarting from the input makes the last
@@ -640,6 +772,28 @@ test('a function value is passed through by reference, not flattened to an empty
   assert.equal(out, fn);
 });
 
+test('an own toJSON function is dropped, so serialising the clone cannot write an unmasked token', () => {
+  const token = `EAA${'x'.repeat(30)}`;
+  const redact = createRedactor();
+  const out = redact({ v: { note: 'kept', toJSON: () => token } });
+  const line = JSON.stringify(out);
+  assert.ok(!line.includes(token), line);
+  assert.equal(line, '{"v":{"note":"kept"}}');
+});
+
+test('an own toJSON that is not a function is copied and redacted like any field', () => {
+  const redact = createRedactor();
+  assert.deepEqual(redact({ toJSON: 'plain' }), { toJSON: 'plain' });
+});
+
+test('a token used as an object key is masked in the key', () => {
+  const token = `EAA${'x'.repeat(30)}`;
+  const redact = createRedactor();
+  const out = redact({ [token]: 1, plain: 2 });
+  assert.deepEqual(out, { [REDACTED]: 1, plain: 2 });
+  assert.ok(!JSON.stringify(out).includes(token));
+});
+
 test('a cycle that runs through an array is detected, not followed forever', () => {
   // The cycle guard has to be one set threaded through the whole walk. Handing
   // arrays a fresh set makes any cycle whose path crosses an array invisible, and
@@ -701,4 +855,164 @@ test('only own enumerable properties are copied out', () => {
   const out = redact(input) as Record<string, unknown>;
   assert.deepEqual(Object.keys(out), ['visible']);
   assert.equal('hidden' in out, false);
+});
+
+// --- CC-DATA-107: an own `__proto__` key is data, not a prototype -----------
+
+test('an own __proto__ key holding an object is kept as data and redacted, not made the prototype (CC-DATA-107)', () => {
+  // `JSON.parse` builds an own `__proto__` data property. Assigning it onto the
+  // clone ran the prototype setter instead: the key vanished from the output and
+  // the redacted value became the clone's prototype.
+  const token = `EAA${'p'.repeat(30)}`;
+  const input = JSON.parse(`{"__proto__":{"note":"${token}","access_token":"plain"},"k":1}`);
+  const out = createRedactor()(input) as Record<string, unknown>;
+  assert.equal(Object.getPrototypeOf(out), Object.prototype);
+  assert.deepEqual(Object.keys(out), ['__proto__', 'k']);
+  const own = Object.getOwnPropertyDescriptor(out, '__proto__');
+  assert.deepEqual(own?.value, { note: REDACTED, access_token: REDACTED });
+  assert.equal(
+    JSON.stringify(out),
+    `{"__proto__":{"note":"${REDACTED}","access_token":"${REDACTED}"},"k":1}`,
+  );
+  assert.equal(({} as Record<string, unknown>).note, undefined);
+});
+
+test('an own __proto__ key holding a string is kept and masked, not silently dropped (CC-DATA-107)', () => {
+  const token = `EAA${'q'.repeat(30)}`;
+  const input = JSON.parse(`{"__proto__":"${token}"}`);
+  const out = createRedactor()(input);
+  assert.equal(JSON.stringify(out), `{"__proto__":"${REDACTED}"}`);
+});
+
+test('two keys that mask to the same spelling keep the later value, as assignment did (CC-DATA-107)', () => {
+  // Pins `configurable: true`: without it the second definition of the masked
+  // key throws instead of overwriting.
+  const a = `EAA${'a'.repeat(30)}`;
+  const b = `EAA${'b'.repeat(30)}`;
+  const out = createRedactor()({ [a]: 'first', [b]: 'second' });
+  assert.deepEqual(out, { [REDACTED]: 'second' });
+});
+
+test('the clone is an ordinary writable object (CC-DATA-107)', () => {
+  // Pins `writable: true` and `configurable: true`: a read-only clone would
+  // throw on a caller's update, and a sealed key on a caller's `delete`, both in
+  // strict mode.
+  const out = createRedactor()({ keep: 'x', drop: 'z' }) as Record<string, unknown>;
+  out.keep = 'y';
+  assert.equal(out.keep, 'y');
+  delete out.drop;
+  assert.deepEqual(Object.keys(out), ['keep']);
+});
+
+// --- CC-DATA-109: an `IG_` name right behind a JSON escape, masked as text --
+
+test('an IG_ name right behind a JSON escape is over-masked in free text, by decision (CC-DATA-109)', () => {
+  // In TEXT the escape `\n` is the two characters `\` `n`, so the name's run
+  // starts at the `n` rather than at `IG_`, the exemption does not apply, and the
+  // embedded `IG` in `DIGITALSTORE` is read as a token. Kept on purpose: widening
+  // the exemption to runs behind an escape would also exempt a token glued onto
+  // such a name. A JSON body is redacted as a value (CC-DATA-104), where the
+  // escape is a real line feed and the name survives whole.
+  const redact = createRedactor();
+  const name = 'IG_PROFILE_DIGITALSTORE_ACCESS_TOKEN';
+  assert.equal(redact(`"set\\n${name}"`), `"set\\n${name.slice(0, 12)}${REDACTED}"`);
+  assert.equal(redact(`set\n${name}`), `set\n${name}`);
+});
+
+// --- CC-DATA-121: the IG exemption is linear, and equal to the lookbehind ----
+
+/**
+ * The token-shape pass as it was spelled until 2026-09-26: the `IG_` exemption as
+ * a nested lookbehind. It is the reference the linear split is held equal to.
+ */
+function lookbehindShapes(text: string): string {
+  return text
+    .replace(/EAA[A-Za-z0-9_-]{20,}/g, REDACTED)
+    .replace(/IG[A-Za-z0-9](?<!(?<![A-Za-z0-9_-])IG_[A-Za-z0-9_-]*)[A-Za-z0-9_-]{19,}/g, REDACTED)
+    .replace(/\b[a-f0-9]{64}\b/gi, REDACTED);
+}
+
+/**
+ * Text built from the pieces the exemption turns on — `IG`, `IG_`, `IGQ`, the
+ * run-breaking delimiters, the other two shapes' prefixes, hex and plain filler —
+ * so runs past the 22-character floor, runs rooted at `IG_`, and embedded `IG`s
+ * are all common rather than astronomically rare.
+ */
+const shapeText = fc
+  .array(
+    fc.constantFrom(
+      'IG',
+      'IG_',
+      'IGQ',
+      'IGAA',
+      'EAA',
+      'CONFIG_',
+      '_',
+      '-',
+      ' ',
+      '=',
+      '.',
+      'a',
+      'Z',
+      '7',
+      'abcdef0123456789',
+      'xxxxxxxxxx',
+    ),
+    { maxLength: 40 },
+  )
+  .map((pieces) => pieces.join(''));
+
+test('property: the IG exemption masks exactly what the lookbehind it replaced did (CC-DATA-121)', () => {
+  const redact = createRedactor();
+  fc.assert(
+    fc.property(shapeText, (text) => {
+      assert.equal(redact(text), lookbehindShapes(text));
+    }),
+    { numRuns: 2000 },
+  );
+});
+
+test('a long IG_-rooted run of IG candidates is redacted in linear time (CC-DATA-121)', () => {
+  // The lookbehind walked back to the front of the run at every `IGa`, and every
+  // one of them was exempt, so none was consumed: 15 s on this input. The run
+  // begins `IG_`, so it is one of this server's own names and comes back whole;
+  // the same run behind one more character is not, and is masked from its first
+  // candidate on.
+  const redact = createRedactor();
+  const run = `IG_${'IGa'.repeat(66_666)}`;
+  const started = performance.now();
+  assert.equal(redact(`x ${run} y`), `x ${run} y`);
+  assert.equal(redact(`x Q${run} y`), `x QIG_${REDACTED} y`);
+  assert.ok(performance.now() - started < 1000, 'redaction of 200 000 characters took over 1 s');
+});
+
+test('a run is exempt only when it begins IG_, not IG- or IG (CC-DATA-121)', () => {
+  const redact = createRedactor();
+  const body = 'IGQ'.repeat(10);
+  assert.equal(redact(`a IG_${body} b`), `a IG_${body} b`);
+  assert.equal(redact(`a IG-${body} b`), `a IG-${REDACTED} b`);
+  assert.equal(redact(`a I${body} b`), `a I${REDACTED} b`);
+  // Each run is judged on its own: an exempt name does not shield the token
+  // after the delimiter, and a masked token does not unshield the name after it.
+  assert.equal(redact(`IG_${body}=${body}`), `IG_${body}=${REDACTED}`);
+  assert.equal(redact(`${body}.IG_${body}`), `${REDACTED}.IG_${body}`);
+});
+
+// --- CC-DATA-122: boxed primitives are unwrapped, as JSON.stringify does -----
+
+test('a boxed string nested in a value is unwrapped and masked, not split into characters (CC-DATA-122)', () => {
+  const redact = createRedactor();
+  const token = `EAA${'b'.repeat(30)}`;
+  const out = redact({ note: new String(`tok ${token}`), list: [new String(token)] });
+  assert.deepEqual(out, { note: `tok ${REDACTED}`, list: [REDACTED] });
+  assert.equal(JSON.stringify(out).includes('"0"'), false);
+});
+
+test('a boxed number or boolean is unwrapped to its primitive, as JSON.stringify writes it (CC-DATA-122)', () => {
+  const redact = createRedactor();
+  const input = { n: new Number(7), b: new Boolean(false), top: [new Number(0)] };
+  const out = redact(input);
+  assert.deepEqual(out, { n: 7, b: false, top: [0] });
+  assert.equal(JSON.stringify(out), JSON.stringify(input));
+  assert.equal(redact(new Boolean(true)), true);
 });

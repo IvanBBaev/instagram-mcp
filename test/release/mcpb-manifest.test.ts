@@ -161,7 +161,8 @@ function userConfigEntry(key: string): UserConfigEntry {
  * both are credentials. `IG_ACCOUNT_ID` and `IG_APP_ID` are *public identifiers* —
  * they travel in Graph URLs and in support threads, they authorise nothing on
  * their own, and masking them would only make a typo harder for the operator to
- * spot in the form. `IG_WRITE_MODE` and `IG_TOOL_PACKAGES` are plain settings.
+ * spot in the form. `IG_AUTH_MODE`, `IG_WRITE_MODE` and `IG_TOOL_PACKAGES` are plain
+ * settings.
  *
  * If a future credential does not match this predicate, extend the predicate —
  * the "must not be sensitive" half of the check below will insist on it.
@@ -183,7 +184,7 @@ const MCPB_FIELD_TYPES = new Set(['string', 'number', 'boolean', 'directory', 'f
  * `user_config` keys whose `default` this file verifies against the server. The
  * exhaustiveness check below refuses to let a new default ship unverified.
  */
-const VERIFIED_DEFAULTS = new Set(['IG_WRITE_MODE', 'IG_TOOL_PACKAGES']);
+const VERIFIED_DEFAULTS = new Set(['IG_AUTH_MODE', 'IG_WRITE_MODE', 'IG_TOOL_PACKAGES']);
 
 // --- Launch wiring ----------------------------------------------------------
 
@@ -339,6 +340,73 @@ test('every variable the manifest maps is actually read by the server', () => {
   }
 });
 
+/** Every string *value* in a parsed JSON document, with its dotted path. */
+function stringValues(value: unknown, path: string): { path: string; value: string }[] {
+  if (typeof value === 'string') return [{ path, value }];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => stringValues(item, `${path}[${index}]`));
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).flatMap(([key, item]) => stringValues(item, `${path}.${key}`));
+  }
+  return [];
+}
+
+test('no manifest prose names an environment variable the server does not read', () => {
+  // The test above reads the env block's KEYS. This one reads every string in the
+  // document, because the form's prose is an instruction the operator follows while
+  // deciding what to paste in — and on this channel it arrives with a title, a
+  // description and a text box that look authoritative, exactly as the docstring at
+  // the top of this file says. Until 2026-09-23 the MCPB channel had no such scan
+  // while the plugin channel did: `IG_FB_ACCESS_TOKEN` could be reinstated word for
+  // word inside a `user_config.*.description` and every gate here stayed green,
+  // because `:378` checks only that a description is a non-empty string and the two
+  // content scans below it match lowercase tokens only (CC-PROC-127).
+  const sources = sourceFiles();
+  assert.ok(sources.length > 0, 'no .ts sources found under src/ \u2014 the scan is broken');
+
+  for (const { path, value } of stringValues(manifest, '')) {
+    for (const match of value.matchAll(/\bIG_[A-Z0-9_]+\b/g)) {
+      const name = match[0];
+      assert.ok(
+        sources.some((file) => readsEnvVar(file.text, name)),
+        `manifest.json${path} names "${name}", which no file under src/ reads. This is the ` +
+          'exact shape of the IG_FB_ACCESS_TOKEN defect, where every setup guide told ' +
+          'operators to set a variable the server had never read \u2014 only here it is rendered ' +
+          'inside Claude Desktop\u2019s own configuration form. There is one token variable, ' +
+          'IG_ACCESS_TOKEN, and it serves both auth paths. (Per-profile IG_PROFILE_<NAME>_* ' +
+          'variables are built dynamically and must not be named literally here.)',
+      );
+    }
+  }
+});
+
+/** A string that looks like a live credential rather than a reference or a label. */
+function looksLikeSecret(value: string): boolean {
+  if (/^\$\{[^}]+\}$/.test(value)) return false; // a substitution reference, not a value
+  if (/\b(?:IGA[A-Za-z0-9]|EA[AB])[A-Za-z0-9_-]{14,}\b/.test(value)) return true;
+  return value.split(/[^A-Za-z0-9_-]+/).some((run) => run.length >= 32);
+}
+
+test('the MCPB manifest cannot carry a credential value', () => {
+  // `:541` refuses a committed `default` on a credential-named field. That covers
+  // one field of one block; this covers the document. `manifest.json` is committed
+  // and published inside the bundle, so a token pasted anywhere in it — a
+  // description written while debugging, an extra `args` entry, an author line —
+  // is a published token, and the fix is to revoke it, not to delete the line.
+  // The plugin channel has held this property since it shipped; the MCPB channel
+  // held it nowhere until 2026-09-23.
+  for (const { path, value } of stringValues(manifest, '')) {
+    assert.ok(
+      !looksLikeSecret(value),
+      `manifest.json${path} contains a token-shaped string. Credentials reach the server only ` +
+        'as "${user_config.<KEY>}" references, answered by the operator at install time and ' +
+        'kept in the OS keychain \u2014 never as a literal in a release artifact. Offending ' +
+        `value: ${JSON.stringify(value.slice(0, 24))}\u2026`,
+    );
+  }
+});
+
 // --- env <-> user_config coupling -------------------------------------------
 
 test('the env block and the user_config form describe exactly the same variables', () => {
@@ -446,6 +514,67 @@ function startsWithout(omitted: string): boolean {
   }
 }
 
+/**
+ * The floor under every loop in this file, and the one thing none of them had until
+ * 2026-09-23. Each `for` over `envBlock()` or `userConfigBlock()` — there are seven —
+ * runs zero times against an empty block, and `asRecord` waves an empty `{}` through
+ * because it refuses only a non-object. The bijection above is no floor either:
+ * `deepEqual([], [])` is the happiest assertion in this file. So dropping the four
+ * credential and identity fields from both halves of `manifest.json` left every test
+ * here green while Claude Desktop rendered a form that collects no credential at all
+ * — exactly the class this gate exists to catch.
+ *
+ * The number is derived rather than counted. `PROFILE_ENV` is every variable
+ * `core/config.ts` reads to resolve a profile, and in a bundle the form is the ONLY
+ * way to supply them: there is no `.env` path to fall back to. Two other derivations
+ * were considered and rejected — parity with the Claude Code `plugin.json` (one
+ * userConfig key against six here) and a bijection with `.env.example` (22 keys, of
+ * which MCPB deliberately exposes a subset). Both would have been wrong in a way that
+ * a bare `>= 6` would merely have been arbitrary about.
+ *
+ * The `VERIFIED_DEFAULTS` half is the second direction that set never had, and not the
+ * one it first looked like. The set was consulted only through `has(key)`, so the obvious
+ * repair — require the manifest to still declare a default for every listed key — is
+ * redundant, and mutation says so: deleting `user_config.IG_TOOL_PACKAGES.default` already
+ * fails the test below that reads it back. The hole runs the other way. Delete one of those
+ * two tests and its key goes on exempting itself, an unverified prefilled default ships
+ * green, and nothing in `manifest.json` has moved for a manifest-reading check to notice.
+ * So each entry is checked against the only thing that can falsify it — this file's own
+ * source — the way `test/env-catalog.test.ts` prunes `NOT_ENV_VARS`.
+ */
+test('the form offers every variable the server needs and every default this file verifies', () => {
+  const env = envBlock();
+  const form = userConfigBlock();
+
+  for (const key of Object.keys(PROFILE_ENV)) {
+    assert.ok(
+      key in form,
+      `manifest.json user_config no longer offers ${key}, which core/config.ts reads to resolve ` +
+        'a profile. A bundle has no .env file to fall back to, so a form missing it cannot ' +
+        'start the server — and every per-key loop in this file passes over what is left.',
+    );
+    assert.ok(
+      key in env,
+      `manifest.json server.mcp_config.env no longer passes ${key} to the server, so whatever ` +
+        'the operator types into the form never reaches the process.',
+    );
+  }
+
+  // Each entry claims "a test in this file verifies this key's default". The claim is
+  // checked against this file's source because that is where it can go stale: the
+  // manifest side is already held by the two tests that read the default back.
+  const source = readRepoText('test/release/mcpb-manifest.test.ts');
+  for (const key of VERIFIED_DEFAULTS) {
+    assert.ok(
+      source.includes(`userConfigEntry('${key}').default`),
+      `VERIFIED_DEFAULTS lists ${key}, but no test in this file reads ` +
+        `userConfigEntry('${key}').default any more. The entry goes on exempting ${key} from ` +
+        'the unverified-default rule on the strength of a check that no longer exists: ' +
+        'restore the check or drop the entry.',
+    );
+  }
+});
+
 test('a field is required exactly when the server refuses to start without it', () => {
   // Settings knobs are defaulted by construction, so an empty env must load.
   assert.doesNotThrow(() => loadSettings({}), 'loadSettings must succeed on an empty environment');
@@ -538,6 +667,34 @@ test('the MCPB tool-packages default selects exactly what an unset variable sele
   );
 });
 
+/**
+ * Path inference (`core/config.ts` `resolveAuthPath`) reads "both app fields set" as a
+ * Facebook Login token. The form offers both app fields as optional, and the token field
+ * asks for an Instagram Login token, so without a pinned path an operator who fills them
+ * in "just in case" silently moves a Path-A token onto graph.facebook.com.
+ */
+test('the MCPB auth-path default pins Path A even when both app fields are filled', () => {
+  const declared = userConfigEntry('IG_AUTH_MODE').default;
+  assert.equal(typeof declared, 'string', 'user_config.IG_AUTH_MODE.default must be a string');
+  const value = declared as string;
+  const pinned = loadProfiles({ ...PROFILE_ENV, IG_AUTH_MODE: value }).profiles[0];
+  assert.equal(
+    pinned?.authPath,
+    'ig-login',
+    `manifest.json prefills IG_AUTH_MODE="${value}", but with both app fields filled the ` +
+      'server resolves a different path — the form asks for an Instagram Login token',
+  );
+  // The description's advertised values must be the ones the loader accepts.
+  const description = String(userConfigEntry('IG_AUTH_MODE').description);
+  for (const mode of ['ig-login', 'fb-login'] as const) {
+    assert.ok(
+      description.includes(`"${mode}"`),
+      `the IG_AUTH_MODE description must name "${mode}"`,
+    );
+    assert.equal(loadProfiles({ ...PROFILE_ENV, IG_AUTH_MODE: mode }).profiles[0]?.authPath, mode);
+  }
+});
+
 test('no user_config default ships unverified, and no credential ships one at all', () => {
   for (const [key, entry] of Object.entries(userConfigBlock())) {
     if (entry.default === undefined) continue;
@@ -573,6 +730,24 @@ test('the write-mode field advertises only modes the server accepts', () => {
       () => loadSettings({ IG_WRITE_MODE: mode }),
       `the IG_WRITE_MODE description advertises "${mode}", which core/settings.ts rejects — ` +
         'an operator who types it gets a server that refuses to start',
+    );
+  }
+
+  // Unquoted, too. Until 2026-09-23 this gate read only what was in quotes, so it
+  // graded the PUNCTUATION of the claim and not the claim: "or always-apply to skip
+  // the plan step" advertises a mode `loadSettings` throws on, and the form would
+  // have shipped it with the test green. A hyphenated lowercase run is the shape an
+  // invented mode wears — `always-apply`, `auto-confirm`, `dry-run` — and this
+  // field's description is a short enumeration with no such word in it today, so
+  // every one that appears has to be a real mode. A prose compound that is not
+  // (`read-only`) fails here on purpose: rephrase it, or quote the modes and widen
+  // this rule deliberately.
+  const compounds = [...description.matchAll(/\b[a-z]+(?:-[a-z]+)+\b/g)].map((m) => m[0]);
+  for (const compound of compounds) {
+    assert.doesNotThrow(
+      () => loadSettings({ IG_WRITE_MODE: compound }),
+      `the IG_WRITE_MODE description contains "${compound}", which core/settings.ts rejects as ` +
+        'a write mode — an operator reading the form cannot tell prose from an accepted value',
     );
   }
   assert.ok(

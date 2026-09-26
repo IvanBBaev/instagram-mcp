@@ -15,6 +15,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readdirSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -276,4 +277,76 @@ test('configHomeEnv sets exactly the variable its platform reads', () => {
 test('envFileIn puts the env file under the server directory', () => {
   const base = join(tmpdir(), 'instagram-mcp-config-home');
   assert.equal(envFileIn(base), join(base, SERVER_DIR, '.env'));
+});
+
+test('configHomeEnv refuses a relative directory, which would name the real config home', () => {
+  // This is the one harness mistake that does not fail the test making it. Since
+  // CC-CFG-24 the resolver IGNORES a relative config home and falls back to the
+  // platform default, so `configHomeEnv('tmp/home')` no longer points anywhere
+  // harmless — it points at the developer's own `~/.config/instagram-mcp-ai/.env`,
+  // which `writeCredentials` would merge a fake token into while the test passed.
+  for (const relative of ['tmp/home', './home', '../home', 'home']) {
+    assert.throws(
+      () => configHomeEnv(relative),
+      /absolute directory/,
+      `${JSON.stringify(relative)} must be refused`,
+    );
+  }
+
+  // A blank value is NOT refused: it is the "variable is set but empty" shape the
+  // resolver's own tests inject to prove the documented fallback, and resolving a
+  // path writes nothing.
+  assert.deepEqual(configHomeEnv('   ', 'linux'), { XDG_CONFIG_HOME: '   ' });
+});
+
+test('no test wrote a credentials store into the repository itself', () => {
+  // The canary for CC-CFG-24: before the resolver ignored relative config homes,
+  // a suite run with one left `<repo>/instagram-mcp-ai/.env` behind — a 0600 file
+  // holding this suite's fixture token, in the working tree, surviving every
+  // later run. It is caught here rather than by reading code because the leak
+  // outlives the process that made it: whichever run created it, the NEXT run
+  // fails and names the directory to delete.
+  const leaked = join(process.cwd(), SERVER_DIR);
+  assert.equal(
+    existsSync(leaked),
+    false,
+    `a credentials store was written into the repo: delete ${leaked} and find the test ` +
+      'that passes a relative configDir or config-home variable',
+  );
+});
+
+test('no test wrote a credentials store one directory down, blank-named directories included (CC-CFG-69)', () => {
+  // The canary above looks at `<repo>/instagram-mcp-ai` only. A HOME, config dir
+  // or home-derived default that is blank or relative puts the store one level
+  // deeper — `<repo>/   /instagram-mcp-ai/.env` for HOME="   " and a `~` config
+  // dir, a directory `ls` prints as nothing. Every top-level entry is checked for
+  // a store; `existsSync` is used so a leaked file is never read, only reported.
+  const leaked = readdirSync(process.cwd())
+    .map((entry) => join(process.cwd(), entry, SERVER_DIR, '.env'))
+    .filter((file) => existsSync(file));
+  assert.deepEqual(
+    leaked.map((file) => JSON.stringify(file)),
+    [],
+    'a credentials store was written under the repo (the names are quoted because a blank ' +
+      'directory name prints as nothing): delete the directory holding it and find the test ' +
+      'that resolved a config home against the cwd',
+  );
+});
+
+test('no test wrote a credentials store one directory down, blank-named directories included (CC-CFG-69)', () => {
+  // The canary above looks at `<repo>/instagram-mcp-ai` only. A HOME, config dir
+  // or home-derived default that is blank or relative puts the store one level
+  // deeper — `<repo>/   /instagram-mcp-ai/.env` for HOME="   " and a `~` config
+  // dir, a directory `ls` prints as nothing. Every top-level entry is checked for
+  // a store; `existsSync` is used so a leaked file is never read, only reported.
+  const leaked = readdirSync(process.cwd())
+    .map((entry) => join(process.cwd(), entry, SERVER_DIR, '.env'))
+    .filter((file) => existsSync(file));
+  assert.deepEqual(
+    leaked.map((file) => JSON.stringify(file)),
+    [],
+    'a credentials store was written under the repo (the names are quoted because a blank ' +
+      'directory name prints as nothing): delete the directory holding it and find the test ' +
+      'that resolved a config home against the cwd',
+  );
 });

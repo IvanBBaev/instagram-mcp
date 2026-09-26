@@ -37,6 +37,11 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm run build
+      # A glob that matches nothing is not an error: `npm test` alone would exit 0
+      # having run zero tests. This step asserts the compiled corpus exists and that
+      # the runner's glob reaches every file in it, so a green suite here means a
+      # suite that actually ran. Same guard the `check` chain runs locally.
+      - run: npm run test:corpus
       - run: npm test
 
   # Coverage is a separate single job rather than a step on every matrix leg:
@@ -57,6 +62,11 @@ jobs:
       # run first; tsconfig's `sourceMap: true` is what lets c8 attribute that
       # coverage back to the original src/**/*.ts files.
       - run: npm run build
+      # The same floor, and it earns its place twice here: c8 used to measure only
+      # the files a run loaded, so an empty corpus cleared all four 100 % thresholds
+      # on zero files. `--all` in the `coverage` script closed that channel; this
+      # step names the cause instead of leaving a wall of zeros to be read.
+      - run: npm run test:corpus
       # `coverage` carries its own `--check-coverage` thresholds, so this step is
       # a hard gate on a coverage regression, not just a report upload. Same
       # invocation `npm run check` uses locally — one definition, no drift.

@@ -20,11 +20,16 @@ before release.
 | **Rename or remove** a tool | **major** (breaking) | Callers referencing the old name break. |
 | **Remove or rename a required input**, or **add a new required input** | **major** (breaking) | Existing valid calls stop validating. Inputs are `.strict()` — unknown args are already rejected, so tightening is breaking. |
 | **Narrow** an input (drop an accepted enum value, tighten a bound) | **major** (breaking) | Previously valid calls would now be refused. |
-| Change a tool's **`kind`/error contract** or an output field's meaning | **major** (breaking) | Clients branch on `kind` and read structured output. |
+| Change a tool's **`kind`/error contract** or an output field's meaning | **major** (breaking) | Clients branch on `kind` and read structured output. The error contract is the text line `Instagram error (<kind>): <message>[ (code N[, subcode M])]` on an `isError` result with no `structuredContent` (CC-DATA-61, [tools.md](tools.md#structured-output)). |
 | **Add a new tool** or a new package | **minor** (additive) | Existing calls unaffected. |
 | **Add an optional input** (with a safe default) | **minor** (additive) | Omitting it preserves prior behavior. |
-| **Widen** an open enum / add an output field | **minor** (additive) | Output schemas are non-strict passthrough — additive Meta fields never break structured output. |
+| **Widen** an open enum / add an output field | **minor** (additive) | Additive Meta fields never break structured output — because the api layer normalises field by field, so an unknown field is dropped before the output object exists. Not because output schemas are passthrough: a top-level `.passthrough()` is discarded when the raw shape is handed to the SDK (CC-DATA-7). |
 | Bug fix, doc, perf, internal refactor with no surface change | **patch** | No manifest diff. |
+
+The text block of a success result is a *rendering* of `structuredContent`, not a
+second contract: its exact bytes (spacing, which characters are written as `\uXXXX`
+escapes — CC-DATA-102) may change in a patch release as long as it still parses to the
+same value. Clients that need the data read `structuredContent` or parse the text.
 
 ### Deprecation via dual registration
 
@@ -41,7 +46,7 @@ A tool is **never** renamed or removed in a single step. Deprecation runs one fu
 The same pattern covers input renames (accept both the old and new field for one
 minor cycle, old marked deprecated) and Graph-version moves — a `v25.0 → v26`
 upgrade is a deliberate, changelog-reviewed PR that bumps one constant in
-`core/settings.ts` and re-runs the manifest snapshot ([operations.md](operations.md)
+`core/host.ts` and re-runs the manifest snapshot ([operations.md](operations.md)
 §5). Meta-driven removals that are outside our control (e.g. a metric Meta retires,
 like the `online_followers` watch-item) degrade to an explicit "metric no longer
 available" error rather than a silent change, and are documented in the upgrade
@@ -62,14 +67,15 @@ capability; nothing in a lower tier is taken away. The two axes that matter are 
   comment moderation (list/reply/create/hide/unhide), and **publishing** —
   provided the media is at a **publicly reachable URL** (Meta fetches it;
   [security.md](security.md) §3). Reads and previews are unconditional.
-- **Degrades:** token expiry is tracked only from exchange metadata; a
-  hand-pasted token reports expiry **unknown** honestly (Path A has no
-  `debug_token`, so `doctor`/`token_status` cannot introspect validity — the
-  reachability check is the only validity signal). `delete_comment` still needs
+- **Degrades:** Path A has no `debug_token`, so token expiry is only the
+  `IG_TOKEN_EXPIRES_AT` record `login`/`refresh` wrote (**unknown** without one),
+  and `doctor`/`token_status` cannot introspect validity — the reachability check
+  is the only validity signal. `delete_comment` still needs
   `IG_ALLOW_DESTRUCTIVE=true` **and** `apply:true`.
 - **Unavailable:** the `discovery` package (Path-B-only, capability-filtered out);
   `appsecret_proof` (not supported on `graph.instagram.com`, by design);
-  pull-based `@mention` lookup and `total_*` aggregate metrics (Path-B-only);
+  `total_*` aggregate metrics (Path-B-only); pull-based `@mention` lookup is
+  Path-B-only on Meta's side and has no tool on any path;
   `debug_token` introspection.
 
 ### Tier 2 — Token + app credentials (`ig-login`, refreshable)
@@ -110,27 +116,30 @@ Tier 1 **plus** `IG_APP_ID` / `IG_APP_SECRET`.
 | Account / media / insights reads | Yes | Yes | Yes |
 | Comment moderation | Yes | Yes | Yes |
 | Publishing (public media URL) | Yes | Yes | Yes |
-| Token refresh | No (needs re-`login`) | **Yes** (no secret; token ≥ 24 h) | **Yes** (needs app id + secret) |
+| Token refresh | **Yes** (no secret; token ≥ 24 h) | **Yes** (no secret; token ≥ 24 h) | **Yes** (needs app id + secret) |
 | `debug_token` introspection | No | No | **Yes** |
 | `appsecret_proof` hardening | n/a (unsupported on Path A) | n/a | **Yes** |
-| Pull `@mention` / `total_*` metrics | No | No | **Yes** |
+| `total_*` metrics | No | No | **Yes** |
 | Discovery (hashtag / business) | No | No | **Yes** (+ package enabled + PCA) |
 
 ## 3. Token auto-refresh behavior — **[verify — live]**
 
-The design intent (Path A) is transparent auto-refresh when a token is older than
-`IG_REFRESH_AFTER_DAYS` (default 45) at first use of a session. In the current
-implementation this is **gated by the persistence trap** (D2,
-[auth.md](auth.md) §3): a token injected via the MCP client's `env` is **static**
-and cannot be rotated in place, so `instagram_token_status` **warns** rather than
-auto-refreshing. The **`refresh` CLI is the sole writer** — it exchanges and
-atomically persists the new token to the **XDG env file** (`chmod 0600`). For
-hands-off rotation, manage the token through `login`/`refresh` against the XDG file
-and keep it out of the client `env`.
+The server does **not** auto-refresh: nothing calls `refresh_access_token` on its
+own, and `IG_REFRESH_AFTER_DAYS` (default 45) is only the days-left threshold at
+which `instagram_token_status` and `doctor` report `expiring_soon`. The original
+design intent (transparent Path A refresh at first use of a session) is **gated by
+the persistence trap** (D2, [auth.md](auth.md) §3): a token injected via the MCP
+client's `env` is **static** and cannot be rotated in place. The **`refresh` CLI
+is the sole writer** — it exchanges and atomically persists the new token (and its
+expiry) to the **XDG env file** (`chmod 0600`). To rotate, run `refresh` against
+the XDG file and keep the token out of the client `env`.
 
-Whether transparent auto-refresh is enabled for XDG-file tokens, and whether Meta
-invalidates the old token on refresh, is **pending live-credential validation**
-and marked **[verify — live]** here and in the corner-case register (CC-AUTH-4 /
-CC-AUTH-14). Until verified, treat rotation as **operator-driven** via `refresh`,
-and rely on the `token_status` warning (< 10 days remaining on Path A) as the
-prompt to run it.
+Whether Meta invalidates the old token on refresh is **pending live-credential
+validation** and marked **[verify — live]** here and in the corner-case register
+(CC-AUTH-4 / CC-AUTH-14). Rotation is **operator-driven** via `refresh`, so watch
+the expiry: on Path A `token_status` reports the expiry `login`/`refresh`
+recorded (`IG_TOKEN_EXPIRES_AT`), or **unknown** without a record, and its warning
+(≤ `IG_REFRESH_AFTER_DAYS` days left) fires on that record; a bare record set by
+hand (no token fingerprint) is reported with an "unverified" warning even while
+valid; on Path B
+`debug_token` supplies the expiry.

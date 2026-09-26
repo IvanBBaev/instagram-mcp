@@ -17,7 +17,7 @@
  * but `id` is optional), CC-DATA-4 (`fetchAll` cap / off-by-one). A deleted
  * comment / media surfaces as a propagated InstagramError (CC-DATA-5).
  */
-import type { IgRequestFn } from '../core/types.js';
+import { InstagramError, type IgRequestFn } from '../core/types.js';
 import { fetchPagedEdge, type PagedResult, type PageParams } from './media.js';
 
 // The cursor walk is shared with `api/media.ts` — one loop, one set of
@@ -54,6 +54,12 @@ export interface Comment {
   like_count?: number;
   /** Threaded replies, flattened from Graph's inline `replies` edge. */
   replies?: Comment[];
+  /**
+   * True when the inline `replies` edge announced a further page. That edge is
+   * paged like any other and nothing here follows it, so `replies` then holds
+   * only the first page (CC-COM-15). Absent when the edge said nothing more.
+   */
+  repliesTruncated?: true;
 }
 
 /** A single comment with moderation state and parent/media context. */
@@ -100,7 +106,7 @@ interface RawComment {
   username?: string;
   timestamp?: string;
   like_count?: number;
-  replies?: { data?: RawComment[] };
+  replies?: { data?: RawComment[]; paging?: { next?: unknown } };
 }
 
 interface RawCommentDetail extends RawComment {
@@ -115,7 +121,9 @@ interface RawCommentDetail extends RawComment {
  * Three Graph answers stay three domain answers: no `replies` key means "not
  * disclosed" (CC-DATA-2) and stays absent; `{ data: [] }` means "read, and there
  * are none" and becomes `[]`; `{}` is the first case in the second's clothes and
- * must not leak the envelope into a field typed as an array.
+ * must not leak the envelope into a field typed as an array. The body is cast,
+ * not validated, so a `data` that is not an array is treated like `{}` rather
+ * than handed to `.map`.
  *
  * Equivalent-mutant note: routing the recursive call through
  * {@link normalizeCommentDetail} changes NO output — the two bodies are
@@ -124,10 +132,31 @@ interface RawCommentDetail extends RawComment {
  * assertion over the returned value can separate the two.
  */
 function normalizeComment(raw: RawComment): Comment {
+  // The body is cast, so a `data` entry can be `null`, and destructuring it threw
+  // a TypeError that failed the whole page as an `upstream` error. A non-object
+  // entry is handed through untouched: it has no usable id, so the tool layer
+  // leaves it out and counts it (CC-COM-16) instead of this layer hiding it.
+  if (raw === null || typeof raw !== 'object') return raw;
   const { replies, ...rest } = raw;
   const comment: Comment = { ...rest };
-  if (replies?.data) comment.replies = replies.data.map(normalizeComment);
+  if (Array.isArray(replies?.data)) comment.replies = replies.data.map(normalizeComment);
+  if (repliesContinue(replies)) comment.repliesTruncated = true;
   return comment;
+}
+
+/**
+ * Whether Graph's inline `replies` edge says more replies exist than it sent.
+ *
+ * Field expansion pages a nested edge exactly as it pages a top-level one, and
+ * `paging.next` is present only while a further page exists — `cursors` alone
+ * are sent on the last page too, so they prove nothing. Before this, the
+ * envelope was dropped whole and a thread cut at its first page read as the
+ * complete conversation (CC-COM-15). The URL itself is never republished: it
+ * carries the access token, and no tool can follow it.
+ */
+function repliesContinue(replies: RawComment['replies']): boolean {
+  const next = replies?.paging?.next;
+  return typeof next === 'string' && next !== '';
 }
 
 /**
@@ -143,9 +172,13 @@ function normalizeComment(raw: RawComment): Comment {
  *
  * The same equivalence covers every other place the two normalizers can be
  * swapped: delegating this whole body to {@link normalizeComment}, mapping the
- * reply array through this function instead, and calling {@link normalizeComment}
- * at the `getComment` call site below. All four produce byte-identical output for
- * every possible payload; they differ only in which types the seam declares.
+ * reply array through this function instead, calling {@link normalizeComment} at
+ * the `getComment` call site below, and handing THIS function to `fetchPagedEdge`
+ * as the projection `listComments` walks its pages with. All five produce
+ * byte-identical output for every possible payload, and all five compile —
+ * `RawCommentDetail` only adds optional fields to `RawComment`, and
+ * `CommentDetail` only adds optional fields to `Comment`, so the swap type-checks
+ * in both directions. They differ only in which types the seam declares.
  *
  * The second function earns its place by keeping the types honest at the seam:
  * `replies` is `Comment[]`, because the reply field set never asks for
@@ -157,7 +190,8 @@ function normalizeComment(raw: RawComment): Comment {
 function normalizeCommentDetail(raw: RawCommentDetail): CommentDetail {
   const { replies, ...rest } = raw;
   const detail: CommentDetail = { ...rest };
-  if (replies?.data) detail.replies = replies.data.map(normalizeComment);
+  if (Array.isArray(replies?.data)) detail.replies = replies.data.map(normalizeComment);
+  if (repliesContinue(replies)) detail.repliesTruncated = true;
   return detail;
 }
 
@@ -180,7 +214,7 @@ export async function listComments(
     req,
     (after) => ({
       method: 'GET',
-      path: `/${params.mediaId}/comments`,
+      path: `/${encodeURIComponent(params.mediaId)}/comments`,
       params: { fields: COMMENT_FIELDS, limit: params.limit, after },
     }),
     params,
@@ -192,17 +226,35 @@ export async function listComments(
  * Fetch a single comment by id, with moderation state, parent/media context,
  * and inline replies. A deleted comment is a Graph error that propagates as an
  * {@link import('../core/types.js').InstagramError} (CC-DATA-5).
+ *
+ * A body that is not an object at all (JSON `null`, a number, a text body, a
+ * list) is no comment object, and is refused as a malformed answer — the same
+ * `upstream` refusal `getMedia` gives (CC-DATA-83). `null` used to be
+ * destructured into a raw TypeError whose engine text reached the caller, and a
+ * scalar or a list was spread into a record with no id (a list even into
+ * `{ "0": … }`).
+ *
+ * The guard sits here, not in {@link normalizeCommentDetail}, on purpose: that
+ * normalizer is documented as interchangeable with {@link normalizeComment},
+ * which must hand a non-object reply entry through for the tool layer to count
+ * (CC-COM-16). Refusing inside it would make the swap observable and turn one
+ * odd reply into a failed read.
  */
 export async function getComment(
   req: IgRequestFn,
   params: { commentId: string },
 ): Promise<CommentDetail> {
-  const raw = await req<RawCommentDetail>({
+  const raw = await req<unknown>({
     method: 'GET',
-    path: `/${params.commentId}`,
+    path: `/${encodeURIComponent(params.commentId)}`,
     params: { fields: COMMENT_DETAIL_FIELDS },
   });
-  return normalizeCommentDetail(raw);
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new InstagramError('Instagram returned no comment object for this id. Retry later.', {
+      kind: 'upstream',
+    });
+  }
+  return normalizeCommentDetail(raw as RawCommentDetail);
 }
 
 export interface ListTaggedMediaParams extends PageParams {
@@ -222,7 +274,7 @@ export async function listTaggedMedia(
     req,
     (after) => ({
       method: 'GET',
-      path: `/${params.igId}/tags`,
+      path: `/${encodeURIComponent(params.igId)}/tags`,
       params: { fields: TAGGED_MEDIA_FIELDS, limit: params.limit, after },
     }),
     params,
@@ -239,7 +291,7 @@ export async function replyToComment(
 ): Promise<CommentIdResult> {
   return req<CommentIdResult>({
     method: 'POST',
-    path: `/${params.commentId}/replies`,
+    path: `/${encodeURIComponent(params.commentId)}/replies`,
     params: { message: params.message },
   });
 }
@@ -251,7 +303,7 @@ export async function createComment(
 ): Promise<CommentIdResult> {
   return req<CommentIdResult>({
     method: 'POST',
-    path: `/${params.mediaId}/comments`,
+    path: `/${encodeURIComponent(params.mediaId)}/comments`,
     params: { message: params.message },
   });
 }
@@ -263,7 +315,7 @@ export async function setCommentHidden(
 ): Promise<CommentWriteResult> {
   return req<CommentWriteResult>({
     method: 'POST',
-    path: `/${params.commentId}`,
+    path: `/${encodeURIComponent(params.commentId)}`,
     params: { hide: params.hide },
   });
 }
@@ -275,7 +327,7 @@ export async function deleteComment(
 ): Promise<CommentWriteResult> {
   return req<CommentWriteResult>({
     method: 'DELETE',
-    path: `/${params.commentId}`,
+    path: `/${encodeURIComponent(params.commentId)}`,
   });
 }
 
@@ -286,7 +338,7 @@ export async function setCommentsEnabled(
 ): Promise<CommentWriteResult> {
   return req<CommentWriteResult>({
     method: 'POST',
-    path: `/${params.mediaId}`,
+    path: `/${encodeURIComponent(params.mediaId)}`,
     params: { comment_enabled: params.enabled },
   });
 }

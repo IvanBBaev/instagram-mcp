@@ -73,8 +73,13 @@ const CASES: LogCase[] = [
   },
   {
     name: 'instagram_list_linked_accounts',
+    args: { account: 'brand', after: 'CURSOR' },
+    expect: { account: 'brand', hasCursor: true },
+  },
+  {
+    name: 'instagram_list_linked_accounts',
     args: { account: 'brand' },
-    expect: { account: 'brand' },
+    expect: { account: 'brand', hasCursor: false },
   },
   {
     name: 'instagram_token_status',

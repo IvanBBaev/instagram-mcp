@@ -1,10 +1,11 @@
 # instagram-mcp-ai — Instagram MCP Server
 
 <!--
-  Badge note: the npm-version, downloads, coverage (Codecov) and Snyk badges go
-  live only once the package is published to npm and Codecov is enabled for the
-  repo. Until then they render "not found" / "invalid" — that is expected and
-  intentional (the block matches the published sibling servicenow-mcp-ai).
+  Badge note: the npm-version, downloads, node and Snyk badges resolve as of the
+  2026-08-25 publish of 0.7.0. The coverage badge still renders "not found" —
+  Codecov is not enabled for this repo (it needs a token; see workplan T-R6) —
+  and downloads will read 0 until the package has a month of history. That is
+  expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
 | [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-28-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
@@ -22,12 +23,16 @@ no scraping, no `instagram-private-api`-style clients, no cookie/session reuse. 
 ingests media **by public HTTPS URL only**. Credentials live in a local env file
 and can be obtained/refreshed with a built-in CLI.
 
-> **Status: implementation complete and tested — not yet published to npm.** The
-> read path (account, media, insights), the write path (content publishing,
-> comment moderation) and discovery are all implemented, unit-tested and CI-green
-> across Linux/macOS/Windows on Node 22 and 24. The published npm package and the
-> live badges follow once `npm publish` runs. The documents under [`docs/`](docs/)
-> are the source of truth for the design.
+> **Status: published to npm as `instagram-mcp-ai@0.7.0` (2026-08-25).** The read
+> path (account, media, insights), the write path (content publishing, comment
+> moderation) and discovery are all implemented, unit-tested and CI-green across
+> Linux/macOS/Windows on Node 22 and 24. **No tool has been exercised against a
+> live Instagram account by CI** — the suite is offline by construction, so what
+> is proven is behaviour against recorded Graph shapes, not against Meta's live
+> responses. That, not missing functionality, is what separates `0.7.0` from
+> `1.0.0`. The MCP-registry entry, the MCPB bundle and the plugin-marketplace
+> listing are separate submissions and are not live yet. The documents under
+> [`docs/`](docs/) are the source of truth for the design.
 
 **Contents:** [What it does](#what-it-does) · [Requirements](#requirements) ·
 [Quickstart](#quickstart) · [Setup](#setup) ·
@@ -135,8 +140,11 @@ Two client-specific install channels wrap the same server: a **Claude Desktop
 extension** ([docs/mcpb-install.md](docs/mcpb-install.md)) and a **Claude Code
 plugin** ([docs/plugin-install.md](docs/plugin-install.md)). Both prompt for the
 access token at install time and keep it in the OS keychain rather than in a
-settings file. **Neither has shipped yet** — both launch the server through the
-npm package, which is not published; each doc states its own status.
+settings file. The extension runs the server bundled inside the `.mcpb`; the
+plugin runs the npm package at the version its manifest pins, which resolves only
+once that version is published. **Neither channel is listed yet**: no `.mcpb`
+bundle has been released and the plugin is in no marketplace beyond this repo's own
+catalog. Each doc states its own status.
 
 ## Configure credentials
 
@@ -172,7 +180,8 @@ IG_APP_ID=... IG_APP_SECRET=... npx instagram-mcp-ai login --path fb
 It opens the browser, captures the loopback redirect, exchanges the code for a
 long-lived (~60-day) token and writes it to the env file (chmod `0600` on POSIX).
 No token or secret is ever printed. Run `npx instagram-mcp-ai login --help` for
-all options (`--profile`, `--account-id`, `--scopes`, `--redirect-uri`). See
+all options (`--profile`, `--app-id`, `--app-secret`, `--account-id`, `--scopes`,
+`--redirect-uri`). See
 [docs/auth.md](docs/auth.md) for the full token model, scopes and app setup.
 
 ## Run / debug
@@ -187,6 +196,11 @@ transport. All connection settings come from environment variables / the env fil
 | `instagram-mcp-ai login --path <ig\|fb>` | One-time browser OAuth to obtain and persist a long-lived token (see above). |
 | `instagram-mcp-ai doctor` | Read-only health check for the active profile: config, token/auth, and one reachability GET. Exit `0` healthy, non-zero on failure. |
 | `instagram-mcp-ai refresh` | Refresh the active profile's long-lived token and write it back (`ig_refresh_token` on Path A, `fb_exchange_token` on Path B). |
+| `instagram-mcp-ai --help` | Prints this usage to stderr and exits `0`. |
+
+Anything else is a usage error: an unknown subcommand (`docter`), or an argument
+after `doctor` / `refresh` (they take none), is refused on stderr with exit `2`
+before any configuration is read — it never starts the server by accident.
 
 - **stdio** (default) — for local MCP clients. `stdout` is the protocol channel;
   all diagnostics go to `stderr`.
@@ -194,6 +208,10 @@ transport. All connection settings come from environment variables / the env fil
   (`127.0.0.1:3000` by default via `IG_HTTP_HOST` / `IG_PORT`); set
   `IG_HTTP_TOKEN` to require an `Authorization: Bearer <token>` header
   (constant-time compared).
+  **Leaving `IG_HTTP_TOKEN` unset means no authentication at all** — every local
+  process can call every tool, writes included. It is allowed on loopback and
+  logged at error level on startup; binding a non-loopback address without a token
+  is refused outright, and a blank token is refused either way.
 
 ## Write safety
 
@@ -256,7 +274,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_list_linked_accounts` | account | fb-login | Read | Enumerate the Facebook Pages this token can act on and the Instagram business account linked to each (GET /me/accounts). |
 | `instagram_token_status` | account | both | Read | Report the active credential: auth path (A = ig-login / B = fb-login), whether a token is configured, the resolved account ID, and — on Path B, via debug_token — validity, granted scopes, absolute expiry and days-left (with a refresh warning as the threshold nears). |
 | `instagram_get_media` | media | both | Read | Fetch a single media object by id, including its carousel children (album items) under `children`. |
-| `instagram_list_media` | media | both | Read | List the operated account's own media (feed posts, reels, stories, albums), newest first, cursor-paginated. |
+| `instagram_list_media` | media | both | Read | List the operated account's own media (feed posts, reels, albums), newest first, cursor-paginated. |
 | `instagram_set_comments_enabled` | media | both | Write | Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true\|false). |
 | `instagram_get_account_insights` | insights | both | Read | Account-level insights for the operated Instagram professional account (GET /{ig-id}/insights). |
 | `instagram_get_audience_demographics` | insights | both | Read | Follower / engaged-audience demographics for the operated account (GET /{ig-id}/insights with metric_type=total_value). |
@@ -271,9 +289,9 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_publish_media` | publishing | both | Write | Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. |
 | `instagram_create_comment` | comments | both | Write | Post a new top-level comment on a media object (POST /{media-id}/comments). |
 | `instagram_delete_comment` | comments | both | Write | Permanently delete a comment (DELETE /{comment-id}). |
-| `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies. |
+| `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies (repliesTruncated=true when Instagram returned only the first page of them). |
 | `instagram_hide_comment` | comments | both | Write | Hide a comment (POST /{comment-id}?hide=true) — reversible moderation, preferred over delete. |
-| `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies`. |
+| `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies). |
 | `instagram_list_tagged_media` | comments | both | Read | List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated. |
 | `instagram_reply_to_comment` | comments | both | Write | Post a threaded reply under an existing comment (POST /{comment-id}/replies). |
 | `instagram_unhide_comment` | comments | both | Write | Unhide a previously hidden comment (POST /{comment-id}?hide=false). |
@@ -288,18 +306,20 @@ All settings are environment variables with the uniform `IG_` prefix; the
 canonical copy with inline comments is [`.env.example`](.env.example), and the
 table below is generated from it — do not edit it by hand; run
 `npm run gen:readme`. Real environment variables always take precedence over the
-file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
-`IG_ALLOW_DESTRUCTIVE=true` for deletes) to perform them.
+file. Writes preview by default; a write is performed when the call passes
+`apply: true`, or when `IG_WRITE_MODE=apply` and the call does not pass
+`apply: false`. Deletes additionally need `IG_ALLOW_DESTRUCTIVE=true`, and a
+client that supports MCP elicitation is asked to confirm each applied write.
 
 <!-- BEGIN AUTOGEN:env -->
 | Variable | Default | Description |
 | --- | --- | --- |
 | `IG_AUTH_MODE` |  | ig-login \| fb-login; alias IG_AUTH_PATH (inferred fb-login when IG_APP_ID+IG_APP_SECRET are set) |
 | `IG_ACCESS_TOKEN` |  | The account's long-lived token, whichever path (secret) |
-| `IG_ACCOUNT_ID` |  | IG professional-account ID (skip a lookup / disambiguate) |
+| `IG_ACCOUNT_ID` |  | IG professional-account ID; unset, calls address `me` (no lookup) — set it on Path B |
 | `IG_APP_ID` |  | Meta app id (token exchange/refresh, appsecret_proof, debug_token) |
 | `IG_APP_SECRET` |  | Meta app secret (secret) |
-| `IG_ENV_FILE` |  | Env-file location override (default: XDG path) |
+| `IG_ENV_FILE` |  | Env-file location override (default: XDG path); read alone, and written by login/refresh; must be absolute (a leading ~ is the home directory) |
 | `IG_ACTIVE_PROFILE` | `default` | Profile used when a tool call passes no `account` |
 | `IG_TOOL_PACKAGES` | `core` | core \| reader \| publisher \| all, or an explicit list |
 | `IG_PACKAGES_DENY` |  | Packages to remove after profile resolution |
@@ -313,8 +333,8 @@ file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
 | `IG_HTTP_TOKEN` |  | HTTP bearer token (secret; constant-time compare) |
 | `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore |
 | `IG_MAX_ITEMS` | `200` | fetchAll hard item cap |
-| `IG_REFRESH_AFTER_DAYS` | `45` | Path-A auto-refresh threshold |
-| `IG_TIMEOUT_MS` | `30000` | Per-request timeout for Graph calls |
+| `IG_REFRESH_AFTER_DAYS` | `45` | Days-left threshold for the expiring_soon warning (token_status, doctor); no auto-refresh |
+| `IG_TIMEOUT_MS` | `30000` | Timeout per Graph HTTP attempt, not per call (retries and backoff are extra) |
 | `IG_LOG_LEVEL` | `info` | debug \| info \| warn \| error |
 | `IG_PRETTY_JSON` | `false` | Pretty-print JSON results |
 <!-- END AUTOGEN:env -->
@@ -323,7 +343,7 @@ file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
 
 | Item | Value |
 | ---- | ----- |
-| npm package | [`instagram-mcp-ai`](https://www.npmjs.com/package/instagram-mcp-ai) *(name reserved; not yet published)* |
+| npm package | [`instagram-mcp-ai`](https://www.npmjs.com/package/instagram-mcp-ai) *(published; latest `0.7.0`)* |
 | GitHub repository | [`IvanBBaev/instagram-mcp`](https://github.com/IvanBBaev/instagram-mcp) |
 | MCP registry name | `io.github.IvanBBaev/instagram-mcp-ai` |
 | Language / runtime | TypeScript (ESM), Node.js ≥ 22 |
@@ -377,7 +397,7 @@ file. Writes preview by default; set `IG_WRITE_MODE=apply` (and
 | [docs/security.md](docs/security.md) | Token storage, redaction, SSRF policy, write safety, supply chain |
 | [docs/operations.md](docs/operations.md) | Rate limits, retry/backoff, pagination, error taxonomy, versioning |
 | [docs/stability.md](docs/stability.md) | Stability contract and versioning policy |
-| [docs/corner-cases.md](docs/corner-cases.md) | Corner-case catalog (`CC-*` IDs) with expected behavior and live-probe register |
+| [docs/corner-cases.md](docs/corner-cases.md) | Corner-case catalog (`CC-*` IDs) with expected behavior, the live-probe register (§9) and the open owner-decision register (§10) |
 | [docs/roadmap.md](docs/roadmap.md) | Implementation roadmap: design gates D1–D3, phases M0–M6 with exit gates |
 | [docs/workplan.md](docs/workplan.md) | Parallel work plan: agent-sized tasks, file ownership, dependency graph |
 | [docs/release-checklist.md](docs/release-checklist.md) | Pre-publish release checklist |

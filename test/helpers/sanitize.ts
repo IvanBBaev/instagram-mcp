@@ -67,8 +67,41 @@ export type FieldRule =
   | 'recurse'
   | 'drop';
 
-/** Synthetic IDs are 17 digits, `178`-prefixed like real IG IDs but obviously fake. */
-export const SYNTHETIC_ID_RE = /^178\d{14}$/;
+/**
+ * Prefix of every mapped ID — and the whole of what makes one recognisable.
+ *
+ * `178` on its own is what a REAL Instagram object ID starts with; the shape was
+ * chosen so a fixture reads plausibly. That means `178` cannot also be the marker
+ * saying “this one is invented”, and while the pattern below was `/^178\d{14}$/`
+ * it was not: measured 2026-09-23, a committed fixture carrying the real account
+ * ID `17895695668004550` passed every gate in the suite, and this file’s own
+ * literal for a real ID (`adversarialPayload` in the release test) matched too.
+ *
+ * The run of zeros is the marker. Unlike `example.invalid` it is not RESERVED —
+ * Graph has no reserved object-ID range, so nothing here can be proved the way the
+ * URL host can — but an allocator does not issue an ID whose first nine
+ * significant digits are absent. The negative half of the pin in
+ * `test/release/fixtures.test.ts` holds this pattern to rejecting the real IDs the
+ * rest of the suite uses as real.
+ */
+const SYNTHETIC_ID_PREFIX = `178${'0'.repeat(9)}`;
+
+/**
+ * Counter room the prefix leaves inside a 17-digit ID: 99999 distinct IDs per
+ * sanitizer. Overflowing it is loud rather than silent — the 18-digit result
+ * fails {@link SYNTHETIC_ID_RE}, and the corpus gate tests every ID-shaped string
+ * against exactly that pattern.
+ */
+const SYNTHETIC_ID_COUNTER_DIGITS = 17 - SYNTHETIC_ID_PREFIX.length;
+
+/**
+ * Synthetic IDs are 17 digits: {@link SYNTHETIC_ID_PREFIX} and a zero-padded
+ * counter. Built from the same two constants the minter uses, so the shape this
+ * asserts and the shape it asserts ABOUT cannot drift apart.
+ */
+export const SYNTHETIC_ID_RE = new RegExp(
+  `^${SYNTHETIC_ID_PREFIX}\\d{${SYNTHETIC_ID_COUNTER_DIGITS}}$`,
+);
 
 /** Host used for every replaced URL: `.invalid` is reserved (RFC 2606) and never resolves. */
 export const SYNTHETIC_URL_HOST = 'example.invalid';
@@ -79,8 +112,12 @@ export const SYNTHETIC_USERNAME_PREFIX = 'example_account_';
 /** Prefix of every replaced opaque blob (cursors, trace IDs). */
 export const SYNTHETIC_OPAQUE_PREFIX = 'SYNTHETIC_OPAQUE_';
 
-/** Graph hosts a `paging` URL may point at — anything else is dropped. */
-const ALLOWED_URL_HOSTS: ReadonlySet<string> = new Set([
+/**
+ * Graph hosts a `paging` URL may point at — anything else is dropped. Exported so
+ * the corpus gate judges a committed URL against the same two names the sanitizer
+ * rebuilt it from, rather than against a prefix test of its own.
+ */
+export const ALLOWED_URL_HOSTS: ReadonlySet<string> = new Set([
   'graph.instagram.com',
   'graph.facebook.com',
 ]);
@@ -311,7 +348,10 @@ export function createSanitizer(opts: SanitizerOptions = {}): Sanitizer {
   const mapId = (raw: string): string => {
     const existing = ids.get(raw);
     if (existing !== undefined) return existing;
-    const synthetic = `178${String(ids.size + 1).padStart(14, '0')}`;
+    const synthetic = `${SYNTHETIC_ID_PREFIX}${String(ids.size + 1).padStart(
+      SYNTHETIC_ID_COUNTER_DIGITS,
+      '0',
+    )}`;
     ids.set(raw, synthetic);
     return synthetic;
   };

@@ -7,7 +7,7 @@
  *   1. `package.json`            — npm (source of truth)
  *   2. `server.json`             — MCP registry (T-R5)
  *   3. `manifest.json`           — MCPB bundle for Claude Desktop (T-R6)
- *   4. `.claude-plugin/plugin.json` — Claude Code plugin (M5)
+ *   4. `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` — Claude Code plugin (M5)
  *
  * This test reads all four from the repo root and asserts they agree on both
  * version and package/server identity. The Claude Code plugin additionally pins
@@ -70,7 +70,7 @@ function findRepoRoot(): string {
 const repoRoot = findRepoRoot();
 
 /** The Claude Code plugin manifest, relative to the repo root. */
-const PLUGIN_MANIFEST = join('.claude-plugin', 'plugin.json');
+const PLUGIN_MANIFEST = join('plugins', 'instagram-mcp-ai', '.claude-plugin', 'plugin.json');
 /** The Claude Code marketplace catalog, relative to the repo root. */
 const MARKETPLACE_MANIFEST = join('.claude-plugin', 'marketplace.json');
 /**
@@ -88,7 +88,7 @@ function readRepoJson(file: string): Record<string, unknown> {
   if (!existsSync(path)) {
     throw new Error(
       `${file} not found at ${path} — it is one of the four release channels ` +
-        `(package.json, server.json, manifest.json, .claude-plugin/plugin.json) ` +
+        `(package.json, server.json, manifest.json, ${PLUGIN_MANIFEST}) ` +
         `and MUST exist for the release lane to be complete.`,
     );
   }
@@ -142,18 +142,33 @@ test('server.json carries the registry name and matches the source-of-truth vers
   assert.equal(server.name, REGISTRY_NAME, 'server.json.name must be the MCP-registry name');
   assert.equal(server.version, pkg.version, 'server.json.version must equal package.json.version');
 
-  // The registry schema repeats the version inside packages[]; keep it in lockstep.
+  // The registry schema repeats the version inside packages[], and keeping the two in
+  // lockstep used to be three nested `if`s: a non-array, an empty array, and an entry
+  // without a `version` key each skipped the assertion in silence. Deleting the single
+  // line `"version": "0.7.0"` from server.json is a plausible edit — the field is
+  // optional in the registry schema and duplicates the top-level one — and it left this
+  // test green while the published registry entry stopped pinning a version at all.
+  // Each of those three skips is now a decision the gate states out loud.
   const packages = server.packages;
-  if (Array.isArray(packages)) {
-    for (const entry of packages) {
-      if (isRecord(entry) && 'version' in entry) {
-        assert.equal(
-          entry.version,
-          pkg.version,
-          'server.json packages[].version must equal package.json.version',
-        );
-      }
-    }
+  assert.ok(
+    Array.isArray(packages) && packages.length > 0,
+    'server.json must list at least one packages[] entry. Without one the registry record has ' +
+      'no installable artifact to point at, and the version check below walks an empty list.',
+  );
+  for (const entry of packages) {
+    assert.ok(isRecord(entry), 'every server.json packages[] entry must be a JSON object');
+    assert.ok(
+      'version' in entry,
+      'a server.json packages[] entry declares no version. The field is optional in the ' +
+        'registry schema, which is exactly why its absence has to be deliberate: an unpinned ' +
+        'entry resolves to whatever npm is serving as latest, not to the release being ' +
+        'published alongside it.',
+    );
+    assert.equal(
+      entry.version,
+      pkg.version,
+      'server.json packages[].version must equal package.json.version',
+    );
   }
 });
 
@@ -278,9 +293,10 @@ test('marketplace.json lists this plugin at the source-of-truth version', () => 
   );
   assert.equal(
     entry.source,
-    './',
-    `${MARKETPLACE_MANIFEST}.plugins[0].source must be "./" — the marketplace root is ` +
-      `the directory holding .claude-plugin/, i.e. the repo root`,
+    './plugins/instagram-mcp-ai',
+    `${MARKETPLACE_MANIFEST}.plugins[0].source must be "./plugins/instagram-mcp-ai" — ` +
+      `resolved against the marketplace root (the repo root), it is the plugin root ` +
+      `holding .claude-plugin/plugin.json, and it has no package.json to npm-install`,
   );
   assert.equal(
     entry.version,
@@ -301,7 +317,29 @@ test('marketplace.json and plugin.json describe the same plugin', () => {
 
   // The catalog entry is what users read when choosing; the plugin manifest is what
   // they get. Divergence here is a listing that advertises something else.
+  //
+  // Presence is checked on BOTH sides before they are compared, because equality
+  // alone is satisfied by `undefined === undefined`. The two files are kept in
+  // step by hand, so the edit that actually happens is the one applied to both at
+  // once — and that edit is exactly the one the comparison cannot see.
+  // Measured 2026-09-23: deleting `"repository"` from plugin.json AND from the
+  // marketplace entry passed all 1939 tests of this suite. These four fields are
+  // the whole of what the install listing shows before anything is fetched; a
+  // missing `repository` is a listing that has stopped saying where the code it
+  // is about to run comes from.
   for (const field of ['description', 'homepage', 'repository', 'license'] as const) {
+    for (const [where, value] of [
+      [`${MARKETPLACE_MANIFEST}.plugins[0]`, entry[field]],
+      [PLUGIN_MANIFEST, plugin[field]],
+    ] as const) {
+      assert.equal(
+        typeof value === 'string' && value.length > 0,
+        true,
+        `${where}.${field} is missing or empty (${JSON.stringify(value)}). It is one of the four ` +
+          'fields the install listing is made of, and a field absent from both manifests ' +
+          'compares equal to itself.',
+      );
+    }
     assert.equal(
       entry[field],
       plugin[field],

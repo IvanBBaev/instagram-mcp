@@ -153,5 +153,26 @@ The script builds `dist/`, stages the exact npm tarball contents (`npm pack`), a
 `manifest.json`, installs production dependencies only (`npm ci --omit=dev` inside the
 staging directory, never in your checkout), checks that the manifest version matches
 `package.json`, then runs `mcpb validate` and `mcpb pack` on the staging directory. The
-result is ~3 MB. A live install into Claude Desktop is the part still marked
-**`[verify — live]`** above.
+output path is ignored by git (`*.mcpb` in `.gitignore`).
+
+### Local build and smoke test (2026-10-01)
+
+The bundle has been built and smoke-tested **locally** (nothing was published or
+installed into Claude Desktop):
+
+- `scripts/build-mcpb.sh` with `@anthropic-ai/mcpb@2` → `manifest.json` passes
+  `mcpb validate`; `instagram-mcp-ai-0.8.0.mcpb` is **3.4 MB** packed, 10.6 MB / 2,211
+  files unpacked (the packer's default ignore list dropped another 1,282 files from
+  `node_modules`). It holds `dist/src`, `bin/`, `package.json`, `manifest.json`,
+  `server.json`, `README.md`, `LICENSE` and the production dependencies only.
+- The unzipped bundle was launched exactly as `server.mcp_config` specifies
+  (`node <bundle>/dist/src/index.js`, the seven `IG_*` variables, a dummy
+  `IG_ACCESS_TOKEN`) and driven over stdio with `initialize` + `tools/list`:
+  `serverInfo` is `instagram-mcp-ai` `0.8.0`; `tools/list` returns **26** tools for the
+  default `core` selection (29 for `all`, 16 for `reader`, 22 for `publisher`). Leaving
+  the optional fields as unresolved `${user_config.X}` placeholders gives the same
+  result.
+- With `globalThis.fetch` trapped, startup, `initialize` and `tools/list` made **no**
+  network request: the token is not validated at startup, only when a tool call uses it.
+
+A live install into Claude Desktop is the part still marked **`[verify — live]`** above.

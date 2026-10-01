@@ -72,8 +72,11 @@ in `src/core/config.ts`).
     IG-linked Page + IG account assigned as assets.
   - Fallback: long-lived user token (60 d) via `fb_exchange_token` → page-scoped
     calls ride the linked Page token where applicable.
-- **`appsecret_proof` = HMAC-SHA256(access_token, app_secret)** appended to every
-  `graph.facebook.com` call; enable **App Settings → Require App Secret**.
+- **`appsecret_proof` = HMAC-SHA256(key = app_secret, message =
+  `access_token|appsecret_time`)**, sent with **`appsecret_time`** (Unix seconds,
+  read from the injected clock) on every `graph.facebook.com` call, so a captured
+  proof expires with its timestamp (CC-AUTH-15); enable **App Settings → Require
+  App Secret**.
 
 ### Path selection guidance (documented for users)
 

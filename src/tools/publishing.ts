@@ -26,9 +26,17 @@
  * available pre-fetch is the URL's extension, and it is applied uniformly:
  * EVERY still-image field — `imageUrl`, each carousel url, the story image and
  * the reel `coverUrl` — goes through {@link imageUrlFormatWarning} and surfaces
- * through `details.warnings`. Video fields get no such hint (the message speaks
- * of a non-JPEG image), and a field warned in one tool but not in another would
- * teach a rule that does not exist.
+ * through `details.warnings` in the preview and `warnings` in the applied result
+ * (CC-PUB-25 (a)). A video extension on one of those fields draws its own
+ * sentence (CC-PUB-23). Video fields get no hint: a video extension is exactly
+ * right there, and a field warned in one tool but not in another would teach a
+ * rule that does not exist.
+ *
+ * The preview an operator approves for a composite post shows the caption
+ * itself — a sanitised, truncated excerpt beside its counts — and the HOST of
+ * every media URL, never its path or query, which may carry a signature
+ * (CC-PUB-60, CC-PUB-8). A resume that was also handed media inputs says which
+ * ones it ignores (CC-PUB-59).
  *
  * Import boundary: `api/*` + `mcp/*` only; never `core/http`.
  */
@@ -60,7 +68,7 @@ import {
   assertCarouselSize,
   assertHttpsUrl,
   containerMediaTypeSchema,
-  httpsUrlSchema,
+  httpsUrl,
   imageUrlFormatWarning,
   userTagSchema,
   CAROUSEL_MAX,
@@ -76,8 +84,9 @@ import {
 // apart — the value that would, a falsy-but-PRESENT one, is unreachable by
 // construction:
 //
-//   - the media URLs are `httpsUrlSchema`, whose refinement runs `new URL()`;
-//     `''` throws there, so an empty URL never reaches a handler;
+//   - the media URLs are `httpsUrl()`, whose pattern refuses `''` (and whose
+//     refinement would too — `new URL('')` throws), so an empty URL never
+//     reaches a handler;
 //   - `resumeContainerId`, `locationId`, `creationId`, `containerId` and each
 //     carousel child are `graphObjectId()` — 1-64 characters of `[A-Za-z0-9_-]`,
 //     so `''` is refused and no id can carry whitespace, which is equally why
@@ -158,9 +167,83 @@ function igIdOf(ctx: ToolContext): string {
   return ctx.profile.accountId ?? 'me';
 }
 
-/** Compact caption stats for a preview payload. */
-function captionSummary(stats: CaptionStats): Record<string, number> {
-  return { characters: stats.codePoints, hashtags: stats.hashtags, mentions: stats.mentions };
+/**
+ * Longest caption excerpt a preview shows, in code points (CC-PUB-60). The
+ * confirm prompt caps the whole details blob at 800 characters, and the excerpt
+ * shares that with the counts, the hosts and every warning; 200 leaves room for
+ * them while still showing the opening of the caption, which is also what a
+ * reader of the feed sees first.
+ */
+export const CAPTION_EXCERPT_MAX = 200;
+
+/**
+ * The caption as a preview shows it: control and format characters (a newline,
+ * a bidi override that could reorder what the approver reads) become spaces,
+ * whitespace runs collapse, and anything past {@link CAPTION_EXCERPT_MAX} code
+ * points is cut with a trailing `…`. Counted in code points, like the caption
+ * limit itself, so an emoji is never split into a lone surrogate.
+ */
+function captionExcerpt(caption: string): string {
+  const flat = caption.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim();
+  const points = [...flat];
+  return points.length > CAPTION_EXCERPT_MAX
+    ? `${points.slice(0, CAPTION_EXCERPT_MAX).join('')}…`
+    : flat;
+}
+
+/**
+ * Caption summary for a preview payload: the excerpt the operator reads before
+ * approving a public post, then the counts the limits are enforced on
+ * (CC-PUB-60). The excerpt comes first so it is the part of the details blob the
+ * reader meets first.
+ */
+function captionSummary(caption: string, stats: CaptionStats): Record<string, unknown> {
+  return {
+    excerpt: captionExcerpt(caption),
+    characters: stats.codePoints,
+    hashtags: stats.hashtags,
+    mentions: stats.mentions,
+  };
+}
+
+/**
+ * The distinct hosts of the given media URLs, in argument order (CC-PUB-60). The
+ * host tells the operator whose CDN Instagram will fetch from; the path and query
+ * are withheld because a pre-signed URL carries its credential there (CC-PUB-8),
+ * and `URL.host` never includes userinfo. Every URL has already passed
+ * `assertHttpsUrl`, so the parse cannot throw here.
+ */
+function mediaHosts(urls: readonly (string | undefined)[]): string[] {
+  const hosts: string[] = [];
+  for (const url of urls) {
+    if (url === undefined) continue;
+    const host = new URL(url).host;
+    if (!hosts.includes(host)) hosts.push(host);
+  }
+  return hosts;
+}
+
+/**
+ * The warning a resume carries when the caller also passed media inputs
+ * (CC-PUB-59). A resume publishes the existing container, which cannot be
+ * changed, so a caption or URL passed beside `resumeContainerId` is ignored; the
+ * field description says so, but a caller who did not read it would otherwise
+ * approve a post believing its new caption applies. The ignored fields are read
+ * off the tool's own input shape, so a field added later is covered without an
+ * edit here.
+ */
+function resumeIgnoredWarning(
+  shape: Record<string, unknown>,
+  args: Record<string, unknown>,
+): string | undefined {
+  const ignored = Object.keys(shape).filter(
+    (key) => key !== 'resumeContainerId' && key !== 'apply' && args[key] !== undefined,
+  );
+  if (ignored.length === 0) return undefined;
+  return (
+    'resumeContainerId is set, so these inputs are ignored — the existing container is ' +
+    `published exactly as it was created and cannot be changed: ${ignored.join(', ')}.`
+  );
 }
 
 /**
@@ -269,10 +352,17 @@ async function executePublish(
     args: { apply?: boolean; resumeContainerId?: string };
     intent: WriteIntent;
     createContainer: () => Promise<string>;
+    warnings: readonly string[];
   },
   opts: PublishFlowOptions,
 ): Promise<ToolResult> {
-  const { ctx, args, intent, createContainer } = params;
+  const { ctx, args, intent, createContainer, warnings } = params;
+  // The preview's `details.warnings`, carried into every applied outcome too
+  // (CC-PUB-25 (a)): an operator running with `IG_WRITE_MODE=apply` never sees a
+  // preview, and without this the hint reached nobody. Absent, never `[]`, when
+  // there is nothing to say — the same rule as the preview.
+  const withWarnings = (payload: Record<string, unknown>): Record<string, unknown> =>
+    warnings.length > 0 ? { ...payload, warnings: [...warnings] } : payload;
   return withWriteGate(intent, args, ctx, async () => {
     // The id is captured as the flow produces it rather than read back off the
     // result, because the paths that need it most have no result to read from
@@ -306,11 +396,11 @@ async function executePublish(
       );
       return {
         result: json(
-          {
+          withWarnings({
             status: 'published',
             container_id: flow.containerId,
             media_id: mediaId,
-          },
+          }),
           { pretty: ctx.settings.prettyJson },
         ),
         targetId: mediaId,
@@ -320,7 +410,7 @@ async function executePublish(
     if (flow.status === 'already_published') {
       return {
         result: json(
-          {
+          withWarnings({
             status: 'already_published',
             container_id: flow.containerId,
             // Explicitly null, not omitted. This arm is reached by a caller that
@@ -337,7 +427,7 @@ async function executePublish(
               'no media id for an already-published container, so media_id is null rather than ' +
               'guessed — use instagram_list_media to locate the existing post (match it by caption ' +
               'or timestamp).',
-          },
+          }),
           { pretty: ctx.settings.prettyJson },
         ),
         targetId: flow.containerId,
@@ -346,14 +436,14 @@ async function executePublish(
     }
     return {
       result: json(
-        {
+        withWarnings({
           status: 'in_progress',
           resume_container_id: flow.containerId,
           note:
             'The media is still processing after the poll budget. Re-run this tool with apply:true and ' +
             'resumeContainerId set to this id to finish publishing — do NOT create a new post, which would ' +
             'duplicate it.',
-        },
+        }),
         { pretty: ctx.settings.prettyJson },
       ),
       targetId: flow.containerId,
@@ -371,10 +461,12 @@ const createContainerInput = {
       'Container kind: REELS, STORIES, or CAROUSEL. OMIT for a single feed image — a feed image sends ' +
         'no media_type (IMAGE/VIDEO are invalid values).',
     ),
-  imageUrl: httpsUrlSchema
+  // Every URL field builds its own `httpsUrl()` instance (CC-PUB-35), so each
+  // publishes its own description rather than a `$ref` to its first twin.
+  imageUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS image URL Instagram will fetch (feed image or carousel child).'),
-  videoUrl: httpsUrlSchema
+  videoUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS video URL Instagram will fetch (Reels/Stories video).'),
   caption: captionField,
@@ -389,7 +481,7 @@ const createContainerInput = {
     .max(CAROUSEL_MAX)
     .optional()
     .describe('CAROUSEL album only: 2–10 previously-created child container ids to combine.'),
-  coverUrl: httpsUrlSchema.optional().describe('Reels cover image URL.'),
+  coverUrl: httpsUrl().optional().describe('Reels cover image URL.'),
   thumbOffset: z
     .number()
     .int()
@@ -447,11 +539,9 @@ const createMediaContainerTool = defineTool({
     // other is worse than warning neither — silence on `coverUrl` reads as "this
     // one is fine" and teaches a rule that does not exist.
     //
-    // `videoUrl` is deliberately excluded. The hint's text says "suggests a
-    // non-JPEG image", which is the wrong sentence for a video field, and its
-    // extension table holds no video format anyway, so a `.mp4` is silent by
-    // construction; rewording it for video is the owner's call in
-    // `api/media-spec.ts`, not a decision to smuggle in here.
+    // `videoUrl` is deliberately excluded: a video extension is exactly right
+    // there. A video extension on `imageUrl` or `coverUrl` draws the hint's own
+    // video sentence (CC-PUB-23).
     //
     // The hint names the extension, not the field, so two offending URLs with
     // the same extension produce two identical lines. Left as is: the same
@@ -599,7 +689,7 @@ const getPublishingLimitTool = defineTool({
 
 const postImageInput = {
   imageUrls: z
-    .array(httpsUrlSchema)
+    .array(httpsUrl())
     .min(1)
     .max(CAROUSEL_MAX)
     .optional()
@@ -630,17 +720,22 @@ export async function runPostImage(
 ): Promise<ToolResult> {
   const resuming = args.resumeContainerId !== undefined;
   const imageUrls = args.imageUrls ?? [];
-  let stats: CaptionStats | undefined;
+  let caption: Record<string, unknown> | undefined;
   const warnings: string[] = [];
 
-  if (!resuming) {
+  if (resuming) {
+    const ignored = resumeIgnoredWarning(postImageInput, args);
+    if (ignored !== undefined) warnings.push(ignored);
+  } else {
     if (imageUrls.length < 1) {
       throw new InstagramError(
         'instagram_post_image needs at least one imageUrl (or a resumeContainerId to finish a prior attempt).',
         { kind: 'validation' },
       );
     }
-    if (args.caption !== undefined) stats = assertCaptionWithinLimits(args.caption);
+    if (args.caption !== undefined) {
+      caption = captionSummary(args.caption, assertCaptionWithinLimits(args.caption));
+    }
     for (const url of imageUrls) assertHttpsUrl(url, 'imageUrl');
     // Equivalent-mutant note: `>=` here can be spelled `>` (or even
     // `>= CAROUSEL_MAX`) with no observable difference, because the only bound
@@ -720,8 +815,9 @@ export async function runPostImage(
     : {
         media_kind: imageUrls.length >= CAROUSEL_MIN ? 'carousel' : 'image',
         image_count: imageUrls.length,
+        media_hosts: mediaHosts(imageUrls),
       };
-  if (stats !== undefined) details.caption = captionSummary(stats);
+  if (caption !== undefined) details.caption = caption;
   if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {
@@ -734,7 +830,7 @@ export async function runPostImage(
     details,
   };
 
-  return executePublish({ ctx, args, intent, createContainer }, opts);
+  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
 }
 
 const postImageTool = defineTool({
@@ -765,14 +861,14 @@ const postImageTool = defineTool({
 // --- instagram_post_reel (composite) ---------------------------------------
 
 const postReelInput = {
-  videoUrl: httpsUrlSchema
+  videoUrl: httpsUrl()
     .optional()
     .describe(
       'Public HTTPS video URL for the reel (required unless resuming). Duration, codec, and size are ' +
         'unverifiable before Instagram fetches it.',
     ),
   caption: captionField,
-  coverUrl: httpsUrlSchema.optional().describe('Public HTTPS cover image URL for the reel.'),
+  coverUrl: httpsUrl().optional().describe('Public HTTPS cover image URL for the reel.'),
   thumbOffset: z
     .number()
     .int()
@@ -793,10 +889,13 @@ export async function runPostReel(
   opts: PublishFlowOptions = {},
 ): Promise<ToolResult> {
   const resuming = args.resumeContainerId !== undefined;
-  let stats: CaptionStats | undefined;
-  let coverWarning: string | undefined;
+  let caption: Record<string, unknown> | undefined;
+  const warnings: string[] = [];
 
-  if (!resuming) {
+  if (resuming) {
+    const ignored = resumeIgnoredWarning(postReelInput, args);
+    if (ignored !== undefined) warnings.push(ignored);
+  } else {
     if (args.videoUrl === undefined) {
       throw new InstagramError(
         'instagram_post_reel needs a videoUrl (or a resumeContainerId to finish a prior attempt).',
@@ -808,11 +907,14 @@ export async function runPostReel(
       assertHttpsUrl(args.coverUrl, 'coverUrl');
       // The cover is a still image with the same JPEG constraint as a feed
       // image, so it gets the same non-fatal hint every other still-image field
-      // gets. `videoUrl` gets none — the hint's wording ("a non-JPEG image") is
-      // wrong for a video, and only `api/media-spec.ts` can say otherwise.
-      coverWarning = imageUrlFormatWarning(args.coverUrl);
+      // gets — including the video sentence when a `.mp4` lands here (CC-PUB-23).
+      // `videoUrl` gets none: a video extension is exactly right there.
+      const coverWarning = imageUrlFormatWarning(args.coverUrl);
+      if (coverWarning !== undefined) warnings.push(coverWarning);
     }
-    if (args.caption !== undefined) stats = assertCaptionWithinLimits(args.caption);
+    if (args.caption !== undefined) {
+      caption = captionSummary(args.caption, assertCaptionWithinLimits(args.caption));
+    }
   }
 
   const createContainer = async (): Promise<string> => {
@@ -838,13 +940,17 @@ export async function runPostReel(
       // unset: the preview is what an operator reads before approving a post,
       // and `share_to_feed: undefined` (pinned below) says "Instagram's default
       // applies" where an absent key reads as "this tool forgot to consider it".
-      { media_kind: 'reel', share_to_feed: args.shareToFeed ?? undefined };
-  if (stats !== undefined) details.caption = captionSummary(stats);
+      {
+        media_kind: 'reel',
+        share_to_feed: args.shareToFeed ?? undefined,
+        media_hosts: mediaHosts([args.videoUrl, args.coverUrl]),
+      };
+  if (caption !== undefined) details.caption = caption;
   // Same `details.warnings` channel the other publishing tools use — a list even
   // for one entry, so a caller reads warnings the same way everywhere, and
   // absent entirely when there is nothing to say (an always-present empty list
   // trains the operator to skim past the field).
-  if (coverWarning !== undefined) details.warnings = [coverWarning];
+  if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {
     action: 'post_reel',
@@ -854,7 +960,7 @@ export async function runPostReel(
     details,
   };
 
-  return executePublish({ ctx, args, intent, createContainer }, opts);
+  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
 }
 
 const postReelTool = defineTool({
@@ -885,12 +991,12 @@ const postReelTool = defineTool({
 // --- instagram_post_story (composite) --------------------------------------
 
 const postStoryInput = {
-  imageUrl: httpsUrlSchema
+  imageUrl: httpsUrl()
     .optional()
     .describe(
       'Public HTTPS JPEG image for a photo story. Provide exactly one of imageUrl or videoUrl.',
     ),
-  videoUrl: httpsUrlSchema
+  videoUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS video for a video story. Provide exactly one of imageUrl or videoUrl.'),
   resumeContainerId: resumeField,
@@ -905,9 +1011,12 @@ export async function runPostStory(
   opts: PublishFlowOptions = {},
 ): Promise<ToolResult> {
   const resuming = args.resumeContainerId !== undefined;
-  let imageWarning: string | undefined;
+  const warnings: string[] = [];
 
-  if (!resuming) {
+  if (resuming) {
+    const ignored = resumeIgnoredWarning(postStoryInput, args);
+    if (ignored !== undefined) warnings.push(ignored);
+  } else {
     const hasImage = args.imageUrl !== undefined;
     const hasVideo = args.videoUrl !== undefined;
     if (hasImage === hasVideo) {
@@ -921,14 +1030,15 @@ export async function runPostStory(
       // A photo story is a still image under the same JPEG rule as a feed image.
       // Without this the byte-identical `.png` that warns on `instagram_post_image`
       // published in silence here, which reads as approval rather than as an
-      // unchecked field. The video story is left unhinted for the reason given in
-      // `instagram_post_reel`.
+      // unchecked field. A `.mp4` here draws the video sentence (CC-PUB-23). The
+      // video story is left unhinted for the reason given in `instagram_post_reel`.
       //
       // Equivalent-mutant note: `args.videoUrl ?? args.imageUrl` cannot be told
       // from `args.imageUrl` at this line — the `hasImage === hasVideo` throw
       // above guarantees exactly one of the two is set, so inside this branch
       // `args.videoUrl` is always `undefined`.
-      imageWarning = imageUrlFormatWarning(args.imageUrl);
+      const imageWarning = imageUrlFormatWarning(args.imageUrl);
+      if (imageWarning !== undefined) warnings.push(imageWarning);
     }
     if (args.videoUrl !== undefined) assertHttpsUrl(args.videoUrl, 'videoUrl');
   }
@@ -945,8 +1055,12 @@ export async function runPostStory(
 
   const details: Record<string, unknown> = resuming
     ? { resume_container_id: args.resumeContainerId }
-    : { media_kind: 'story', source: args.imageUrl !== undefined ? 'image' : 'video' };
-  if (imageWarning !== undefined) details.warnings = [imageWarning];
+    : {
+        media_kind: 'story',
+        source: args.imageUrl !== undefined ? 'image' : 'video',
+        media_hosts: mediaHosts([args.imageUrl, args.videoUrl]),
+      };
+  if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {
     action: 'post_story',
@@ -956,7 +1070,7 @@ export async function runPostStory(
     details,
   };
 
-  return executePublish({ ctx, args, intent, createContainer }, opts);
+  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
 }
 
 const postStoryTool = defineTool({

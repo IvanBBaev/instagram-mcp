@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Instagram returned one; pass it back as `mediaAfter` (sent as
   `media.after(<cursor>)`) to read the next page of the profile's media
   (CC-DATA-116).
+- Composite publish previews (`post_image`, `post_reel`, `post_story`) now show
+  `details.caption.excerpt` (flattened, cut after 200 code points with `…`) and
+  `details.media_hosts` (the distinct hosts Instagram will fetch from; never the
+  path, query or userinfo) (CC-PUB-60).
+- A resume (`resumeContainerId`) that also receives media inputs now warns, in the
+  preview and the applied result, that those inputs are ignored and names them
+  (CC-PUB-59).
+- `token_status` and `doctor` report an `expiring_soon` state (a `doctor` WARN)
+  when the Path B data-access window closes within 7 days.
+
+- `instagram_list_stories`: a read-only tool (package `media`) that lists the
+  account's live stories from `GET /{ig-user-id}/stories`. It is paged like
+  `instagram_list_media`, captions are fenced, and it covers only Instagram's
+  24-hour window. The tool count goes from 28 to 29 (CC-DATA-119).
+- The MCPB bundle has been built (`scripts/build-mcpb.sh`, 3.4 MB) and smoke-tested
+  locally: the unzipped bundle starts as `manifest.json` launches it and lists its
+  tools over stdio without any network call.
 
 ### Changed
 
@@ -30,6 +47,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `data_access_expires_at`, and both `token_status` and `doctor` use it, so the two
   diagnostics cannot disagree (CC-AUTH-77).
 - README lists the `--app-id` / `--app-secret` login options; `docs/auth.md` §2 links the setup guide instead of a "future README".
+
+- A still-image URL field (feed image, story image, reel cover) whose URL ends in
+  a video extension now draws its own warning ("suggests a video, but this field
+  takes a still image") instead of the non-JPEG one (CC-PUB-23).
+- `instagram_post_image`, `instagram_post_reel` and `instagram_post_story` return
+  their warnings as `warnings` on every applied result (`published`,
+  `already_published`, `in_progress`), not only in the preview (CC-PUB-25).
+- A relative config directory now resolves against the config home, not the
+  process working directory (CC-CFG-11).
+- The untrusted-text renderer blanks invisible renderers in its visible-text view
+  (CC-DATA-126), and a fenced block defangs near-miss delimiters to `⟦…⟧` instead
+  of the old `[ /UNTRUSTED]` rewrite (CC-DATA-125).
+- The error-text token stripper and the secret redactor now share one set of
+  token-shape backstops (`src/core/token-shapes.ts`) (CC-PROC-19).
+
+- `instagram_set_comments_enabled` belongs to the `comments` package instead of
+  `media`, so package allow, deny and read-only selection treat it as a comments
+  tool (CC-PROC-9).
+- `instagram_discover_business` publishes `id` as required. A profile-less answer,
+  or a profile without a usable id, is now an `upstream` error instead of a
+  note-only or id-less result (CC-DATA-32, supersedes CC-DATA-79).
+- The `mediaAfter` description states that a cursor taken from a different
+  username is not detected (CC-DATA-133).
 
 ### Fixed
 
@@ -161,6 +201,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/index.html` listed the `core` profile as 24 tools (it is 25), omitted the `after` / `mediaAfter` cursor parameters of `list_linked_accounts`, `get_hashtag_media` and `discover_business`, understated the delete gate (`apply: true` or `IG_WRITE_MODE=apply`, plus `IG_ALLOW_DESTRUCTIVE=true`), and described `IG_ENV_FILE` and env loading inaccurately.
 - `docs/troubleshooting.md` quoted a paraphrase of the auth-path refusal; it now quotes the real message shape (`Tool '…' is not available on the '…' auth path`).
 
+- Every URL field in the published input schemas now carries its own description,
+  instead of a shared `$ref` that JSON Schema draft-07 hid it behind (CC-PUB-35),
+  and a `pattern` (`^ *[Hh][Tt][Tt][Pp][Ss]:\/\/`) that matches the server's own
+  message (CC-PUB-36).
+
+- `instagram_get_media` no longer fails a whole album read when the `/children`
+  fallback fails; it returns the detail with a note naming the error kind
+  (CC-DATA-120).
+- `instagram_create_comment` and `instagram_reply_to_comment` refuse a message made
+  only of zero-width or invisible characters (CC-COM-20).
+
 ### Removed
 
 - The unused `text()` result builder in `src/mcp/result.ts`; every tool result is
@@ -208,6 +259,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A string wrapped in a `String` object (`new String(token)`) inside a value the redactor copies is now masked as one string. Before, it was copied one character per key, so no secret pattern could match it and the secret reached the log in pieces. Wrapped numbers and booleans now keep their value instead of becoming `{}`. (CC-DATA-122)
 
 - A usage refusal no longer writes a secret into the host's log. `instagram-mcp-ai --access-token=<token>` (or a bare pasted token as the first argument) was refused with the whole token echoed to stderr, which MCP hosts keep in their log files. Both refusals, for an unknown subcommand and for an argument after `doctor` / `refresh`, now cut the echoed token at its first `=` and mask a token-shaped value as `[REDACTED]`. (CC-PROC-208)
+
+- Path B now sends a time-bound proof: `appsecret_proof` is
+  HMAC-SHA256(app_secret, `access_token|appsecret_time`), sent with
+  `appsecret_time` from the injected clock, so a captured proof expires
+  (CC-AUTH-15).
+- Writes (POST) now carry `access_token` and the proof in the form-encoded body
+  instead of the query string, so they stay out of proxy and access logs. GETs and
+  the bodyless DELETE keep them on the query string (CC-PROC-25).
+- Only the access token is registered with the redactor per request. The
+  per-second `appsecret_proof` / `appsecret_time` are not, which would grow the
+  registry without bound and mask matching digits inside Graph ids; the proof is
+  covered by the 64-hex backstop.
+- The redactor honours an inherited `toJSON` (CC-DATA-123) and masks keys named
+  `access-token`, `app_secret`, `client_secret` and `authorization` in any
+  separator spelling (CC-DATA-124).
 
 ## [0.8.0] — 2026-09-24
 

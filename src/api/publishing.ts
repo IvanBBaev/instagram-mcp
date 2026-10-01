@@ -117,7 +117,9 @@ export async function createMediaContainer(
     await req<unknown>({
       method: 'POST',
       path: `/${encodeURIComponent(params.igId)}/media`,
-      params: p,
+      // The form body, never the query string (CC-PROC-25): a 2200-character
+      // caption or a `user_tags` blob percent-encodes 3–4× onto the request line.
+      body: p,
     }),
   );
   // Passed through unchecked on purpose (CC-PUB-29): the tool layer refuses an
@@ -278,7 +280,7 @@ export async function getContainerStatus(
 // --- publish_media ----------------------------------------------------------
 
 /**
- * `POST /{ig-id}/media_publish?creation_id={container-id}` — publish a finished
+ * `POST /{ig-id}/media_publish` with `creation_id={container-id}` in the form body — publish a finished
  * container. Returns the new media id. NEVER auto-retried by any caller: a
  * duplicate post costs quota and is publicly visible (docs/operations.md §2).
  */
@@ -290,7 +292,7 @@ export async function publishMedia(
     await req<unknown>({
       method: 'POST',
       path: `/${encodeURIComponent(params.igId)}/media_publish`,
-      params: { creation_id: params.creationId },
+      body: { creation_id: params.creationId },
     }),
   );
   return { id: r.id as string };

@@ -51,7 +51,7 @@ import {
   setCommentHidden,
   setCommentsEnabled,
 } from '../../src/api/comments.js';
-import { getMedia, getMediaChildren, listMedia } from '../../src/api/media.js';
+import { getMedia, getMediaChildren, listMedia, listStories } from '../../src/api/media.js';
 import {
   getAccountInsights,
   getAudienceDemographics,
@@ -105,10 +105,16 @@ const settings: Settings = { ...DEFAULT_SETTINGS };
  * A real request seam over a recording transport. `body` is whatever Graph
  * should answer; every api function under test only needs a well-formed shell.
  */
-function harness(body: unknown = { id: '1', data: [] }): { req: IgRequestFn; urls: string[] } {
+function harness(body: unknown = { id: '1', data: [] }): {
+  req: IgRequestFn;
+  urls: string[];
+  bodies: (string | undefined)[];
+} {
   const urls: string[] = [];
-  const fetchImpl = ((input: unknown) => {
+  const bodies: (string | undefined)[] = [];
+  const fetchImpl = ((input: unknown, init?: RequestInit) => {
     urls.push(typeof input === 'string' ? input : String(input));
+    bodies.push(typeof init?.body === 'string' ? init.body : undefined);
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status: 200,
@@ -125,13 +131,25 @@ function harness(body: unknown = { id: '1', data: [] }): { req: IgRequestFn; url
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
   });
-  return { req, urls };
+  return { req, urls, bodies };
 }
 
 /** The single URL the transport saw, parsed exactly as `fetch` would parse it. */
 function soleUrl(urls: string[]): URL {
   assert.equal(urls.length, 1, 'exactly one request reached the transport');
   return new URL(urls[0]!);
+}
+
+/**
+ * Every `access_token` the request carried, across BOTH channels. Since
+ * CC-PROC-25 a write sends the credential in its form body and a read (or the
+ * bodyless DELETE) in its query string, so "exactly one token, and it is ours"
+ * has to be asserted over the union — a check on the URL alone would pass a
+ * write that sent none at all, or one that sent a second, smuggled one.
+ */
+function tokensSent(url: URL, bodies: (string | undefined)[]): string[] {
+  const fromBody = new URLSearchParams(bodies[0] ?? '').getAll('access_token');
+  return [...url.searchParams.getAll('access_token'), ...fromBody];
 }
 
 /**
@@ -240,6 +258,11 @@ const PATH_CALLS: {
     call: (req, id) => listMedia(req, { igAccountId: id, maxItems: 10 }),
   },
   {
+    source: 'media.ts:listStories',
+    label: 'listStories(igAccountId)',
+    call: (req, id) => listStories(req, { igAccountId: id, maxItems: 10 }),
+  },
+  {
     source: 'media.ts:getMedia',
     label: 'getMedia(mediaId)',
     call: (req, id) => getMedia(req, { mediaId: id }),
@@ -274,20 +297,20 @@ const PATH_CALLS: {
 
 // --- Consequence 1: the token must not fall into a fragment -----------------
 
-test('an id containing "#" leaves access_token in the query, never in a fragment', async () => {
+test('an id containing "#" leaves access_token on a real channel, never in a fragment', async () => {
   // Pre-fix this produced `.../v25.0/X#/comments?fields=...&access_token=...`:
   // everything from the `#` on is a fragment, which fetch does NOT send. The
   // call left the process without credentials and came back as a 400 nobody
   // could explain.
   for (const { label, call } of PATH_CALLS) {
-    const { req, urls } = harness();
+    const { req, urls, bodies } = harness();
     await call(req, 'X#injected');
     const url = soleUrl(urls);
     assert.equal(url.hash, '', `${label}: the URL carries no fragment at all`);
-    assert.equal(
-      url.searchParams.get('access_token'),
-      'IG_TOKEN',
-      `${label}: the token is still a real query parameter`,
+    assert.deepEqual(
+      tokensSent(url, bodies),
+      ['IG_TOKEN'],
+      `${label}: the token still travels in the query or the form body`,
     );
     assert.equal(url.pathname.includes('#'), false, `${label}: the "#" is encoded, not structural`);
   }
@@ -301,7 +324,7 @@ test('an id containing "?" or "&" cannot introduce a query parameter', async () 
   // far side would then read the attacker's value.
   for (const hostile of ['X?access_token=STOLEN', 'X&fields=id&limit=999', 'X?a=1&b=2']) {
     for (const { label, call } of PATH_CALLS) {
-      const { req, urls } = harness();
+      const { req, urls, bodies } = harness();
       await call(req, hostile);
       const url = soleUrl(urls);
       const keys = [...url.searchParams.keys()];
@@ -312,9 +335,9 @@ test('an id containing "?" or "&" cannot introduce a query parameter', async () 
           `${label} / ${hostile}: no "${smuggled}" parameter appeared`,
         );
       }
-      assert.equal(
-        url.searchParams.getAll('access_token').join(','),
-        'IG_TOKEN',
+      assert.deepEqual(
+        tokensSent(url, bodies),
+        ['IG_TOKEN'],
         `${label} / ${hostile}: exactly one access_token, and it is ours`,
       );
       assert.equal(

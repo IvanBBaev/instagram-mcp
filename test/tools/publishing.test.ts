@@ -28,6 +28,7 @@ import type { ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js'
 import { testSettings } from '../helpers/settings.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import {
+  CAPTION_EXCERPT_MAX,
   publishingTools,
   runPostImage,
   runPostReel,
@@ -213,12 +214,12 @@ test('create_media_container apply creates a feed-image container with NO media_
   assert.deepEqual(res.structuredContent, { status: 'created', container_id: 'C1' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.path, '/999/media');
-  assert.equal('media_type' in (calls[0]?.params ?? {}), false);
+  assert.equal('media_type' in (calls[0]?.body ?? {}), false);
   // The URL is the entire content of the container. Dropping it does not fail
   // here — Graph accepts the create and the container ends in ERROR minutes
   // later — so the operator sees a successful "created" result for a container
   // that can never be published.
-  assert.equal(calls[0]?.params?.image_url, 'https://cdn/a.jpg');
+  assert.equal(calls[0]?.body?.image_url, 'https://cdn/a.jpg');
 });
 
 test('create_media_container preview says a feed image sends NO media_type at all', async () => {
@@ -287,7 +288,7 @@ test('create_media_container apply sends a REELS container with its cover and th
   );
 
   assert.equal(res.structuredContent?.container_id, 'C9');
-  const p = calls[0]?.params ?? {};
+  const p = calls[0]?.body ?? {};
   assert.equal(p.media_type, 'REELS');
   assert.equal(p.video_url, 'https://cdn/v.mp4');
   // A dropped cover_url/thumb_offset is invisible in the response — the reel
@@ -385,7 +386,7 @@ test('create_media_container forwards children and userTags to Graph, not just t
     makeCtx(carousel.req),
   );
   // Comma-joined, in the order given: the order is the album's slide order.
-  assert.equal(carousel.calls[0]?.params?.children, 'A,B');
+  assert.equal(carousel.calls[0]?.body?.children, 'A,B');
 
   const tagged = fakeReq(() => ({ id: 'C1' }));
   await tool('instagram_create_media_container').handler(
@@ -397,7 +398,7 @@ test('create_media_container forwards children and userTags to Graph, not just t
     makeCtx(tagged.req),
   );
   assert.equal(
-    tagged.calls[0]?.params?.user_tags,
+    tagged.calls[0]?.body?.user_tags,
     JSON.stringify([{ username: 'friend', x: 0.5, y: 0.5 }]),
   );
 });
@@ -531,7 +532,7 @@ test('publish_media apply posts creation_id and returns the new media id', async
   // flows return, and it was read one field at a time exactly like the others.
   assert.deepEqual(res.structuredContent, { status: 'published', media_id: 'M1' });
   assert.equal(calls[0]?.path, '/999/media_publish');
-  assert.equal(calls[0]?.params?.creation_id, 'C1');
+  assert.equal(calls[0]?.body?.creation_id, 'C1');
 });
 
 test('a profile with no numeric account id targets /me, never the local profile name', async () => {
@@ -601,9 +602,9 @@ test('post_image apply creates a single feed image, polls FINISHED, then publish
   // exactly as if the operator had asked for it, and no absent-field assertion
   // can see one arrive.
   const create = calls.find((c) => c.path === '/999/media');
-  assert.deepEqual(create?.params, { image_url: 'https://cdn/a.jpg' });
+  assert.deepEqual(create?.body, { image_url: 'https://cdn/a.jpg' });
   const pub = calls.find((c) => c.path === '/999/media_publish');
-  assert.deepEqual(pub?.params, { creation_id: 'C1' });
+  assert.deepEqual(pub?.body, { creation_id: 'C1' });
 });
 
 test('post_image apply carries userTags and locationId onto the single-image container', async () => {
@@ -630,15 +631,15 @@ test('post_image apply carries userTags and locationId onto the single-image con
   );
 
   const create = calls.find((c) => c.path === '/999/media');
-  assert.equal(create?.params?.user_tags, '[{"username":"ana","x":0.25,"y":0.75}]');
-  assert.equal(create?.params?.location_id, '17841400000');
+  assert.equal(create?.body?.user_tags, '[{"username":"ana","x":0.25,"y":0.75}]');
+  assert.equal(create?.body?.location_id, '17841400000');
 });
 
 test('post_image apply with 2+ images builds a carousel album then publishes it', async () => {
   let child = 0;
   const { req, calls } = fakeReq((opts) => {
     if (opts.path === '/999/media' && opts.method === 'POST') {
-      if (opts.params?.children !== undefined) return { id: 'ALBUM' };
+      if (opts.body?.children !== undefined) return { id: 'ALBUM' };
       child += 1;
       return { id: `ch-${child}` };
     }
@@ -667,8 +668,8 @@ test('post_image apply with 2+ images builds a carousel album then publishes it'
     container_id: 'ALBUM',
     media_id: 'MPOST',
   });
-  const album = calls.find((c) => c.params?.children !== undefined);
-  assert.equal(album?.params?.children, 'ch-1,ch-2');
+  const album = calls.find((c) => c.body?.children !== undefined);
+  assert.equal(album?.body?.children, 'ch-1,ch-2');
 });
 
 test('post_image apply puts the caption on the carousel album, not on its children', async () => {
@@ -680,7 +681,7 @@ test('post_image apply puts the caption on the carousel album, not on its childr
   let child = 0;
   const { req, calls } = fakeReq((opts) => {
     if (opts.path === '/999/media' && opts.method === 'POST') {
-      if (opts.params?.children !== undefined) return { id: 'ALBUM' };
+      if (opts.body?.children !== undefined) return { id: 'ALBUM' };
       child += 1;
       return { id: `ch-${child}` };
     }
@@ -700,14 +701,14 @@ test('post_image apply puts the caption on the carousel album, not on its childr
     makeCtx(req),
   );
 
-  const album = calls.find((c) => c.params?.children !== undefined);
-  assert.equal(album?.params?.children, 'ch-1,ch-2');
-  assert.equal(album?.params?.caption, 'Golden hour');
-  assert.equal(album?.params?.location_id, '17841400000');
+  const album = calls.find((c) => c.body?.children !== undefined);
+  assert.equal(album?.body?.children, 'ch-1,ch-2');
+  assert.equal(album?.body?.caption, 'Golden hour');
+  assert.equal(album?.body?.location_id, '17841400000');
 
-  const kids = calls.filter((c) => c.params?.is_carousel_item === true);
+  const kids = calls.filter((c) => c.body?.is_carousel_item === true);
   assert.equal(kids.length, 2, 'two child containers, neither of them captioned');
-  assert.equal(kids[0]?.params?.caption, undefined);
+  assert.equal(kids[0]?.body?.caption, undefined);
 });
 
 test('post_image apply returns in_progress with a resume id when the poll budget elapses', async () => {
@@ -995,7 +996,12 @@ test('the preview caption stats report hashtags and mentions under the right key
   );
 
   const details = res.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.deepEqual(details?.caption, { characters: 14, hashtags: 2, mentions: 1 });
+  assert.deepEqual(details?.caption, {
+    excerpt: '#sun #sea @ana',
+    characters: 14,
+    hashtags: 2,
+    mentions: 1,
+  });
   assert.equal(calls.length, 0, 'a preview counts, it does not create');
 });
 
@@ -1039,7 +1045,7 @@ test('post_reel apply creates a REELS container, polls, and publishes', async ()
   // `share_to_feed` the operator never chose publishes a different reel on a
   // live grid, and the choice cannot be changed after the reel goes out.
   const create = calls.find((c) => c.path === '/999/media');
-  assert.deepEqual(create?.params, {
+  assert.deepEqual(create?.body, {
     media_type: 'REELS',
     video_url: 'https://cdn/v.mp4',
     caption: 'reel',
@@ -1065,8 +1071,8 @@ test('post_reel apply transmits the shareToFeed choice in both directions', asyn
     await runPostReel(args, makeCtx(req));
 
     const create = calls.find((c) => c.path === '/999/media');
-    assert.equal(create?.params?.share_to_feed, shareToFeed, String(shareToFeed));
-    assert.equal(create?.params?.thumb_offset, 2500, String(shareToFeed));
+    assert.equal(create?.body?.share_to_feed, shareToFeed, String(shareToFeed));
+    assert.equal(create?.body?.thumb_offset, 2500, String(shareToFeed));
   }
 });
 
@@ -1109,7 +1115,7 @@ test('post_reel passes a cover through and refuses a plaintext one before any wr
     makeCtx(req),
   );
   assert.equal(
-    calls.find((c) => c.path === '/999/media')?.params?.cover_url,
+    calls.find((c) => c.path === '/999/media')?.body?.cover_url,
     'https://cdn/cover.jpg',
   );
 
@@ -1141,7 +1147,7 @@ test('post_story apply creates a STORIES container from an image and publishes',
   assert.equal(res.structuredContent?.status, 'published');
   assert.equal(res.structuredContent?.media_id, 'SMEDIA');
   const create = calls.find((c) => c.path === '/999/media');
-  assert.equal(create?.params?.media_type, 'STORIES');
+  assert.equal(create?.body?.media_type, 'STORIES');
 });
 
 test('post_story rejects neither/both of imageUrl and videoUrl (validation)', async () => {
@@ -1177,7 +1183,7 @@ test('post_story names its source, and a resume describes the container it finis
   const freshDetails = fresh.structuredContent?.details as Record<string, unknown> | undefined;
   assert.deepEqual(
     freshDetails,
-    { media_kind: 'story', source: 'video' },
+    { media_kind: 'story', source: 'video', media_hosts: ['cdn'] },
     'a video story is not described as an image',
   );
 
@@ -1208,7 +1214,7 @@ test('post_story apply sends the image URL as image_url and never as video_url',
   // absent `video_url` is one way the container can be wrong, an ADDED field
   // (a `cover_url` derived from the image, a caption stories never show) is
   // another, and only a whole pin sees both.
-  const imageCreate = image.calls.find((c) => c.path === '/999/media')?.params ?? {};
+  const imageCreate = image.calls.find((c) => c.path === '/999/media')?.body ?? {};
   assert.deepEqual(
     imageCreate,
     { media_type: 'STORIES', image_url: 'https://cdn/s.jpg' },
@@ -1222,7 +1228,7 @@ test('post_story apply sends the image URL as image_url and never as video_url',
     throw new Error(`unexpected ${opts.method} ${opts.path}`);
   });
   await runPostStory({ videoUrl: 'https://cdn/s.mp4', apply: true }, makeCtx(video.req));
-  const videoCreate = video.calls.find((c) => c.path === '/999/media')?.params ?? {};
+  const videoCreate = video.calls.find((c) => c.path === '/999/media')?.body ?? {};
   assert.deepEqual(
     videoCreate,
     { media_type: 'STORIES', video_url: 'https://cdn/s.mp4' },
@@ -1401,8 +1407,9 @@ test('every declared media URL field refuses a non-https URL at the schema bound
   // The swept set comes off `t.input` rather than out of a list written here,
   // because a list written here is exactly what a newly declared field does not
   // get added to. The published-contract pin cannot stand in for it either:
-  // `httpsUrlSchema` is `z.string().refine(...)` and a refinement has no JSON
-  // Schema rendering at all, so dropping it publishes byte-identical output.
+  // it publishes only the `pattern` half of `httpsUrl()`, and the refinement
+  // that makes the real verdict has no JSON Schema rendering at all, so
+  // dropping it publishes byte-identical output.
   const urlFields = publishingTools.flatMap((spec) =>
     Object.keys(spec.input)
       .filter((key) => /Urls?$/.test(key))
@@ -1737,14 +1744,14 @@ test('create_media_container marks a carousel child so the album can reference i
     { imageUrl: 'https://cdn/a.jpg', isCarouselItem: true, apply: true },
     makeCtx(marked.req),
   );
-  assert.equal(marked.calls[0]?.params?.is_carousel_item, true);
+  assert.equal(marked.calls[0]?.body?.is_carousel_item, true);
 
   const plain = fakeReq(() => ({ id: 'C1' }));
   await tool('instagram_create_media_container').handler(
     { imageUrl: 'https://cdn/a.jpg', apply: true },
     makeCtx(plain.req),
   );
-  assert.equal('is_carousel_item' in (plain.calls[0]?.params ?? {}), false);
+  assert.equal('is_carousel_item' in (plain.calls[0]?.body ?? {}), false);
 });
 
 // --- get_container_status / publish_media -----------------------------------
@@ -1881,7 +1888,7 @@ test('post_image treats exactly two images as a carousel, in the details and the
   // deterministic — no `caption` argument means no `caption` block, and every
   // URL here ends in `.jpg` so no `warnings` key is added.
   const pairDetails = pair.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.deepEqual(pairDetails, { media_kind: 'carousel', image_count: 2 });
+  assert.deepEqual(pairDetails, { media_kind: 'carousel', image_count: 2, media_hosts: ['cdn'] });
   assert.equal(
     pair.structuredContent?.summary,
     'Create a 2-image carousel and publish it to the feed',
@@ -1898,7 +1905,7 @@ test('post_image treats exactly two images as a carousel, in the details and the
 
   const single = await runPostImage({ imageUrls: ['https://cdn/1.jpg'] }, makeCtx(req));
   const singleDetails = single.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.deepEqual(singleDetails, { media_kind: 'image', image_count: 1 });
+  assert.deepEqual(singleDetails, { media_kind: 'image', image_count: 1, media_hosts: ['cdn'] });
   assert.equal(
     single.structuredContent?.summary,
     'Create a single feed image container and publish it',
@@ -2095,7 +2102,7 @@ test('post_reel carries the location id onto the REELS container', async () => {
     { videoUrl: 'https://cdn/v.mp4', locationId: '17841400000', apply: true },
     makeCtx(req),
   );
-  assert.equal(calls.find((c) => c.path === '/999/media')?.params?.location_id, '17841400000');
+  assert.equal(calls.find((c) => c.path === '/999/media')?.body?.location_id, '17841400000');
 });
 
 test('post_reel previews a fresh reel as a reel and a resume as a resume', async () => {
@@ -2121,7 +2128,11 @@ test('post_reel previews a fresh reel as a reel and a resume as a resume', async
   // `deepEqual` is `deepStrictEqual` and counts an own key holding `undefined`.
   const fresh = await runPostReel({ videoUrl: 'https://cdn/v.mp4' }, makeCtx(req));
   const freshDetails = fresh.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.deepEqual(freshDetails, { media_kind: 'reel', share_to_feed: undefined });
+  assert.deepEqual(freshDetails, {
+    media_kind: 'reel',
+    share_to_feed: undefined,
+    media_hosts: ['cdn'],
+  });
 
   const resumed = await runPostReel({ resumeContainerId: 'R-PRIOR' }, makeCtx(req));
   const resumedDetails = resumed.structuredContent?.details as Record<string, unknown> | undefined;
@@ -2320,7 +2331,7 @@ test('a carousel is assembled in the order the images were given', () => {
   // either way. Once published, the order cannot be edited.
   const { req, calls } = fakeReq((opts) => {
     if (opts.path === '/999/media' && opts.method === 'POST') {
-      if (opts.params?.children !== undefined) return { id: 'ALBUM' };
+      if (opts.body?.children !== undefined) return { id: 'ALBUM' };
       return { id: `CH${calls.filter((c) => c.path === '/999/media').length}` };
     }
     if (opts.path === '/ALBUM' && opts.method === 'GET')
@@ -2334,13 +2345,10 @@ test('a carousel is assembled in the order the images were given', () => {
     makeCtx(req),
   ).then(() => {
     const children = calls
-      .filter((c) => c.path === '/999/media' && c.params?.image_url !== undefined)
-      .map((c) => c.params?.image_url);
+      .filter((c) => c.path === '/999/media' && c.body?.image_url !== undefined)
+      .map((c) => c.body?.image_url);
     assert.deepEqual(children, ['https://cdn/1.jpg', 'https://cdn/2.jpg', 'https://cdn/3.jpg']);
-    assert.equal(
-      calls.find((c) => c.params?.children !== undefined)?.params?.children,
-      'CH1,CH2,CH3',
-    );
+    assert.equal(calls.find((c) => c.body?.children !== undefined)?.body?.children, 'CH1,CH2,CH3');
   });
 });
 
@@ -2500,8 +2508,8 @@ test('create_media_container sends the caption it previewed, not an empty one', 
     makeCtx(req),
   );
 
-  assert.equal(calls[0]?.params?.caption, 'Golden hour on the pier');
-  assert.equal(calls[0]?.params?.location_id, '17841400000');
+  assert.equal(calls[0]?.body?.caption, 'Golden hour on the pier');
+  assert.equal(calls[0]?.body?.location_id, '17841400000');
 });
 
 test('an applied create journals the container it created as the write target', async () => {
@@ -2556,9 +2564,9 @@ test('post_image builds the single-image container from the URL and caption give
   );
 
   const create = calls.find((c) => c.path === '/999/media' && c.method === 'POST');
-  assert.equal(create?.params?.image_url, 'https://cdn/only.jpg');
-  assert.equal(create?.params?.caption, 'Solo shot');
-  assert.equal('media_type' in (create?.params ?? {}), false);
+  assert.equal(create?.body?.image_url, 'https://cdn/only.jpg');
+  assert.equal(create?.body?.caption, 'Solo shot');
+  assert.equal('media_type' in (create?.body ?? {}), false);
 });
 
 test('post_reel sends the caption on the REELS container', async () => {
@@ -2578,8 +2586,8 @@ test('post_reel sends the caption on the REELS container', async () => {
   );
 
   const create = calls.find((c) => c.path === '/999/media' && c.method === 'POST');
-  assert.equal(create?.params?.caption, 'Behind the scenes #film');
-  assert.equal(create?.params?.media_type, 'REELS');
+  assert.equal(create?.body?.caption, 'Behind the scenes #film');
+  assert.equal(create?.body?.media_type, 'REELS');
 });
 
 test('a reel preview reports the cross-post choice exactly as it was made', async () => {
@@ -2595,6 +2603,7 @@ test('a reel preview reports the cross-post choice exactly as it was made', asyn
   assert.deepEqual(unset.structuredContent?.details, {
     media_kind: 'reel',
     share_to_feed: undefined,
+    media_hosts: ['cdn'],
   });
   assert.equal(unset.structuredContent?.summary, 'Create a reel container and publish it');
 
@@ -2602,7 +2611,11 @@ test('a reel preview reports the cross-post choice exactly as it was made', asyn
     { videoUrl: 'https://cdn/v.mp4', shareToFeed: false },
     makeCtx(req),
   );
-  assert.deepEqual(off.structuredContent?.details, { media_kind: 'reel', share_to_feed: false });
+  assert.deepEqual(off.structuredContent?.details, {
+    media_kind: 'reel',
+    share_to_feed: false,
+    media_hosts: ['cdn'],
+  });
 });
 
 test('post_reel honours the poll budget it is handed', async () => {
@@ -2912,7 +2925,7 @@ test('an apply carousel with userTags posts the album and sends no user_tags any
 
   assert.equal(res.structuredContent?.status, 'published');
   assert.equal(
-    calls.some((c) => JSON.stringify(c.params ?? {}).includes('ana')),
+    calls.some((c) => JSON.stringify(c.body ?? {}).includes('ana')),
     false,
     'no request in the carousel flow carries user_tags',
   );
@@ -3026,11 +3039,11 @@ test('create_media_container hints both offending URLs, in field order, not just
 });
 
 test('no video URL is format-hinted, whatever extension it happens to carry', async () => {
-  // The hint's text says "suggests a non-JPEG image", which is the wrong
-  // sentence for a video field — a reel whose source is an image extension has
-  // a different problem, and telling its author to re-encode to JPEG would be
-  // advice that cannot be followed. Re-wording the message belongs to
-  // `api/media-spec.ts`, so a video field is left unhinted here on purpose.
+  // Both hint sentences are about a still-image field ("suggests a non-JPEG
+  // image", "this field takes a still image"), which is the wrong diagnosis for
+  // a video field — a reel whose source is an image extension has a different
+  // problem, and telling its author to re-encode to JPEG would be advice that
+  // cannot be followed. So a video field is left unhinted on purpose.
   // The URLs below deliberately carry a still-image extension: a site that read
   // the video field instead of the image one would light up on every row.
   const ctx = (): ToolContext => makeCtx(fakeReq(() => ({ id: 'C1' })).req);
@@ -3052,27 +3065,262 @@ test('no video URL is format-hinted, whatever extension it happens to carry', as
   }
 });
 
-test('a resume hints nothing, because the media inputs it was handed are ignored', async () => {
-  // A resume finishes a container that already exists; the URLs in the call are
-  // not sent anywhere, so a hint about them would describe a fetch that will
-  // never happen and push the operator to "fix" a post already in flight.
+/** The resume warning for the given ignored fields, restated whole (CC-PUB-59). */
+function resumeIgnored(fields: string): string {
+  return (
+    'resumeContainerId is set, so these inputs are ignored — the existing container is ' +
+    `published exactly as it was created and cannot be changed: ${fields}.`
+  );
+}
+
+test('a resume names the media inputs it ignores, and hints about none of them (CC-PUB-59)', async () => {
+  // A resume finishes a container that already exists; the URLs and caption in
+  // the call are not sent anywhere. A FORMAT hint about them would describe a
+  // fetch that will never happen, so none is given. What the operator is told
+  // instead is that these inputs are ignored — otherwise a caller who passed a
+  // new caption approves a post believing it applies, and gets the container's
+  // original caption with no signal. `apply` and `resumeContainerId` itself are
+  // never listed; the rest are named in input-schema order.
   const ctx = (): ToolContext => makeCtx(fakeReq(() => ({ id: 'C1' })).req);
 
   const reel = await runPostReel(
-    { resumeContainerId: 'R-PRIOR', videoUrl: 'https://cdn/v.mp4', coverUrl: 'https://cdn/c.png' },
+    {
+      resumeContainerId: 'R-PRIOR',
+      videoUrl: 'https://cdn/v.mp4',
+      coverUrl: 'https://cdn/c.png',
+      caption: 'new words',
+      shareToFeed: false,
+    },
     ctx(),
   );
-  const reelDetails = reel.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.equal(reelDetails?.resume_container_id, 'R-PRIOR');
-  assert.equal('warnings' in (reelDetails ?? {}), false);
+  assert.deepEqual(reel.structuredContent?.details, {
+    resume_container_id: 'R-PRIOR',
+    warnings: [resumeIgnored('videoUrl, caption, coverUrl, shareToFeed')],
+  });
 
   const story = await runPostStory(
     { resumeContainerId: 'S-PRIOR', imageUrl: 'https://cdn/s.png' },
     ctx(),
   );
-  const storyDetails = story.structuredContent?.details as Record<string, unknown> | undefined;
-  assert.equal(storyDetails?.resume_container_id, 'S-PRIOR');
-  assert.equal('warnings' in (storyDetails ?? {}), false);
+  assert.deepEqual(story.structuredContent?.details, {
+    resume_container_id: 'S-PRIOR',
+    warnings: [resumeIgnored('imageUrl')],
+  });
+
+  const image = await runPostImage(
+    {
+      resumeContainerId: 'I-PRIOR',
+      imageUrls: ['https://cdn/a.png'],
+      caption: '',
+      userTags: [],
+      locationId: '123',
+      apply: false,
+    },
+    ctx(),
+  );
+  assert.deepEqual(image.structuredContent?.details, {
+    resume_container_id: 'I-PRIOR',
+    warnings: [resumeIgnored('imageUrls, caption, locationId, userTags')],
+  });
+
+  // A bare resume (with or without `apply`) has nothing to warn about, and the
+  // key is absent rather than an empty list.
+  const bare = await runPostStory({ resumeContainerId: 'S-PRIOR', apply: false }, ctx());
+  assert.deepEqual(bare.structuredContent?.details, { resume_container_id: 'S-PRIOR' });
+});
+
+test('the resume warning reaches the applied result too (CC-PUB-59, CC-PUB-25)', async () => {
+  // Under IG_WRITE_MODE=apply no preview is ever shown, so a warning that lived
+  // in `details` only would reach nobody.
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/S-PRIOR') return { id: 'S-PRIOR', status_code: 'FINISHED' };
+    if (opts.path === '/999/media_publish') return { id: 'M1' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+  const res = await runPostStory(
+    { resumeContainerId: 'S-PRIOR', videoUrl: 'https://cdn/s.mp4', apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(res.structuredContent, {
+    status: 'published',
+    container_id: 'S-PRIOR',
+    media_id: 'M1',
+    warnings: [resumeIgnored('videoUrl')],
+  });
+});
+
+// --- what the operator reads before approving (CC-PUB-60) ------------------
+
+/** The `details.caption.excerpt` of a composite preview. */
+function excerptOf(res: ToolResult): unknown {
+  const details = res.structuredContent?.details as Record<string, unknown> | undefined;
+  return (details?.caption as Record<string, unknown> | undefined)?.excerpt;
+}
+
+test('the caption excerpt is flattened: control characters become spaces, runs collapse, edges trim', async () => {
+  // The confirm prompt is one line of JSON. A newline would be escaped into a
+  // literal `\n`, and a bidi override (U+202E) could reorder what the approver
+  // reads — so every control/format character becomes a space, and the spaces a
+  // multi-line caption leaves behind collapse into one. U+202E is chosen because
+  // it is `\p{C}` but NOT `\s`: only the control-character pass can remove it.
+  const ctx = makeCtx(fakeReq(() => ({ id: 'C1' })).req);
+  const res = await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], caption: '  Sun‮set\n\n   on  the\tpier  ' },
+    ctx,
+  );
+  assert.equal(excerptOf(res), 'Sun set on the pier');
+});
+
+test('the caption excerpt is cut after CAPTION_EXCERPT_MAX code points, and only then', async () => {
+  assert.equal(CAPTION_EXCERPT_MAX, 200, 'the budget shares an 800-character confirm prompt');
+  const excerpt = async (caption: string): Promise<unknown> =>
+    excerptOf(
+      await runPostImage(
+        { imageUrls: ['https://cdn/a.jpg'], caption },
+        makeCtx(fakeReq(() => ({ id: 'C1' })).req),
+      ),
+    );
+
+  // Exactly at the budget: shown whole, no ellipsis.
+  assert.equal(await excerpt('x'.repeat(200)), 'x'.repeat(200));
+  // One past it: the first 200 kept, and the cut is marked.
+  assert.equal(await excerpt('x'.repeat(201)), `${'x'.repeat(200)}…`);
+  // Counted in code points: 200 emoji are 400 UTF-16 units and still fit, and
+  // a cut never splits a surrogate pair.
+  assert.equal(await excerpt('😀'.repeat(200)), '😀'.repeat(200));
+  assert.equal(await excerpt('😀'.repeat(201)), `${'😀'.repeat(200)}…`);
+});
+
+test('media_hosts names each CDN host once, in order, and nothing else of the URL', async () => {
+  // The host tells the approver whose server Instagram will fetch from. The
+  // path and query are withheld — a pre-signed URL carries its credential there
+  // (CC-PUB-8) — and so is userinfo; the port stays, because it is part of
+  // where the fetch goes.
+  const ctx = (): ToolContext => makeCtx(fakeReq(() => ({ id: 'C1' })).req);
+  const hostsOf = (res: ToolResult): unknown =>
+    (res.structuredContent?.details as Record<string, unknown> | undefined)?.media_hosts;
+
+  const carousel = await runPostImage(
+    {
+      imageUrls: [
+        'https://b.cdn:8443/p/1.jpg?X-Amz-Signature=SECRET',
+        'https://user:pw@a.cdn/2.jpg',
+        'https://b.cdn:8443/3.jpg',
+      ],
+    },
+    ctx(),
+  );
+  assert.deepEqual(hostsOf(carousel), ['b.cdn:8443', 'a.cdn']);
+  assert.doesNotMatch(JSON.stringify(carousel.structuredContent), /SECRET|user:|pw@/);
+
+  const reel = await runPostReel(
+    { videoUrl: 'https://v.cdn/clip.mp4', coverUrl: 'https://i.cdn/c.jpg' },
+    ctx(),
+  );
+  assert.deepEqual(hostsOf(reel), ['v.cdn', 'i.cdn']);
+
+  const story = await runPostStory({ imageUrl: 'https://i.cdn/s.jpg' }, ctx());
+  assert.deepEqual(hostsOf(story), ['i.cdn']);
+});
+
+// --- warnings survive into every applied outcome (CC-PUB-25) ---------------
+
+const PNG_WARNING =
+  'URL extension ".png" suggests a non-JPEG image; Instagram accepts JPEG only for images ' +
+  '(feed, story, and reel cover). Format, byte size, and dimensions cannot be verified ' +
+  'before Instagram fetches the URL.';
+
+/** The video sentence for a still-image field, restated whole (CC-PUB-23). */
+function videoWarning(ext: string): string {
+  return (
+    `URL extension ".${ext}" suggests a video, but this field takes a still image; Instagram ` +
+    'accepts JPEG only for images (feed, story, and reel cover). Format, byte size, and ' +
+    'dimensions cannot be verified before Instagram fetches the URL.'
+  );
+}
+
+test('a format warning is carried into the published result of a composite', async () => {
+  // Under IG_WRITE_MODE=apply no preview is shown, so the applied result is the
+  // only place the operator can learn the fetch may fail.
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/999/media' && opts.method === 'POST') return { id: 'C1' };
+    if (opts.path === '/C1') return { id: 'C1', status_code: 'FINISHED' };
+    if (opts.path === '/999/media_publish') return { id: 'M1' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+  const res = await runPostImage({ imageUrls: ['https://cdn/a.png'], apply: true }, makeCtx(req));
+  assert.deepEqual(res.structuredContent, {
+    status: 'published',
+    container_id: 'C1',
+    media_id: 'M1',
+    warnings: [PNG_WARNING],
+  });
+});
+
+test('a format warning is carried into the in_progress result of a composite', async () => {
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/999/media' && opts.method === 'POST') return { id: 'C1' };
+    if (opts.path === '/C1') return { id: 'C1', status_code: 'IN_PROGRESS' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+  const res = await runPostReel(
+    { videoUrl: 'https://cdn/v.mp4', coverUrl: 'https://cdn/c.mov', apply: true },
+    makeCtx(req),
+    { maxPollMs: 0 },
+  );
+  assert.equal(res.structuredContent?.status, 'in_progress');
+  assert.deepEqual(res.structuredContent?.warnings, [videoWarning('mov')]);
+});
+
+test('the resume warning is carried into the already_published result', async () => {
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/DONE') return { id: 'DONE', status_code: 'PUBLISHED' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+  const res = await runPostImage(
+    { resumeContainerId: 'DONE', imageUrls: ['https://cdn/a.jpg'], apply: true },
+    makeCtx(req),
+  );
+  assert.equal(res.structuredContent?.status, 'already_published');
+  assert.deepEqual(res.structuredContent?.warnings, [resumeIgnored('imageUrls')]);
+});
+
+test('a video URL on any still-image field draws the video sentence, not the JPEG one (CC-PUB-23)', async () => {
+  // "suggests a non-JPEG image" is the wrong diagnosis for an .mp4 pasted into
+  // an image field: the fix is to pass a still image, not to re-encode.
+  const ctx = (): ToolContext => makeCtx(fakeReq(() => ({ id: 'C1' })).req);
+  const cases: Array<[string, ToolResult, string]> = [
+    [
+      'create_media_container.imageUrl',
+      await tool('instagram_create_media_container').handler(
+        { imageUrl: 'https://cdn/a.mp4' },
+        ctx(),
+      ),
+      'mp4',
+    ],
+    [
+      'create_media_container.coverUrl',
+      await tool('instagram_create_media_container').handler(
+        { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4', coverUrl: 'https://cdn/c.mov' },
+        ctx(),
+      ),
+      'mov',
+    ],
+    [
+      'post_image.imageUrls',
+      await runPostImage({ imageUrls: ['https://cdn/a.webm'] }, ctx()),
+      'webm',
+    ],
+    [
+      'post_reel.coverUrl',
+      await runPostReel({ videoUrl: 'https://cdn/v.mp4', coverUrl: 'https://cdn/c.m4v' }, ctx()),
+      'm4v',
+    ],
+    ['post_story.imageUrl', await runPostStory({ imageUrl: 'https://cdn/s.mp4' }, ctx()), 'mp4'],
+  ];
+  for (const [where, res, ext] of cases) {
+    assert.deepEqual(previewWarnings(res), [videoWarning(ext)], where);
+  }
 });
 
 // --- verbatim pass-through: what was approved is what Instagram receives -----
@@ -3087,8 +3335,9 @@ const RAW_CAPTION = '  Rooftop ﬁnale ① — take 2  ';
 
 test('the caption reaches Graph exactly as written, at every container it creates', async () => {
   // The caption is the operator's own words, published under their account, and
-  // the preview they approve reports only its statistics — never the text. So a
-  // transformation applied here is invisible at the consent gate and permanent
+  // the preview they approve shows only a flattened, truncated excerpt of it
+  // (CC-PUB-60) — never the bytes that are sent. So a transformation applied
+  // here is invisible at the consent gate and permanent
   // once posted: trimming eats the deliberate blank line that separates a caption
   // from its hashtag block, NFKC rewrites ligatures and circled digits into
   // different characters, and a truncation posts half a sentence. All four
@@ -3096,7 +3345,7 @@ test('the caption reaches Graph exactly as written, at every container it create
   // the others do not is the version of this bug that is hardest to see.
   const seen: string[] = [];
   const { req } = fakeReq((opts) => {
-    const params = opts.params as Record<string, unknown> | undefined;
+    const params = opts.body as Record<string, unknown> | undefined;
     if (typeof params?.caption === 'string') seen.push(params.caption);
     if (opts.path.endsWith('/media')) return { id: 'C1' };
     if (opts.path === '/C1') return { id: 'C1', status_code: 'FINISHED' };
@@ -3142,7 +3391,7 @@ test('a media URL is forwarded byte for byte, never rewritten on the way out', a
   });
   const padded = ' https://cdn/a.jpg ';
   await runPostImage({ imageUrls: [padded], apply: true }, makeCtx(single.req));
-  assert.equal(single.calls[0]?.params?.image_url, padded);
+  assert.equal(single.calls[0]?.body?.image_url, padded);
 
   const album = fakeReq((opts) => {
     if (opts.path === '/999/media') return { id: 'C1' };
@@ -3151,8 +3400,8 @@ test('a media URL is forwarded byte for byte, never rewritten on the way out', a
   });
   const paddedB = ' https://cdn/b.jpg ';
   await runPostImage({ imageUrls: [padded, paddedB], apply: true }, makeCtx(album.req));
-  assert.equal(album.calls[0]?.params?.image_url, padded);
-  assert.equal(album.calls[1]?.params?.image_url, paddedB);
+  assert.equal(album.calls[0]?.body?.image_url, padded);
+  assert.equal(album.calls[1]?.body?.image_url, paddedB);
 });
 
 test('a media URL the parser had to clean up is refused, not forwarded raw', async () => {
@@ -3259,11 +3508,11 @@ test('an empty caption is a caption, and is reported as one', async () => {
 
   const image = await runPostImage({ imageUrls: ['https://cdn/a.jpg'], caption: '' }, previewCtx());
   const imageDetails = image.structuredContent?.details as Record<string, unknown>;
-  assert.deepEqual(imageDetails.caption, { characters: 0, hashtags: 0, mentions: 0 });
+  assert.deepEqual(imageDetails.caption, { excerpt: '', characters: 0, hashtags: 0, mentions: 0 });
 
   const reel = await runPostReel({ videoUrl: 'https://cdn/v.mp4', caption: '' }, previewCtx());
   const reelDetails = reel.structuredContent?.details as Record<string, unknown>;
-  assert.deepEqual(reelDetails.caption, { characters: 0, hashtags: 0, mentions: 0 });
+  assert.deepEqual(reelDetails.caption, { excerpt: '', characters: 0, hashtags: 0, mentions: 0 });
 
   // And the empty caption is really sent, rather than dropped as absent.
   const { req, calls } = fakeReq((opts) => {
@@ -3272,11 +3521,11 @@ test('an empty caption is a caption, and is reported as one', async () => {
     return { id: 'M1' };
   });
   await runPostImage({ imageUrls: ['https://cdn/a.jpg'], caption: '', apply: true }, makeCtx(req));
-  assert.equal(calls[0]?.params?.caption, '');
+  assert.equal(calls[0]?.body?.caption, '');
 });
 
 test('a reel preview summarises its caption under the same keys every other tool uses', async () => {
-  // `details.caption` is a three-key summary — characters/hashtags/mentions — and
+  // `details.caption` is a summary — excerpt/characters/hashtags/mentions — and
   // the raw `CaptionStats` shape it is built from spells the first one
   // `codePoints`. Handing the raw stats through instead still "has a caption
   // field", so nothing fails, but the operator reading a reel preview gets a
@@ -3288,7 +3537,12 @@ test('a reel preview summarises its caption under the same keys every other tool
     makeCtx(req),
   );
   const details = res.structuredContent?.details as Record<string, unknown>;
-  assert.deepEqual(details.caption, { characters: 16, hashtags: 1, mentions: 1 });
+  assert.deepEqual(details.caption, {
+    excerpt: 'hello #trip @ana',
+    characters: 16,
+    hashtags: 1,
+    mentions: 1,
+  });
 });
 
 // --- the refusal names the field that is actually wrong ---------------------
@@ -3905,14 +4159,15 @@ function pinned(schema: unknown): Record<string, unknown> | undefined {
  *     a container id is supposed to come from.
  *   - the input schema's `pattern`/`minLength`/`minItems`/`maxItems` are what
  *     tell the model an id or a list has a shape *before* it guesses one.
- *   - `videoUrl` and `coverUrl` publish as a `$ref` back at the first field
- *     built from the shared `httpsUrlSchema` instance, which means the *order*
- *     of the declared fields decides which field carries the resolved type and
- *     which carries only a pointer to it. Swapping those two declarations is
- *     therefore a change to the published schema even though nothing was
- *     renamed, and it is pinned here as one. A reorder that moves no `$ref`
- *     target is invisible to `deepEqual`; the sibling "declared input and
- *     output vocabularies" test is what pins plain field order.
+ *   - every media URL field publishes its own `{type, pattern, description}`.
+ *     Each is built by its own `httpsUrl()` call (CC-PUB-35): fields built from
+ *     one shared instance used to render as a `$ref` to their first twin, and
+ *     under draft-07 a strict client ignores the description beside a `$ref`,
+ *     so three of them published another field's text. The `pattern` is the
+ *     necessary half of the https verdict (CC-PUB-36) — before it the rule
+ *     rendered to nothing, and a client-side validator accepted `ftp://x`.
+ *     Field order is not visible to `deepEqual`; the sibling "declared input
+ *     and output vocabularies" test is what pins it.
  */
 const PUBLISHED_CONTRACT: Record<string, unknown> = {
   instagram_create_media_container: {
@@ -3937,11 +4192,13 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         },
         imageUrl: {
           type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description:
             'Public HTTPS image URL Instagram will fetch (feed image or carousel child).',
         },
         videoUrl: {
-          $ref: '#/properties/imageUrl',
+          type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description: 'Public HTTPS video URL Instagram will fetch (Reels/Stories video).',
         },
         caption: {
@@ -3979,7 +4236,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             'CAROUSEL album only: 2–10 previously-created child container ids to combine.',
         },
         coverUrl: {
-          $ref: '#/properties/imageUrl',
+          type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description: 'Reels cover image URL.',
         },
         thumbOffset: {
@@ -4113,7 +4371,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
       properties: {
         imageUrls: {
           type: 'array',
-          items: { type: 'string' },
+          items: { type: 'string', pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/' },
           minItems: 1,
           maxItems: 10,
           description:
@@ -4178,6 +4436,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
       properties: {
         videoUrl: {
           type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description:
             'Public HTTPS video URL for the reel (required unless resuming). Duration, codec, and size are unverifiable before Instagram fetches it.',
         },
@@ -4187,7 +4446,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             'Caption text (≤ 2200 characters, ≤ 30 hashtags, ≤ 20 @mentions — counted as a client-side guard). Instagram renders @mentions and #hashtags.',
         },
         coverUrl: {
-          $ref: '#/properties/videoUrl',
+          type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description: 'Public HTTPS cover image URL for the reel.',
         },
         thumbOffset: {
@@ -4238,11 +4498,13 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
       properties: {
         imageUrl: {
           type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description:
             'Public HTTPS JPEG image for a photo story. Provide exactly one of imageUrl or videoUrl.',
         },
         videoUrl: {
-          $ref: '#/properties/imageUrl',
+          type: 'string',
+          pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description:
             'Public HTTPS video for a video story. Provide exactly one of imageUrl or videoUrl.',
         },
@@ -4421,7 +4683,7 @@ test('a composite whose container create has no id stops before polling a contai
 test('a carousel album acknowledged without an id names the child containers already made', async () => {
   let child = 0;
   const { req, calls } = fakeReq((opts) => {
-    if (opts.path === '/999/media' && opts.params?.media_type === 'CAROUSEL') return {};
+    if (opts.path === '/999/media' && opts.body?.media_type === 'CAROUSEL') return {};
     if (opts.path === '/999/media') return { id: `K${++child}` };
     throw new Error(`unexpected ${opts.method} ${opts.path}`);
   });
@@ -4593,7 +4855,7 @@ test('an album acknowledged without an id quotes child ids that are not Graph id
   const children = ['K1', 'y'.repeat(200)];
   let child = 0;
   const { req } = fakeReq((opts) => {
-    if (opts.path === '/999/media' && opts.params?.media_type === 'CAROUSEL') return {};
+    if (opts.path === '/999/media' && opts.body?.media_type === 'CAROUSEL') return {};
     if (opts.path === '/999/media') return { id: children[child++] };
     throw new Error(`unexpected ${opts.method} ${opts.path}`);
   });

@@ -400,7 +400,11 @@ async function main(): Promise<void> {
   // point the registry stays decoupled from, and the CLI diagnostics reuse.
   const makeRequest = (profile: ResolvedProfile) =>
     createIgRequest({
-      auth: createAuthProvider(profile),
+      // The clock signs Path B's time-bound `appsecret_proof` (CC-AUTH-15).
+      // Equivalent-mutant note: dropping it falls back to `systemClock`, which is
+      // this very `clock`; the wiring stays because this is the one place that
+      // injects it, as for `doctor` and `refresh` below.
+      auth: createAuthProvider(profile, clock),
       settings,
       clock,
       log,

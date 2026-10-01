@@ -14,6 +14,7 @@ import {
   getAccount,
   listLinkedAccounts,
   summarizeDataAccessExpiry,
+  DATA_ACCESS_WARN_DAYS,
   summarizeTokenExpiry,
 } from '../../src/api/account.js';
 
@@ -1157,12 +1158,35 @@ test('summarizeDataAccessExpiry classifies the data-access window (CC-AUTH-77)',
   assert.deepEqual(summarizeDataAccessExpiry({ dataAccessExpiresAtSec: 0, nowMs }), {
     state: 'none',
   });
-  // Open: strictly after now, however close.
-  for (const sec of [nowSec + 1, nowSec + 30 * 86_400, MAX_RECORDED_EXPIRY_SEC]) {
+  // Open: more than DATA_ACCESS_WARN_DAYS (7) days after now, by one second or more.
+  assert.equal(DATA_ACCESS_WARN_DAYS, 7);
+  for (const sec of [nowSec + 7 * 86_400 + 1, nowSec + 30 * 86_400, MAX_RECORDED_EXPIRY_SEC]) {
     assert.deepEqual(summarizeDataAccessExpiry({ dataAccessExpiresAtSec: sec, nowMs }), {
       state: 'open',
       expiresAt: iso(sec),
     });
+  }
+  // Expiring soon: strictly after now and within 7 days (the boundary is
+  // inclusive), with the days left rounded DOWN.
+  for (const [sec, daysLeft] of [
+    [nowSec + 7 * 86_400, 7],
+    [nowSec + 7 * 86_400 - 1, 6],
+    [nowSec + 2 * 86_400 + 5, 2],
+    [nowSec + 1, 0],
+  ] as const) {
+    assert.deepEqual(
+      summarizeDataAccessExpiry({ dataAccessExpiresAtSec: sec, nowMs }),
+      {
+        state: 'expiring_soon',
+        expiresAt: iso(sec),
+        daysLeft,
+        warning:
+          `Data access expires at ${iso(sec)} (~${daysLeft} day(s) left): after that, reads of ` +
+          'Instagram data fail with a permission error even while the token is valid; run the ' +
+          '`login` CLI to renew the data-access window before then.',
+      },
+      String(sec - nowSec),
+    );
   }
   // Expired: at now exactly (the boundary is inclusive) and before it.
   for (const sec of [nowSec, nowSec - 1, 1]) {

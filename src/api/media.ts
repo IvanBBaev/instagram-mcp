@@ -734,6 +734,29 @@ export async function listMedia(req: IgRequestFn, params: ListMediaParams): Prom
   );
 }
 
+// --- list_stories -----------------------------------------------------------
+
+/**
+ * List the operated account's live stories via `GET /{ig-user-id}/stories`
+ * (CC-DATA-119). Stories are not on the `/media` edge (CC-DATA-118), and this
+ * edge only ever holds stories still inside their 24-hour window, so an empty
+ * result is an honest "nothing live right now", not "never posted a story".
+ * Same fields and the same paging walk as {@link listMedia}: stories carry no
+ * like/comment counts, and those fields are already optional on `MediaItem`.
+ */
+export async function listStories(req: IgRequestFn, params: ListMediaParams): Promise<PagedMedia> {
+  return fetchPagedEdge<MediaItem, MediaItem>(
+    req,
+    (after) => ({
+      method: 'GET',
+      path: `/${encodeURIComponent(params.igAccountId)}/stories`,
+      params: { fields: MEDIA_FIELDS, limit: params.limit, after },
+    }),
+    params,
+    (m) => m,
+  );
+}
+
 export interface GetMediaParams {
   /** The IG media object id to fetch. */
   mediaId: string;

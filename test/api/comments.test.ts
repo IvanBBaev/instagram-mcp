@@ -3,8 +3,8 @@
  * {@link IgRequestFn} returns canned Graph payloads — no network, no
  * `mcp`/result dependency — so they run standalone. They cover the reply-edge
  * normalization, cursor pagination (cap + CC-DATA-1/4), single-comment context,
- * the `/tags` edge, and the exact method/path/params of every write call, plus
- * the transport-shape invariants (no body, no host pin, no idempotency
+ * the `/tags` edge, and the exact method/path/body of every write call, plus
+ * the transport-shape invariants (one payload channel, no host pin, no idempotency
  * override) that decide whether a call may be replayed or re-targeted.
  */
 import { after, test } from 'node:test';
@@ -61,9 +61,13 @@ function fakeReq(responder: (opts: IgRequestOptions) => unknown): {
  *   429, POST/DELETE do not. Declaring a write idempotent lets a timed-out reply
  *   or comment be replayed, so one tool call posts twice; declaring a read
  *   non-idempotent silently drops its throttle retries.
- * - `body`: this API is query-parameter based. A body appearing alongside the
- *   params means the same values travel twice, and a form body is not covered by
- *   the param-key assertions below — a smuggled field would never be noticed.
+ * - `body` / `params`: each request uses exactly one channel. A read is
+ *   query-parameter based and carries no body; a POST write carries its payload
+ *   on the form body and no query params (CC-PROC-25), because a message on the
+ *   query string rides the request line into every proxy and access log, and the
+ *   credential follows the body off the URL. A second channel appearing beside
+ *   the first means the same values travel twice, or a smuggled field travels
+ *   where the per-call-site assertions below never look.
  * - `signal`: the timeout belongs to the transport, not to this layer.
  *   `core/http` builds a per-attempt `AbortSignal.timeout` from the operator's
  *   configured budget and combines it with the CALLER's signal
@@ -84,7 +88,15 @@ function assertPlainGraphCall(opts: IgRequestOptions | undefined): void {
   assert.ok(opts, 'expected a request to have been issued');
   assert.equal(opts.host, undefined, 'must not override the configured Graph host');
   assert.equal(opts.idempotent, undefined, 'idempotency must be derived from the method');
-  assert.equal(opts.body, undefined, 'this API is query-parameter based — no request body');
+  if (opts.method === 'POST') {
+    assert.equal(
+      opts.params,
+      undefined,
+      'a write carries its payload on the form body (CC-PROC-25)',
+    );
+  } else {
+    assert.equal(opts.body, undefined, 'a read or a DELETE sends no request body');
+  }
   assert.equal(opts.signal, undefined, 'the abort deadline belongs to the transport');
 }
 
@@ -647,7 +659,7 @@ test('replyToComment POSTs to the /replies edge with the message', async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/C1/replies');
-  assert.deepEqual(calls[0]?.params, { message: 'hello' });
+  assert.deepEqual(calls[0]?.body, { message: 'hello' });
   // A public reply cannot be un-posted quietly: if the transport is told this
   // write is idempotent, a timed-out request is retried and the account posts
   // the same reply twice under a stranger's comment.
@@ -663,7 +675,7 @@ test('createComment POSTs to the media /comments edge with the message', async (
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/M1/comments');
-  assert.deepEqual(calls[0]?.params, { message: 'nice post' });
+  assert.deepEqual(calls[0]?.body, { message: 'nice post' });
   // Same replay hazard as a reply, in public and under someone else's post.
   assertPlainGraphCall(calls[0]);
 });
@@ -677,8 +689,8 @@ test('setCommentHidden POSTs hide=true and hide=false to the comment node', asyn
   assert.equal(calls.length, 2);
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/C1');
-  assert.deepEqual(calls[0]?.params, { hide: true });
-  assert.deepEqual(calls[1]?.params, { hide: false });
+  assert.deepEqual(calls[0]?.body, { hide: true });
+  assert.deepEqual(calls[1]?.body, { hide: false });
   // Hiding is idempotent in effect but must still be sent as a plain POST: the
   // transport decides retries from the method, and a host pin here would send a
   // moderation write — with the token — to a host the operator never configured.
@@ -711,12 +723,12 @@ test('setCommentsEnabled POSTs comment_enabled to the media node in both directi
   assert.equal(calls.length, 2);
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/M1');
-  assert.deepEqual(calls[0]?.params, { comment_enabled: false });
+  assert.deepEqual(calls[0]?.body, { comment_enabled: false });
   // Both directions are asserted because a toggle wired to a constant still
   // passes every "disable" test while being unable to re-enable: the operator
   // asks to reopen comments, the tool reports success, and the post stays shut.
   assert.equal(calls[1]?.path, '/M2');
-  assert.deepEqual(calls[1]?.params, { comment_enabled: true });
+  assert.deepEqual(calls[1]?.body, { comment_enabled: true });
   assertPlainGraphCall(calls[0]);
   assertPlainGraphCall(calls[1]);
 });
@@ -763,11 +775,11 @@ test('a comment write posts the message byte-for-byte — no trim, no truncation
 
   const reply = fakeReq(() => ({ id: 'reply-1' }));
   await replyToComment(reply.req, { commentId: 'C1', message: VERBATIM_MESSAGE });
-  assert.deepEqual(reply.calls[0]?.params, { message: VERBATIM_MESSAGE });
+  assert.deepEqual(reply.calls[0]?.body, { message: VERBATIM_MESSAGE });
 
   const created = fakeReq(() => ({ id: 'comment-1' }));
   await createComment(created.req, { mediaId: 'M1', message: VERBATIM_MESSAGE });
-  assert.deepEqual(created.calls[0]?.params, { message: VERBATIM_MESSAGE });
+  assert.deepEqual(created.calls[0]?.body, { message: VERBATIM_MESSAGE });
 });
 
 test('the acknowledging writes return what Graph answered, never a locally invented success', async () => {

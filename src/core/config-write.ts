@@ -86,6 +86,9 @@ export interface WriteCredentialsOptions {
    * Override the config-home base (the `<XDG_CONFIG_HOME | ~/.config>` /
    * `%APPDATA%` segment). The file is written at
    * `<configDir>/instagram-mcp-ai/.env`. Used by tests to target a temp dir.
+   * A relative value is resolved against the platform config home (the one
+   * `env` selects), never against the working directory (CC-CFG-11): `profiles`
+   * writes `<config home>/profiles/instagram-mcp-ai/.env`.
    */
   configDir?: string;
   /**
@@ -201,22 +204,33 @@ export function resolveConfigHome(env: NodeJS.ProcessEnv = process.env): string 
  * Config-home base for one write: the explicit override, else the platform's.
  *
  * An explicit `configDir` is a caller's own choice, so a relative one is obeyed
- * rather than ignored — but it is resolved against the cwd here, so that every
- * path this module returns is absolute no matter which branch produced it. The
- * returned path is what {@link writeCredentials} reports to the operator, and a
- * `./instagram-mcp-ai/.env` in a CLI's output names a different file once the
- * operator has changed directory to look at it. A `~` / `~/…` is the home
- * directory, not a folder named `~` in the cwd (CC-CFG-60), and a spelling
- * only a shell can expand is refused (CC-CFG-61).
+ * rather than ignored — but it is resolved against the platform config home
+ * ({@link resolveConfigHome}), never against the cwd, so that every path this
+ * module returns is absolute no matter which branch produced it. A `~` / `~/…`
+ * is the home directory, not a folder named `~` in the cwd (CC-CFG-60), and a
+ * spelling only a shell can expand is refused (CC-CFG-61).
+ *
+ * Corner case (CC-CFG-11): a relative `configDir` used to be resolved against
+ * the process cwd, so a caller deposited a 0600 credential file under whatever
+ * directory it happened to run in — the same leak CC-CFG-24 closed for a
+ * relative `XDG_CONFIG_HOME`. Rejecting it would break a caller who means a
+ * sub-directory; resolving it against the config home keeps the store under the
+ * directory every other store path lives in, and the rule is stated on
+ * {@link WriteCredentialsOptions.configDir} so the retarget is announced.
  */
 function configHome(opts: WriteCredentialsOptions): string {
   const explicit = clean(opts.configDir);
+  const env = opts.env ?? process.env;
   if (explicit !== undefined) {
     const expanded = expandHomeTilde(explicit, process.platform);
     assertNotShellSpelling(expanded, 'configDir', STORE_PURPOSE);
-    return path.resolve(expanded);
+    // The config home is consulted only for a relative value: an absolute one
+    // stands on its own, even beside a config-home variable that would be refused.
+    // No normalization here: `resolveStoreTarget` path.joins the result.
+    if (path.isAbsolute(expanded)) return expanded;
+    return path.resolve(resolveConfigHome(env), expanded);
   }
-  return resolveConfigHome(opts.env ?? process.env);
+  return resolveConfigHome(env);
 }
 
 /**

@@ -32,10 +32,23 @@ const UNPRINTABLE_ALL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 const UNPRINTABLE_OR_DELIMITER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\]/gu;
 
 /**
- * One code point a reader can see: anything that is neither whitespace nor in
- * the {@link UNPRINTABLE_ALL} class.
+ * One code point a reader can see: anything that is neither whitespace, in the
+ * {@link UNPRINTABLE_ALL} class, nor a blank renderer.
+ *
+ * Blank renderers (CC-DATA-126) are code points outside `\p{Cf}` that still
+ * draw nothing: the variation selectors (`\p{Variation_Selector}` — U+FE00–FE0F,
+ * U+E0100–E01EF and the Mongolian free variation selectors, general category
+ * `Mn`), the Hangul fillers U+115F, U+1160, U+3164 and the halfwidth U+FFA0 (all
+ * `Lo`), the braille blank U+2800 (`So`), and a lone surrogate (`\p{Cs}` — in
+ * `u` mode only an UNPAIRED half matches it; a pair is one astral code point).
+ * Until 2026-09-30 each of them counted as visible, so a Graph message made of
+ * nothing else beat the useful text a lower-priority field carried and showed
+ * the model an apparently blank message — CC-DATA-96's zero-width hole, through
+ * the categories that test never looked at. This is a fixed list, not a
+ * category: `Lo`, `Mn` and `So` are overwhelmingly visible. Only the "worth
+ * showing" decision uses it; nothing here is escaped differently.
  */
-const VISIBLE = /[^\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const VISIBLE = /[^\s\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\p{Variation_Selector}ᅟᅠㅤﾠ⠀]/u;
 
 /** One whitespace code point — where a word-safe cut may fall. */
 const WHITESPACE = /\s/u;
@@ -66,6 +79,14 @@ export interface QuoteOptions {
  * UTF-16 units, so it never splits a surrogate pair, and it happens BEFORE the
  * escaping, so an escape sequence is never cut in half.
  *
+ * The bound is `max` code points of SOURCE text, not of output (CC-DATA-127).
+ * Each code point escaped after the cut becomes a `\u{…}` of up to 9 characters,
+ * so a fragment made only of format characters renders at about 9× `max` — a
+ * 1 000-point cap over zero-width spaces comes out at over 8 000 characters. That is
+ * deliberate: the cap exists to keep a hostile message from flooding the
+ * context, and 9× a small cap still does; capping the output instead would have
+ * to avoid cutting an escape in half for no gain in safety.
+ *
  * Unlike `describeValue` in `core/settings.ts`, which declines to quote an
  * unprintable value at all, this escapes: a Graph error message is the
  * operator's only clue, and hiding it would cost more than showing it defused.
@@ -90,7 +111,8 @@ export function quoteUntrusted(
  * inside it is escaped as `\"` (and a `\` as `\\`, so an escape the text
  * spells for itself cannot pass for one this function made); everything else is
  * escaped exactly as {@link quoteUntrusted} escapes it. A cut fragment ends `…`
- * inside the quotes, with its full length stated after them.
+ * inside the quotes, with its full length stated after them. `max` bounds the
+ * source code points, not the escaped output, exactly as there (CC-DATA-127).
  *
  * This replaced `quoteBounded` in `api/publishing.ts`, which relied on
  * `JSON.stringify`: that escapes C0 controls, `"` and `\` but leaves U+2028/

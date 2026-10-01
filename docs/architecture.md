@@ -93,31 +93,28 @@ export interface ToolSpec<S extends z.ZodRawShape> {
 | Package | Contents | In `core` profile |
 |---|---|---|
 | `account` | profile info, linked-account resolution, token status | yes |
-| `media` | list/get own media, children (read-only), **toggle commenting on a media** | yes |
+| `media` | list/get own media, stories, children (read-only) | yes |
 | `publishing` | container create/status/publish, publishing-limit check | yes |
-| `comments` | list/reply/hide/delete comments, mentions | yes |
+| `comments` | list/reply/hide/delete comments, mentions, **toggle commenting on a media** | yes |
 | `insights` | account + media insights, demographics | yes |
 | `discovery` | hashtag search/top/recent, business discovery | no (`reader`, `all`) |
 | `messaging` | IG DMs via Messenger Platform | no (phase 2, `all`) |
 
 **Where `instagram_set_comments_enabled` lives, and why it matters.** It is
-implemented in `src/tools/comments.ts` but tagged `media`, because the call it
-makes is `POST /{media-id}?comment_enabled=…` — it edits the media object, not a
-comment. The table above follows the **tag**, since the tag is what
-`IG_TOOL_PACKAGES` / `IG_PACKAGES_DENY` / `IG_PACKAGES_READONLY` filter on: an
-operator who denies `comments` to stop comment moderation still keeps this tool,
-and one who makes `media` read-only loses it. The `media` spellings do reach it,
-but `IG_PACKAGES_DENY=media` also removes the two genuine media reads — so **no
-env setting isolates just this one write**. The two that do neutralise it are
-`IG_PACKAGES_READONLY=media` and `IG_TOOL_PACKAGES=reader` (the latter via
-`READONLY_PROFILES` plus the absent `readOnlyHint: true`). That is a defensible
-split, but the
-mismatch between the defining file and the tag is a trap for maintainers reading
-the source — recorded as **CC-PROC-9** in
-[corner-cases.md](corner-cases.md). The tag is pinned by
-`test/tools/index.test.ts` ("allTools carries the pinned package tag for every
-position"); changing it would be a surface change under the
-[stability.md](stability.md) §1 semver policy, not a cleanup.
+implemented in `src/tools/comments.ts` and, since 2026-09-30, tagged `comments`
+(**CC-PROC-9** in [corner-cases.md](corner-cases.md)). The call it makes is
+`POST /{media-id}?comment_enabled=…` — it edits the media object, not a comment —
+so until then it was tagged `media`. The table above follows the **tag**, since
+the tag is what `IG_TOOL_PACKAGES` / `IG_PACKAGES_DENY` / `IG_PACKAGES_READONLY`
+filter on. With the `media` tag, an operator who denied `comments` to stop comment
+moderation still kept this write, and `IG_PACKAGES_DENY=media` also removed the
+genuine media reads, so no env setting isolated it. Under the `comments` tag,
+`IG_PACKAGES_DENY=comments` or `IG_PACKAGES_READONLY=comments` switches it off
+together with the rest of comment moderation, and the `media` package is
+reads only. The tag is pinned by `test/tools/index.test.ts` ("allTools carries
+the pinned package tag for every position"); the retag is a surface change under
+the [stability.md](stability.md) §1 semver policy and is recorded in
+`CHANGELOG.md`.
 
 ## 5. HTTP client (`core/http.ts`)
 
@@ -129,7 +126,8 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   user-supplied hosts, no redirects followed cross-host. Loopback/private ranges
   always refused.
 - **Auth provider** interface (see [auth.md](auth.md)): injects `access_token` and —
-  on `graph.facebook.com` only — `appsecret_proof`. Providers: `ig-login` (token for
+  on `graph.facebook.com` only — the time-bound `appsecret_proof` with its
+  `appsecret_time` (CC-AUTH-15). Providers: `ig-login` (token for
   `graph.instagram.com`) and `fb-login` (page/system-user token for `graph.facebook.com`).
 - **Retry matrix**: `429`/rate-limit, `5xx` and transport errors are retried with
   exponential backoff `min(500·2^n, 8000) + jitter` (max 3 retries) only on an

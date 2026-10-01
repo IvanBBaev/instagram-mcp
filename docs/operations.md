@@ -173,7 +173,8 @@ and would reject an `{ error }` object as `-32602` (CC-DATA-61).
      flag, applied-write journal, active packages, refresh window. No secrets.
   2. **Token & authentication** — Path B introspects via `debug_token` (validity,
      scopes, expiry, and the data-access window, which closes independently of
-     the token: `OK` while open, a `WARN` once closed, `INFO unknown` for a value
+     the token: `OK` while open, a `WARN` within 7 days of closing and once
+     closed, `INFO unknown` for a value
      that is not an instant, and no line when Meta reports none or `0` —
      CC-AUTH-12, CC-AUTH-77). Path A has no `debug_token`, so on that path validity is
      established only by the reachability check (CC-AUTH-7), and the expiry line
@@ -199,8 +200,8 @@ and would reject an `{ error }` object as `-32602` (CC-DATA-61).
      line points the operator at the App Dashboard; dev-mode apps face lower rate
      limits and can act only on app roles/testers.
   5. **Summary** — `exitCode` 0 when healthy, non-zero when the token is
-     invalid/expired or the reachability GET fails. Near-expiry, a closed
-     data-access window and an account identity mismatch warn, never fail.
+     invalid/expired or the reachability GET fails. Near-expiry, a closing or
+     closed data-access window and an account identity mismatch warn, never fail.
 
   The journal line reports mode context and writability, because an unwritable
   journal is the one failure `mcp/write-mode.ts` deliberately swallows (it warns

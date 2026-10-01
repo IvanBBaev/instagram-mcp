@@ -399,13 +399,25 @@ export function summarizeTokenExpiry(params: {
 }
 
 /** Coarse state of the Path-B data-access window (`data_access_expires_at`). */
-export type DataAccessState = 'none' | 'unknown' | 'open' | 'expired';
+export type DataAccessState = 'none' | 'unknown' | 'open' | 'expiring_soon' | 'expired';
+
+/**
+ * How close to its end a data-access window is reported as `expiring_soon`, in
+ * days. A fixed span rather than `IG_REFRESH_AFTER_DAYS`: that knob (default 45)
+ * is sized for the 60-day token and would warn for half of a 90-day window.
+ */
+export const DATA_ACCESS_WARN_DAYS = 7;
 
 export interface DataAccessExpirySummary {
   state: DataAccessState;
-  /** ISO 8601 end of the window. Present for `open` and `expired` only. */
+  /** ISO 8601 end of the window. Present for `open`, `expiring_soon` and `expired`. */
   expiresAt?: string;
-  /** Set for `unknown` (the value Meta sent) and `expired` (the remedy). */
+  /** Whole days left, rounded down. Present for `expiring_soon` only. */
+  daysLeft?: number;
+  /**
+   * Set for `unknown` (the value Meta sent), `expiring_soon` (the date and the
+   * remedy) and `expired` (the remedy).
+   */
   warning?: string;
 }
 
@@ -424,6 +436,10 @@ export interface DataAccessExpirySummary {
  * - A window that closed at or before `nowMs` is `expired`, with a warning. It
  *   used to be published as a bare past date with no warning at all, and
  *   `doctor` did not show the window whatever its state (CC-AUTH-77).
+ * - A window that closes within {@link DATA_ACCESS_WARN_DAYS} days of `nowMs`
+ *   (the boundary inclusive) is `expiring_soon`, with a warning naming the date
+ *   and the remedy, so the operator can renew it before reads start failing
+ *   (CC-AUTH-12). Anything later is `open`.
  *
  * The `0` guard is strict on purpose: `isRecordableExpiry(0)` is true, so
  * without it the sentinel would render as a window that closed in 1970, and
@@ -449,6 +465,16 @@ export function summarizeDataAccessExpiry(params: {
       state: 'expired',
       expiresAt,
       warning: `Data access expired at ${expiresAt}: the token can still be valid, but reads of Instagram data fail with a permission error until the app is re-authorized; run the \`login\` CLI to renew the data-access window.`,
+    };
+  }
+  const leftMs = sec * 1000 - nowMs;
+  if (leftMs <= DATA_ACCESS_WARN_DAYS * MS_PER_DAY) {
+    const daysLeft = Math.floor(leftMs / MS_PER_DAY);
+    return {
+      state: 'expiring_soon',
+      expiresAt,
+      daysLeft,
+      warning: `Data access expires at ${expiresAt} (~${daysLeft} day(s) left): after that, reads of Instagram data fail with a permission error even while the token is valid; run the \`login\` CLI to renew the data-access window before then.`,
     };
   }
   return { state: 'open', expiresAt };

@@ -1,27 +1,31 @@
 /**
  * Media tool specs (Layer 3) — read-only surface of the `media` package.
  *
- * Two tools per docs/tools.md: `instagram_list_media` and `instagram_get_media`
- * (both `readOnlyHint`). The package's write tool (`instagram_set_comments_enabled`)
- * is deliberately not defined here — it belongs to the media-write task.
+ * Three tools per docs/tools.md: `instagram_list_media`, `instagram_list_stories`
+ * and `instagram_get_media` (all `readOnlyHint`). The comment toggle
+ * (`instagram_set_comments_enabled`) acts on a media object but is a comments
+ * write, so it lives in `tools/comments` under the `comments` package (CC-PROC-9).
  *
  * Each handler calls the `api/media` layer through `ctx.req`, caps `fetchAll`
  * with `ctx.settings.maxItems`, and **fences untrusted media text** (captions)
  * before returning it to the model (docs/security.md §7). InstagramError from
  * the api layer is left to propagate — the registry maps and renders it.
  *
- * Import boundary: `api/*` + `mcp/*` only; never `core/http`.
+ * Import boundary: `api/*` + `mcp/*` + `core/types` only; never `core/http`.
  */
 import { z } from 'zod';
 import { graphObjectId } from './ids.js';
 import { defineTool, type ToolSpec } from '../mcp/define.js';
 import { fence, json } from '../mcp/result.js';
+import { isInstagramError } from '../core/types.js';
 import {
   getMedia,
   getMediaChildren,
   listMedia,
+  listStories,
   type MediaDetail,
   type MediaItem,
+  type PagedMedia,
 } from '../api/media.js';
 
 // --- Output schemas --------------------------------------------------------
@@ -57,6 +61,14 @@ const mediaFieldsShape = {
 } as const;
 
 const mediaItemOutput = z.object(mediaFieldsShape).passthrough();
+
+/** Output of a media listing — `list_media` and `list_stories` share it. */
+const listingOutput = {
+  items: z.array(mediaItemOutput),
+  paging: z.object({ after: z.string().optional(), truncated: z.boolean() }).passthrough(),
+  note: z.string().optional(),
+  omittedWithoutId: z.number().int().optional(),
+} as const;
 
 // --- Untrusted-text fencing and publishable values -------------------------
 //
@@ -203,6 +215,59 @@ function omittedChildrenNote(count: number): string {
   );
 }
 
+/**
+ * The structured payload of a media listing — shared by `list_media` and
+ * `list_stories`, which walk different edges into the same page shape.
+ */
+function pagedMediaPayload(page: PagedMedia): Record<string, unknown> {
+  // Equivalent-mutant note: relaxing either guard below to plain truthiness is
+  // unobservable, because the api layer has already normalised both fields.
+  // `fetchPagedEdge` publishes `after` only through `isUsableCursor`
+  // (`api/media.ts`), which refuses the empty string outright — that is the
+  // layer CC-DATA-23 makes responsible for the distinction — and every `note`
+  // it can set is a non-empty literal. Removing a guard is a different matter
+  // and is caught: `structuredContent` travels as a live object, so an
+  // unconditional assignment leaves the key present with an `undefined` value,
+  // which reads as "here is your next cursor, it just has no value". The strict
+  // form stays because this layer must not quietly lean on the other one's
+  // guard: it asks whether the api layer OFFERED a cursor or a note, not whether
+  // what it offered happens to be truthy.
+  const paging: Record<string, unknown> = { truncated: page.truncated };
+  if (page.after !== undefined) paging.after = page.after;
+
+  const usable = page.items.filter(hasUsableId);
+  const payload: Record<string, unknown> = {
+    items: usable.map(mediaItemToRecord),
+    paging,
+  };
+  // An id-less entry is still dropped (the schema requires `id`), but the drop
+  // is counted and noted rather than silent. Both keys are published only when
+  // something was dropped, so a clean page carries neither.
+  const omitted = page.items.length - usable.length;
+  const notes: string[] = [];
+  if (page.note !== undefined) notes.push(page.note);
+  if (omitted > 0) {
+    payload.omittedWithoutId = omitted;
+    notes.push(omittedWithoutIdNote(omitted));
+  }
+  if (notes.length > 0) payload.note = notes.join('; ');
+
+  return payload;
+}
+
+/**
+ * The note `get_media` publishes when the carousel `/children` fallback failed
+ * (CC-DATA-120): the album was read, its items were not, and `children` is
+ * omitted for that reason rather than because the album is empty.
+ */
+function childrenFallbackNote(kind: string): string {
+  return (
+    `children omitted: the album's items could not be read (the /children fallback failed with a ` +
+    `${kind} error), so the album holds items this result does not list; retry instagram_get_media ` +
+    'to fetch them'
+  );
+}
+
 // --- Tools -----------------------------------------------------------------
 
 const listMediaTool = defineTool({
@@ -211,7 +276,8 @@ const listMediaTool = defineTool({
   description:
     "List the operated account's own media (feed posts, reels, albums), newest first, " +
     'cursor-paginated. Stories are not included: Instagram serves live stories on a separate edge ' +
-    'this tool does not read, so an empty or story-free page says nothing about active stories. ' +
+    'this tool does not read, so an empty or story-free page says nothing about active stories; ' +
+    'read those with instagram_list_stories. ' +
     'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
     "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more media remained. " +
     'Captions are returned as fenced, untrusted text. Some fields (like_count, media_url) may be ' +
@@ -246,12 +312,7 @@ const listMediaTool = defineTool({
           'result sets paging.truncated=true when the cap is reached while more media remained.',
       ),
   },
-  output: {
-    items: z.array(mediaItemOutput),
-    paging: z.object({ after: z.string().optional(), truncated: z.boolean() }).passthrough(),
-    note: z.string().optional(),
-    omittedWithoutId: z.number().int().optional(),
-  },
+  output: listingOutput,
   // Equivalent-mutant note: below, `args.fetchAll ?? false` and
   // `args.fetchAll || false` cannot be told apart. The schema types this
   // argument `boolean | undefined`, and `??` and `||` differ only on the
@@ -286,39 +347,70 @@ const listMediaTool = defineTool({
       fetchAll: args.fetchAll ?? false,
     });
 
-    // Equivalent-mutant note: relaxing either guard below to plain truthiness is
-    // unobservable, because the api layer has already normalised both fields.
-    // `fetchPagedEdge` publishes `after` only through `isUsableCursor`
-    // (`api/media.ts`), which refuses the empty string outright — that is the
-    // layer CC-DATA-23 makes responsible for the distinction — and every `note`
-    // it can set is a non-empty literal. Removing a guard is a different matter
-    // and is caught: `structuredContent` travels as a live object, so an
-    // unconditional assignment leaves the key present with an `undefined` value,
-    // which reads as "here is your next cursor, it just has no value". The strict
-    // form stays because this layer must not quietly lean on the other one's
-    // guard: it asks whether the api layer OFFERED a cursor or a note, not whether
-    // what it offered happens to be truthy.
-    const paging: Record<string, unknown> = { truncated: page.truncated };
-    if (page.after !== undefined) paging.after = page.after;
+    return json(pagedMediaPayload(page), { pretty: ctx.settings.prettyJson });
+  },
+});
 
-    const usable = page.items.filter(hasUsableId);
-    const payload: Record<string, unknown> = {
-      items: usable.map(mediaItemToRecord),
-      paging,
-    };
-    // An id-less entry is still dropped (the schema requires `id`), but the drop
-    // is counted and noted rather than silent. Both keys are published only when
-    // something was dropped, so a clean page carries neither.
-    const omitted = page.items.length - usable.length;
-    const notes: string[] = [];
-    if (page.note !== undefined) notes.push(page.note);
-    if (omitted > 0) {
-      payload.omittedWithoutId = omitted;
-      notes.push(omittedWithoutIdNote(omitted));
-    }
-    if (notes.length > 0) payload.note = notes.join('; ');
-
-    return json(payload, { pretty: ctx.settings.prettyJson });
+const listStoriesTool = defineTool({
+  name: 'instagram_list_stories',
+  title: 'List Instagram stories',
+  description:
+    "List the operated account's live stories — only those still inside Instagram's 24-hour " +
+    'window, newest first, cursor-paginated. An expired story is gone from this edge (and from ' +
+    'instagram_get_media), so an empty result means no story is live right now, not that none ' +
+    'was ever posted; feed posts, reels and albums are on instagram_list_media instead. ' +
+    'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
+    "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more stories remained. " +
+    'Captions are returned as fenced, untrusted text. Stories carry no like_count or ' +
+    'comments_count, and other fields (media_url) may be absent when Instagram does not disclose ' +
+    'them. An item Instagram returns without an id is left out, and omittedWithoutId plus note ' +
+    'say how many were.',
+  package: 'media',
+  annotations: { readOnlyHint: true, openWorldHint: true },
+  input: {
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that ' +
+          'bounds fetchAll.',
+      ),
+    after: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Opaque pagination cursor from a previous response's paging.after. Omit to start from the " +
+          'newest live story. A story that expires between pages simply drops out.',
+      ),
+    fetchAll: z
+      .boolean()
+      .optional()
+      .describe(
+        'When true, follow cursors and aggregate pages up to the server item cap (IG_MAX_ITEMS). The ' +
+          'result sets paging.truncated=true when the cap is reached while more stories remained.',
+      ),
+  },
+  output: listingOutput,
+  // Equivalent-mutant notes: as for `instagram_list_media` above — the
+  // `fetchAll` coalesce and the `after !== undefined` presence test.
+  logFields: (args) => ({
+    limit: args.limit,
+    fetchAll: args.fetchAll ?? false,
+    hasCursor: args.after !== undefined,
+  }),
+  handler: async (args, ctx) => {
+    const page = await listStories(ctx.req, {
+      igAccountId: ctx.profile.accountId ?? 'me',
+      maxItems: ctx.settings.maxItems,
+      limit: args.limit,
+      after: args.after,
+      fetchAll: args.fetchAll ?? false,
+    });
+    return json(pagedMediaPayload(page), { pretty: ctx.settings.prettyJson });
   },
 });
 
@@ -330,7 +422,8 @@ const getMediaTool = defineTool({
     'The caption is returned as fenced, untrusted text. Fields Instagram does not disclose are omitted ' +
     'rather than nulled; a deleted object or an expired story (stories last 24h) returns an error. ' +
     'A carousel child Instagram returns without an id is left out, and omittedWithoutId plus note ' +
-    'say how many were.',
+    "say how many were. If an album's items cannot be read, the detail is still returned with " +
+    'children omitted and a note naming the error.',
   package: 'media',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: {
@@ -350,20 +443,40 @@ const getMediaTool = defineTool({
 
     // Fallback: some responses omit inline children on carousels — fetch the
     // `/children` edge so albums always resolve their items.
+    //
+    // The fallback is best-effort enrichment of a read that already succeeded
+    // (CC-DATA-120). Awaited bare, a throttle or 5xx on this SECOND call replaced
+    // the whole result, discarding the album detail. An InstagramError is now
+    // caught and the detail published with `children` omitted — the documented
+    // shape when no source lists an item — plus a note naming the error kind.
+    // No retry beyond the transport's own policy; anything that is not an
+    // InstagramError is a defect, not an upstream answer, and still propagates.
+    let fallbackNote: string | undefined;
     if (
       media.media_type === 'CAROUSEL_ALBUM' &&
       (media.children === undefined || media.children.length === 0)
     ) {
-      const children = await getMediaChildren(ctx.req, { mediaId: args.mediaId });
-      if (children.length > 0) media.children = children;
+      try {
+        const children = await getMediaChildren(ctx.req, { mediaId: args.mediaId });
+        if (children.length > 0) media.children = children;
+      } catch (err) {
+        if (!isInstagramError(err)) throw err;
+        fallbackNote = childrenFallbackNote(err.kind);
+      }
     }
 
-    return json(mediaDetailToRecord(media, args.mediaId), { pretty: ctx.settings.prettyJson });
+    const rec = mediaDetailToRecord(media, args.mediaId);
+    // The fallback runs only when the inline edge listed nothing, and a failed
+    // fallback sets nothing, so this record has no children and hence no
+    // omitted-children note to join with: plain assignment is exact.
+    if (fallbackNote !== undefined) rec.note = fallbackNote;
+    return json(rec, { pretty: ctx.settings.prettyJson });
   },
 });
 
 /** Read-only media tools, registered by `mcp/registry.ts`. */
 export const mediaTools: readonly ToolSpec[] = Object.freeze([
   listMediaTool,
+  listStoriesTool,
   getMediaTool,
 ] as unknown as ToolSpec[]);

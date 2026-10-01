@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
-import { createRedactor, registerSecret, REDACTED } from '../../src/core/redact.js';
+import { createRedactor, registerSecret, REDACTED, surfaceForms } from '../../src/core/redact.js';
 
 test('masks the value of secret-named keys (case-insensitive, substring, nested)', () => {
   const redact = createRedactor();
@@ -293,13 +293,58 @@ test('a secret-named key matches as a substring, not as a prefix or a whole word
   assert.equal(out.user_access_token, REDACTED);
   assert.equal(out.proxy_authorization, REDACTED);
 
-  // FINDING, pinned deliberately: the vocabulary is spelled with underscores
-  // only, so the hyphenated header spellings are *not* matched. Graph takes these
-  // as underscore query parameters and as a bare `Authorization` header, so the
-  // gap is not reachable from this server's own request builder today — but any
-  // object handed to the logger or the write journal by a caller can carry them.
+  // The hyphenated header spelling is matched too (CC-DATA-124). Until
+  // 2026-09-30 the vocabulary was underscore-only and this line pinned the gap
+  // as a finding: any object a caller handed the logger or the write journal
+  // could carry it.
   const hyphenated = redact({ 'x-ig-app-secret': 'plain-app-secret' }) as Record<string, unknown>;
-  assert.equal(hyphenated['x-ig-app-secret'], 'plain-app-secret');
+  assert.equal(hyphenated['x-ig-app-secret'], REDACTED);
+});
+
+test('a secret-named key matches with an underscore, a hyphen or no separator (CC-DATA-124)', () => {
+  // A code-built object names its fields in camelCase — an options object's
+  // `appSecret`, an `err.cause` logged whole — and before this only the wire's
+  // snake_case spellings were masked by name. Each compound name is pinned in
+  // all three separator forms, so dropping the `?`, the `_` or the `-` from any
+  // one alternative fails here.
+  const redact = createRedactor();
+  const keys = [
+    'accessToken',
+    'access-token',
+    'access_token',
+    'appsecretProof',
+    'appsecret-proof',
+    'appsecret_proof',
+    'appSecret',
+    'app-secret',
+    'app_secret',
+    'clientSecret',
+    'client-secret',
+    'client_secret',
+  ];
+  const out = redact(Object.fromEntries(keys.map((key) => [key, 'plain-value']))) as Record<
+    string,
+    unknown
+  >;
+  for (const key of keys) assert.equal(out[key], REDACTED, key);
+
+  // One separator character, and only those two: a dotted or doubled spelling
+  // is a different name, and ordinary neighbours stay readable. The match is
+  // still a substring, so `app_secretary` is masked — over-redaction by design.
+  const kept = redact({
+    'access.token': 'v',
+    access__token: 'v',
+    app_secretary: 'v',
+    token: 'v',
+    secret_santa: 'v',
+  });
+  assert.deepEqual(kept, {
+    'access.token': 'v',
+    access__token: 'v',
+    app_secretary: REDACTED,
+    token: 'v',
+    secret_santa: 'v',
+  });
 });
 
 test('ordinary identifying fields are not swept into the secret-key pattern', () => {
@@ -786,6 +831,53 @@ test('an own toJSON that is not a function is copied and redacted like any field
   assert.deepEqual(redact({ toJSON: 'plain' }), { toJSON: 'plain' });
 });
 
+// --- CC-DATA-123: an inherited toJSON is serialised as JSON.stringify would ----
+
+test('a nested Date or URL survives as the string JSON.stringify writes, redacted (CC-DATA-123)', () => {
+  // Walked as objects these held no own fields and came out as `{}`.
+  const redact = createRedactor();
+  const token = `EAA${'u'.repeat(30)}`;
+  const when = new Date(Date.UTC(2026, 8, 30, 12, 0, 0));
+  const out = redact({ ts: when, links: [new URL(`https://example.com/cb?access=${token}`)] });
+  assert.deepEqual(out, {
+    ts: '2026-09-30T12:00:00.000Z',
+    links: [`https://example.com/cb?access=${REDACTED}`],
+  });
+});
+
+test('a Buffer keeps its JSON form, and is masked as a unit when its bytes spell a secret (CC-DATA-123)', () => {
+  // The JSON form carries bytes as numbers, which no token shape or registered
+  // secret can match one at a time; before this the buffer came out as its index
+  // keys, the same char-split shape CC-DATA-122 closed for a boxed string.
+  const redact = createRedactor({ extraSecrets: ['registered-secret-bytes'] });
+  assert.deepEqual(redact({ b: Buffer.from('hi') }), { b: { type: 'Buffer', data: [104, 105] } });
+  assert.deepEqual(redact({ b: Buffer.from(`t EAA${'k'.repeat(30)}`) }), { b: REDACTED });
+  assert.deepEqual(redact([Buffer.from('x registered-secret-bytes y')]), [REDACTED]);
+});
+
+test('an inherited toJSON result is redacted, and one returning its receiver is walked (CC-DATA-123)', () => {
+  const token = `EAA${'v'.repeat(30)}`;
+  class Wrapped {
+    constructor(readonly inner: string) {}
+    toJSON(): unknown {
+      return { wrapped: this.inner, access_token: this.inner };
+    }
+  }
+  class Self {
+    note = `tok ${token}`;
+    toJSON(): unknown {
+      return this;
+    }
+  }
+  const redact = createRedactor();
+  assert.deepEqual(redact({ w: new Wrapped(token) }), {
+    w: { wrapped: REDACTED, access_token: REDACTED },
+  });
+  // Returning `this` is what JSON.stringify then serialises field by field;
+  // following it again would be a cycle, not a value.
+  assert.deepEqual(redact({ s: new Self() }), { s: { note: `tok ${REDACTED}` } });
+});
+
 test('a token used as an object key is masked in the key', () => {
   const token = `EAA${'x'.repeat(30)}`;
   const redact = createRedactor();
@@ -1015,4 +1107,23 @@ test('a boxed number or boolean is unwrapped to its primitive, as JSON.stringify
   assert.deepEqual(out, { n: 7, b: false, top: [0] });
   assert.equal(JSON.stringify(out), JSON.stringify(input));
   assert.equal(redact(new Boolean(true)), true);
+});
+
+// --- surfaceForms: the spellings a credential takes on the wire (CC-AUTH-76) --
+
+test('surfaceForms returns the raw value and its form-encoded spelling, in that order', () => {
+  // `+`, `/`, `=` and a space are the characters `URLSearchParams` rewrites.
+  assert.deepEqual(surfaceForms('ab+c/d=e f'), ['ab+c/d=e f', 'ab%2Bc%2Fd%3De+f']);
+  // A URL-safe value is returned twice rather than branched on; the redactor
+  // de-duplicates.
+  assert.deepEqual(surfaceForms('EAAabc_-.*'), ['EAAabc_-.*', 'EAAabc_-.*']);
+});
+
+test('surfaceForms feeds the redactor both spellings, so either is masked (CC-AUTH-76)', () => {
+  const secret = 'sEcReT+/=value 42';
+  const redact = createRedactor({ extraSecrets: [...surfaceForms(secret)] });
+  assert.equal(
+    redact(`raw ${secret} url ?t=sEcReT%2B%2F%3Dvalue+42&x=1`),
+    `raw ${REDACTED} url ?t=${REDACTED}&x=1`,
+  );
 });

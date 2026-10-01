@@ -284,7 +284,7 @@ export async function listTaggedMedia(
 
 // --- Writes ----------------------------------------------------------------
 
-/** `POST /{comment-id}/replies?message=` — threaded reply. Returns the new id. */
+/** `POST /{comment-id}/replies` with `message` in the form body — threaded reply. Returns the new id. */
 export async function replyToComment(
   req: IgRequestFn,
   params: { commentId: string; message: string },
@@ -292,11 +292,11 @@ export async function replyToComment(
   return req<CommentIdResult>({
     method: 'POST',
     path: `/${encodeURIComponent(params.commentId)}/replies`,
-    params: { message: params.message },
+    body: { message: params.message },
   });
 }
 
-/** `POST /{media-id}/comments?message=` — top-level comment. Returns the new id. */
+/** `POST /{media-id}/comments` with `message` in the form body — top-level comment. Returns the new id. */
 export async function createComment(
   req: IgRequestFn,
   params: { mediaId: string; message: string },
@@ -304,11 +304,11 @@ export async function createComment(
   return req<CommentIdResult>({
     method: 'POST',
     path: `/${encodeURIComponent(params.mediaId)}/comments`,
-    params: { message: params.message },
+    body: { message: params.message },
   });
 }
 
-/** `POST /{comment-id}?hide=true|false` — reversible moderation. */
+/** `POST /{comment-id}` with `hide=true|false` in the form body — reversible moderation. */
 export async function setCommentHidden(
   req: IgRequestFn,
   params: { commentId: string; hide: boolean },
@@ -316,7 +316,7 @@ export async function setCommentHidden(
   return req<CommentWriteResult>({
     method: 'POST',
     path: `/${encodeURIComponent(params.commentId)}`,
-    params: { hide: params.hide },
+    body: { hide: params.hide },
   });
 }
 
@@ -331,7 +331,7 @@ export async function deleteComment(
   });
 }
 
-/** `POST /{media-id}?comment_enabled=true|false` — toggle whether a media accepts comments. */
+/** `POST /{media-id}` with `comment_enabled=true|false` in the form body — toggle whether a media accepts comments. */
 export async function setCommentsEnabled(
   req: IgRequestFn,
   params: { mediaId: string; enabled: boolean },
@@ -339,6 +339,6 @@ export async function setCommentsEnabled(
   return req<CommentWriteResult>({
     method: 'POST',
     path: `/${encodeURIComponent(params.mediaId)}`,
-    params: { comment_enabled: params.enabled },
+    body: { comment_enabled: params.enabled },
   });
 }

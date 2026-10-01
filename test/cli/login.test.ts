@@ -3967,6 +3967,13 @@ test('the help lines that nothing else holds are pinned whole, character for cha
     assert.ok(lines.includes(line), `${why} is printed exactly: ${JSON.stringify(line)}`);
   }
 });
+test('DEFAULT_REDIRECT_URI is the literal loopback callback the operator registers (CC-CFG-26)', () => {
+  // A direct literal pin. Without it a mutant of the constant's path or port was
+  // killed only by the capture test hanging and cascading cancellations, never
+  // by an assertion that reads the value (CC-PROC-89).
+  assert.equal(DEFAULT_REDIRECT_URI, 'http://127.0.0.1:8723/callback');
+});
+
 test('the option list is one indented block under its own heading, in the order it is printed', async () => {
   const help = await helpText();
   const lines = help.split('\n');

@@ -19,10 +19,28 @@ after(() => {
   globalThis.fetch = realFetch;
 });
 
-/** Known (token, secret) pair with a golden HMAC-SHA256 hex digest. */
+/**
+ * The fixed instant every fb-login provider here signs at (CC-AUTH-15). The
+ * 999 ms tail is deliberate: it separates the floor Graph's unix-seconds
+ * `appsecret_time` needs from a `round` or `ceil`, which would both answer
+ * `1755000001`.
+ */
+const NOW_MS = 1_755_000_000_999;
+const NOW_SEC = '1755000000';
+const clock = { now: (): number => NOW_MS };
+
+/** Known (token, secret) pair with a golden time-bound HMAC-SHA256 hex digest at {@link NOW_SEC}. */
 const KNOWN_TOKEN = 'EAAtESTtoken0123456789';
 const KNOWN_SECRET = 's3cr3t-app-secret';
-const GOLDEN_PROOF = '43cfff5530206654c5c768125fd2088b48048b671ea715767ea1f9922a12b288';
+const GOLDEN_PROOF = 'f45952576b29ba3d21575e925088745f3b04c73ef2d3631219b583ee4d5e06bb';
+
+/**
+ * The time-bound proof computed independently of `core/auth.ts`: key = app
+ * secret, message = `<token>|<appsecret_time>` (CC-AUTH-15).
+ */
+function proofOf(secret: string, token: string, time: string = NOW_SEC): string {
+  return createHmac('sha256', secret).update(`${token}|${time}`).digest('hex');
+}
 
 function igProfile(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile {
   return { name: 'default', authPath: 'ig-login', accessToken: 'IGQtoken', ...overrides };
@@ -72,7 +90,7 @@ test('ig-login: still omits appsecret_proof even if addressed to graph.facebook.
 });
 
 test('fb-login: the provider carries exactly path, defaultHost and authParams', () => {
-  const provider = createAuthProvider(fbProfile());
+  const provider = createAuthProvider(fbProfile(), clock);
   // Pinned WHOLE for the same measured reason as the ig-login provider above:
   // `Object.assign({ path: 'fb-login' as const, defaultHost: FB_HOST,
   // authParams: … }, { debugX: 'x' })` on this return survived the entire suite
@@ -86,10 +104,10 @@ test('fb-login: the provider carries exactly path, defaultHost and authParams', 
 });
 
 test('fb-login: appsecret_proof matches an independently computed HMAC-SHA256 digest', async () => {
-  const provider = createAuthProvider(fbProfile());
+  const provider = createAuthProvider(fbProfile(), clock);
   const params = await provider.authParams(FB_HOST);
 
-  const independent = createHmac('sha256', KNOWN_SECRET).update(KNOWN_TOKEN).digest('hex');
+  const independent = proofOf(KNOWN_SECRET, KNOWN_TOKEN);
   const proof = params.appsecret_proof;
   assert.ok(proof, 'appsecret_proof must be present on graph.facebook.com');
   assert.equal(params.access_token, KNOWN_TOKEN);
@@ -100,7 +118,7 @@ test('fb-login: appsecret_proof matches an independently computed HMAC-SHA256 di
 });
 
 test('fb-login: appsecret_proof is included only for graph.facebook.com targets', async () => {
-  const provider = createAuthProvider(fbProfile());
+  const provider = createAuthProvider(fbProfile(), clock);
 
   const fbParams = await provider.authParams(FB_HOST);
   assert.ok('appsecret_proof' in fbParams);
@@ -113,7 +131,7 @@ test('fb-login: appsecret_proof is included only for graph.facebook.com targets'
 
 test('fb-login: throws a validation InstagramError naming the profile when appSecret is missing', () => {
   assert.throws(
-    () => createAuthProvider(fbProfile({ name: 'brand', appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ name: 'brand', appSecret: undefined }), clock),
     (err: unknown) => {
       assert.ok(isInstagramError(err));
       assert.equal(err.kind, 'validation');
@@ -134,7 +152,10 @@ test('authParams hands back a fresh object on every call', async () => {
   // one. `ig-login` never writes, so only the shape of the contract stops the
   // two halves of the interface from disagreeing about whether the caller owns
   // what it is given.
-  for (const provider of [createAuthProvider(igProfile()), createAuthProvider(fbProfile())]) {
+  for (const provider of [
+    createAuthProvider(igProfile()),
+    createAuthProvider(fbProfile(), clock),
+  ]) {
     const first = await provider.authParams(FB_HOST);
     const second = await provider.authParams(FB_HOST);
     assert.notEqual(first, second, `${provider.path} must not share one params object`);
@@ -144,7 +165,7 @@ test('authParams hands back a fresh object on every call', async () => {
 
 test('fb-login: throws a validation InstagramError when appSecret is empty', () => {
   assert.throws(
-    () => createAuthProvider(fbProfile({ appSecret: '' })),
+    () => createAuthProvider(fbProfile({ appSecret: '' }), clock),
     (err: unknown) => isInstagramError(err) && err.kind === 'validation',
   );
 });
@@ -158,7 +179,7 @@ test('fb-login: a whitespace-only app secret is refused, not signed with', () =>
   const token = 'EAAdo-not-leak-this-token';
   for (const blank of [' ', '   ', '\t', '\n', ' \t\r\n ']) {
     assert.throws(
-      () => createAuthProvider(fbProfile({ accessToken: token, appSecret: blank })),
+      () => createAuthProvider(fbProfile({ accessToken: token, appSecret: blank }), clock),
       (err: unknown) => {
         assert.ok(isInstagramError(err));
         assert.equal(err.kind, 'validation');
@@ -181,11 +202,10 @@ test('fb-login: a secret with surrounding whitespace is used VERBATIM, never tri
   // every profile field on the way in, so this module's job is to use what it is
   // handed, not to launder it a second time.
   const padded = `  ${KNOWN_SECRET}\n`;
-  const params = await createAuthProvider(fbProfile({ appSecret: padded })).authParams(FB_HOST);
-  assert.equal(
-    params.appsecret_proof,
-    createHmac('sha256', padded).update(KNOWN_TOKEN).digest('hex'),
+  const params = await createAuthProvider(fbProfile({ appSecret: padded }), clock).authParams(
+    FB_HOST,
   );
+  assert.equal(params.appsecret_proof, proofOf(padded, KNOWN_TOKEN));
   assert.notEqual(params.appsecret_proof, GOLDEN_PROOF, 'the secret must not have been trimmed');
 });
 
@@ -194,7 +214,7 @@ test('fb-login: an app id present on the profile is never accepted in place of t
   // stand-in, but it is public: signing with it would produce a proof any
   // observer could forge. A missing secret has to stay a hard failure.
   assert.throws(
-    () => createAuthProvider(fbProfile({ appSecret: undefined, appId: '1234567890' })),
+    () => createAuthProvider(fbProfile({ appSecret: undefined, appId: '1234567890' }), clock),
     (err: unknown) => isInstagramError(err) && err.kind === 'validation',
   );
 });
@@ -214,7 +234,7 @@ test('ig-login: a profile that happens to carry an app secret still sends the ba
 
 test('fb-login: the validation message names the path, the quoted profile and the missing input', () => {
   assert.throws(
-    () => createAuthProvider(fbProfile({ name: 'brand', appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ name: 'brand', appSecret: undefined }), clock),
     (err: unknown) => {
       assert.ok(isInstagramError(err));
       // This message is the operator's only repair instruction, so all four
@@ -230,7 +250,7 @@ test('fb-login: the validation message names the path, the quoted profile and th
 
 test('fb-login: a blank profile name still surfaces as an empty quoted slot', () => {
   assert.throws(
-    () => createAuthProvider(fbProfile({ name: '', appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ name: '', appSecret: undefined }), clock),
     (err: unknown) =>
       isInstagramError(err) && err.message.startsWith('fb-login profile "" requires an app secret'),
   );
@@ -249,7 +269,7 @@ test('fb-login: the validation message names the env var that has to be set', ()
   ];
   for (const [name, expectedVar] of cases) {
     assert.throws(
-      () => createAuthProvider(fbProfile({ name, appSecret: undefined })),
+      () => createAuthProvider(fbProfile({ name, appSecret: undefined }), clock),
       (err: unknown) => {
         assert.ok(isInstagramError(err));
         assert.ok(
@@ -268,7 +288,7 @@ test('fb-login: the blank-secret message carries the same remedy as the missing-
   // one who never set it.
   const messageFor = (appSecret: string | undefined): string => {
     try {
-      createAuthProvider(fbProfile({ name: 'brand', appSecret }));
+      createAuthProvider(fbProfile({ name: 'brand', appSecret }), clock);
     } catch (err) {
       assert.ok(isInstagramError(err));
       return err.message;
@@ -282,7 +302,7 @@ test('fb-login: the blank-secret message carries the same remedy as the missing-
 test('fb-login: the validation error never quotes the access token', () => {
   const token = 'EAAdo-not-leak-this-token';
   assert.throws(
-    () => createAuthProvider(fbProfile({ accessToken: token, appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ accessToken: token, appSecret: undefined }), clock),
     (err: unknown) => {
       assert.ok(isInstagramError(err));
       // Validation errors are logged and returned to MCP clients as text; a
@@ -293,40 +313,91 @@ test('fb-login: the validation error never quotes the access token', () => {
   );
 });
 
-test('fb-login: graph.facebook.com params carry exactly access_token and appsecret_proof', async () => {
-  const provider = createAuthProvider(fbProfile());
+test('fb-login: graph.facebook.com params carry exactly access_token, appsecret_proof and appsecret_time', async () => {
+  const provider = createAuthProvider(fbProfile(), clock);
   const params = await provider.authParams(FB_HOST);
-  assert.deepEqual(Object.keys(params).sort(), ['access_token', 'appsecret_proof']);
+  assert.deepEqual(Object.keys(params).sort(), [
+    'access_token',
+    'appsecret_proof',
+    'appsecret_time',
+  ]);
+});
+
+test('fb-login: appsecret_time is the call instant in whole unix seconds, floored (CC-AUTH-15)', async () => {
+  // Graph reads `appsecret_time` as a unix timestamp: milliseconds, a fraction
+  // or a rounded-up second is a time the server did not see and a proof it
+  // cannot verify. NOW_MS ends in 999 ms, so only a floor yields NOW_SEC.
+  const params = await createAuthProvider(fbProfile(), clock).authParams(FB_HOST);
+  assert.equal(params.appsecret_time, NOW_SEC);
+  // The proof signs exactly the time it is sent with — not the bare token.
+  assert.equal(params.appsecret_proof, proofOf(KNOWN_SECRET, KNOWN_TOKEN, NOW_SEC));
+  assert.notEqual(
+    params.appsecret_proof,
+    createHmac('sha256', KNOWN_SECRET).update(KNOWN_TOKEN).digest('hex'),
+    'the static, untimed proof replays for the token lifetime (CC-AUTH-15)',
+  );
+});
+
+test('fb-login: the proof is minted per call from the clock, never frozen at construction (CC-AUTH-15)', async () => {
+  // The whole point of the time-bound form: a proof observed on one call must
+  // not be the proof of a later one. A proof computed once at construction —
+  // the pre-2026-09-30 shape — passes every fixed-clock test above.
+  let nowMs = NOW_MS;
+  const provider = createAuthProvider(fbProfile(), { now: () => nowMs });
+  const first = await provider.authParams(FB_HOST);
+  nowMs += 60_000;
+  const later = await provider.authParams(FB_HOST);
+  assert.equal(later.appsecret_time, '1755000060');
+  assert.equal(later.appsecret_proof, proofOf(KNOWN_SECRET, KNOWN_TOKEN, '1755000060'));
+  assert.notEqual(later.appsecret_proof, first.appsecret_proof);
+});
+
+test('fb-login: with no clock injected the proof is signed at the real wall-clock second', async () => {
+  const before = Math.floor(Date.now() / 1000);
+  const params = await createAuthProvider(fbProfile()).authParams(FB_HOST);
+  const after = Math.floor(Date.now() / 1000);
+  const time = Number(params.appsecret_time);
+  assert.ok(time >= before && time <= after, `appsecret_time ${params.appsecret_time}`);
+  assert.equal(
+    params.appsecret_proof,
+    proofOf(KNOWN_SECRET, KNOWN_TOKEN, String(params.appsecret_time)),
+  );
+});
+
+test('ig-login: never sends appsecret_time either, on either host', async () => {
+  const provider = createAuthProvider(igProfile({ appSecret: KNOWN_SECRET }));
+  for (const host of [IG_HOST, FB_HOST]) {
+    assert.ok(!('appsecret_time' in (await provider.authParams(host))));
+  }
 });
 
 test('fb-login: the proof tracks both the token and the secret, not a fixed value', async () => {
   const OTHER_TOKEN = 'EAAotherTOKEN9876543210';
   const OTHER_SECRET = 'another-app-secret';
 
-  const base = await createAuthProvider(fbProfile()).authParams(FB_HOST);
-  const swappedToken = await createAuthProvider(fbProfile({ accessToken: OTHER_TOKEN })).authParams(
-    FB_HOST,
-  );
-  const swappedSecret = await createAuthProvider(fbProfile({ appSecret: OTHER_SECRET })).authParams(
-    FB_HOST,
-  );
+  const base = await createAuthProvider(fbProfile(), clock).authParams(FB_HOST);
+  const swappedToken = await createAuthProvider(
+    fbProfile({ accessToken: OTHER_TOKEN }),
+    clock,
+  ).authParams(FB_HOST);
+  const swappedSecret = await createAuthProvider(
+    fbProfile({ appSecret: OTHER_SECRET }),
+    clock,
+  ).authParams(FB_HOST);
 
   assert.notEqual(base.appsecret_proof, swappedToken.appsecret_proof);
   assert.notEqual(base.appsecret_proof, swappedSecret.appsecret_proof);
   // Both directions are checked independently so a proof keyed on the wrong one
   // of the two inputs cannot hide behind "it changed, therefore it is derived".
-  assert.equal(
-    swappedToken.appsecret_proof,
-    createHmac('sha256', KNOWN_SECRET).update(OTHER_TOKEN).digest('hex'),
-  );
-  assert.equal(
-    swappedSecret.appsecret_proof,
-    createHmac('sha256', OTHER_SECRET).update(KNOWN_TOKEN).digest('hex'),
-  );
+  assert.equal(swappedToken.appsecret_proof, proofOf(KNOWN_SECRET, OTHER_TOKEN));
+  assert.equal(swappedSecret.appsecret_proof, proofOf(OTHER_SECRET, KNOWN_TOKEN));
 });
 
 test('callers own the params object: tampering with one result cannot bleed into the next', async () => {
-  for (const provider of [createAuthProvider(igProfile()), createAuthProvider(fbProfile())]) {
+  for (const provider of [
+    createAuthProvider(igProfile()),
+    createAuthProvider(fbProfile(), clock),
+  ]) {
     const first = await provider.authParams(FB_HOST);
     first.access_token = 'tampered';
     delete first.appsecret_proof;
@@ -373,16 +444,14 @@ test('fb-login: the token is both forwarded AND signed byte for byte', async () 
   // the repaired token explicitly, not merely against "some digest".
   const provider = createAuthProvider(
     fbProfile({ accessToken: ADVERSARIAL_TOKEN, appSecret: KNOWN_SECRET }),
+    clock,
   );
   const params = await provider.authParams(FB_HOST);
   assert.equal(params.access_token, ADVERSARIAL_TOKEN);
-  assert.equal(
-    params.appsecret_proof,
-    createHmac('sha256', KNOWN_SECRET).update(ADVERSARIAL_TOKEN).digest('hex'),
-  );
+  assert.equal(params.appsecret_proof, proofOf(KNOWN_SECRET, ADVERSARIAL_TOKEN));
   assert.notEqual(
     params.appsecret_proof,
-    createHmac('sha256', KNOWN_SECRET).update(ADVERSARIAL_TOKEN.trim()).digest('hex'),
+    proofOf(KNOWN_SECRET, ADVERSARIAL_TOKEN.trim()),
     'the proof must be keyed on the token as configured, not on a trimmed copy',
   );
 });
@@ -396,7 +465,7 @@ test('fb-login: the blank-secret refusal is one exact sentence, profile name as 
   // single fold applied to the quoted half would go unnoticed against the
   // all-lowercase `brand` used everywhere else in this file.
   assert.throws(
-    () => createAuthProvider(fbProfile({ name: 'Second-Studio', appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ name: 'Second-Studio', appSecret: undefined }), clock),
     (err: unknown) => {
       assert.ok(isInstagramError(err));
       assert.equal(
@@ -419,10 +488,10 @@ test('an auth path that merely starts with "ig" is not the ig-login path', () =>
   // offline refusal (`core/refresh.ts` pins the same rule for the same reason).
   const legacy = 'ig-basic-display' as unknown as ResolvedProfile['authPath'];
   assert.throws(
-    () => createAuthProvider(fbProfile({ authPath: legacy, appSecret: undefined })),
+    () => createAuthProvider(fbProfile({ authPath: legacy, appSecret: undefined }), clock),
     (err: unknown) => isInstagramError(err) && err.kind === 'validation',
   );
-  const provider = createAuthProvider(fbProfile({ authPath: legacy }));
+  const provider = createAuthProvider(fbProfile({ authPath: legacy }), clock);
   assert.equal(provider.path, 'fb-login');
   assert.equal(provider.defaultHost, FB_HOST);
 });

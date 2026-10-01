@@ -1,6 +1,6 @@
 /**
- * Comment tool specs (Layer 3) — the `comments` package plus the media-package
- * comment toggle. Read tools call `api/comments` through `ctx.req`, cap
+ * Comment tool specs (Layer 3) — the `comments` package, including the
+ * media comment toggle. Read tools call `api/comments` through `ctx.req`, cap
  * `fetchAll` with `ctx.settings.maxItems`, and **fence untrusted third-party
  * text** (comment `text` and other users' `username`) before returning it to
  * the model (docs/security.md §7). Write tools route every mutation through the
@@ -8,8 +8,9 @@
  * an apply performs and is journaled, and `delete_comment` is additionally
  * gated by `IG_ALLOW_DESTRUCTIVE`.
  *
- * Import boundary: `api/*` + `mcp/*` only; never `core/http`. InstagramError
- * from the api layer is left to propagate — the registry maps and renders it.
+ * Import boundary: `api/*`, `mcp/*`, `core/types` and `core/untrusted` only;
+ * never `core/http`. InstagramError from the api layer is left to propagate —
+ * the registry maps and renders it.
  */
 import { z } from 'zod';
 import { graphObjectId } from './ids.js';
@@ -18,6 +19,7 @@ import { defineTool, type ToolSpec } from '../mcp/define.js';
 import { fence, json } from '../mcp/result.js';
 import { withWriteGate } from '../mcp/write-mode.js';
 import { InstagramError } from '../core/types.js';
+import { visibleText } from '../core/untrusted.js';
 import {
   createComment,
   deleteComment,
@@ -294,12 +296,23 @@ const COMMENT_ID_MISSING =
  * was declared, so `"   "` reached Graph as a public write (CC-COM-18). `\S`
  * demands one non-whitespace character, and — unlike a `.trim()` — leaves the
  * text that is posted exactly as the caller wrote it.
+ *
+ * `\S` still let through a message made only of zero-width spaces, joiners, a
+ * BOM or bidi marks: non-whitespace, yet it posts a comment that renders blank.
+ * The refinement asks `visibleText` — the one "does this render as anything?"
+ * test the server has — so the rule that decides whether a Graph message is
+ * worth showing also decides whether a message is worth posting, and any
+ * blank-renderer it learns (CC-DATA-126) is refused here too. The `\S` pattern
+ * stays because it is what the published input schema can express.
  */
-function messageField(what: string): z.ZodString {
+function messageField(what: string): z.ZodType<string> {
   return z
     .string()
     .min(1)
     .regex(/\S/, 'must contain a non-whitespace character')
+    .refine((v) => visibleText(v) !== undefined, {
+      message: 'must contain a visible character, not only invisible or zero-width ones',
+    })
     .describe(`The ${what} text to post.`);
 }
 
@@ -741,11 +754,11 @@ const deleteCommentTool = defineTool({
 });
 
 /**
- * Cross-package placement: `set_comments_enabled` toggles a *media* setting, so
- * it carries `package: 'media'` (the registry regroups tools by their `package`
- * tag) even though it lives in this file alongside the comment-moderation write
- * tools it is topically related to. It is still exported via `commentsTools`
- * below; the orchestrator relies on the tag, not the file, for grouping.
+ * `set_comments_enabled` acts on a media object but is a comment control, so it
+ * carries `package: 'comments'` like every other tool in this file (CC-PROC-9).
+ * The registry groups by tag, so the env-var controls follow the tag: tagged
+ * `media`, `IG_PACKAGES_DENY=comments` left this write registered and no
+ * incantation could remove it without also removing the genuine media reads.
  */
 const setCommentsEnabledTool = defineTool({
   name: 'instagram_set_comments_enabled',
@@ -754,7 +767,7 @@ const setCommentsEnabledTool = defineTool({
     'Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true|false). ' +
     'Idempotent: setting the value it already has is a no-op. Preview by default; re-run with ' +
     'apply:true (or set IG_WRITE_MODE=apply) to perform the change.',
-  package: 'media',
+  package: 'comments',
   annotations: {
     readOnlyHint: false,
     destructiveHint: false,
@@ -803,9 +816,8 @@ const setCommentsEnabledTool = defineTool({
 });
 
 /**
- * The comments surface plus the media-package comment toggle. Eight tools carry
- * `package: 'comments'`; `instagram_set_comments_enabled` carries
- * `package: 'media'` (see its definition). The registry regroups by tag.
+ * The comments surface: all nine tools carry `package: 'comments'`, the media
+ * comment toggle included (see its definition). The registry groups by tag.
  */
 export const commentsTools: readonly ToolSpec[] = Object.freeze([
   listCommentsTool,

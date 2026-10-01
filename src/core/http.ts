@@ -6,13 +6,15 @@
  * concurrency, the retry/backoff matrix, usage-header parsing, timeout, and the
  * response-body size cap.
  *
- * Layer 0 discipline: imports only from `core/*` (types, errors, host, clock, body) —
+ * Layer 0 discipline: imports only from `core/*` (types, errors, host, clock, body,
+ * redact, refresh) —
  * never `api/`, `mcp/`, or `tools/` (ESLint enforces this). Behavior spec:
  * docs/architecture.md §5, docs/operations.md §§1–3.
  */
 import { MAX_RESPONSE_BYTES, readCappedText } from './body.js';
 import { assertAllowedHost, buildUrl } from './host.js';
 import { mapGraphError, toInstagramError } from './errors.js';
+import { registerSecret, surfaceForms } from './redact.js';
 import { InstagramError } from './types.js';
 import type { Clock } from './clock.js';
 import type {
@@ -438,15 +440,32 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     const host = opts.host ?? auth.defaultHost;
     assertAllowedHost(host);
 
-    // 2. Merge auth params (auth wins) and build the pinned, allowlisted URL.
-    //    Auth params ride the query string for every method (Graph accepts it).
+    // 2. Resolve the auth params and register the access token with the
+    //    redactor in BOTH surface spellings — as held, and form-encoded exactly
+    //    as `URLSearchParams` puts it on the wire, in the query or in the body
+    //    below (CC-PROC-25). The redactor matches exact substrings, so a token
+    //    with a character the form encoder rewrites (`+`, `/`, `=`, a space) is
+    //    masked as held but printed whole in its encoded spelling, which is the
+    //    one a transport or proxy that names the request quotes. `login`/
+    //    `refresh` register the same two forms for the secrets THEY put on the
+    //    wire (CC-AUTH-76). Only `access_token` is registered: since CC-AUTH-15
+    //    `appsecret_proof` and `appsecret_time` change every second, so
+    //    registering them would grow the process-wide registry without bound,
+    //    and a registered 10-digit `appsecret_time` would mask that digit run
+    //    inside any Graph id or payload. The proof is 64-hex by construction,
+    //    which the token-shape backstop masks in either spelling (hex survives
+    //    form encoding unchanged); the time is not a secret. Registration is
+    //    idempotent (the registry is a `Set`), so doing it per request costs a
+    //    lookup.
     const authParams = await auth.authParams(host);
-    const url = buildUrl(host, opts.path, { ...opts.params, ...authParams });
+    const token = authParams['access_token'];
+    if (token !== undefined) {
+      for (const spelling of surfaceForms(token)) registerSecret(spelling);
+    }
 
     // POST/DELETE carry `opts.body` as an x-www-form-urlencoded request body.
-    let body: string | undefined;
+    const form = new URLSearchParams();
     if (opts.method !== 'GET' && opts.body) {
-      const form = new URLSearchParams();
       for (const [key, value] of Object.entries(opts.body)) {
         // Absent, not empty — the same rule the query-string sink applies in
         // `host.ts` (CC-DATA-10), restated here because this is a SECOND,
@@ -461,16 +480,16 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
         // against a type that excludes it, so the boundary can defend itself
         // without weakening the declaration it defends.
         //
-        // Reachability, stated exactly rather than assumed: no in-repo caller
-        // populates `opts.body` at all today. Every write in `api/comments.ts`
-        // and `api/publishing.ts` passes its fields as `params` — Graph accepts
-        // them on a POST, and `buildUrl` already guards that path — and the two
-        // untyped `scripts/*.mjs` entry points that drive this seam directly do
-        // the same. So a `null` needs a future api function that starts using
-        // the body, or a JavaScript consumer of the shipped `.d.ts` (this
-        // package ships types, not enforcement). The guard is here because the
-        // sink is permanent while the caller set is not, and because a write is
-        // the one place where a silently wrong value is also irreversible.
+        // Reachability, stated exactly rather than assumed: since CC-PROC-25
+        // every write in `api/comments.ts` and `api/publishing.ts` that has
+        // fields sends them here, so this is the live sink for every caption,
+        // comment and container field. None of those callers can hand it a
+        // `null` — each field is a typed argument or is assigned only under an
+        // `!== undefined` test — so a `null` still needs a JavaScript consumer
+        // of the shipped `.d.ts` (this package ships types, not enforcement) or
+        // one of the two untyped `scripts/*.mjs` entry points that drive this
+        // seam directly. The guard is here because a write is the one place
+        // where a silently wrong value is also irreversible.
         //
         // Nullish, never falsy: `false`, `0` and `''` are values a caller chose
         // (an explicit opt-out, a zero offset, a cleared field), each has a real
@@ -485,42 +504,87 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
         // apart here — object keys are unique, so no key is ever written twice.
         form.append(key, String(value));
       }
-      // CC-DATA-15 — two spellings of "no payload" were two different requests.
-      // `init.body` and the `content-type` header below are set together on
-      // `body !== undefined`, so assigning unconditionally here meant `body: {}`
-      // — and, since CC-DATA-12 closed, a body whose every field is nullish —
-      // sent an empty form payload PLUS an
-      // `application/x-www-form-urlencoded` header that `body: undefined` does
-      // not send, and a DELETE went out carrying a zero-length form body. A
-      // caller that spelled "nothing to send" the other way got a different
-      // request on the wire for no reason it could see.
-      //
-      // The test is the FIELD COUNT, never "the serialized string is empty":
-      // `{ caption: '' }` contributed a field whose value the caller chose and
-      // must still send `caption=`. The two spellings happen to agree — a
-      // `URLSearchParams` holding one pair serializes to at least `=` — but only
-      // the count says what is meant, and the next reader has to know which.
-      //
-      // Reachability, stated exactly rather than assumed: as with CC-DATA-12, no
-      // in-repo caller populates `opts.body` at all today, so nothing in this
-      // repo can reach the empty form. The guard is here because the sink is
-      // permanent while the caller set is not, and because "an empty body and no
-      // body are the same request" is the kind of invariant a future api
-      // function will assume rather than check.
-      //
-      // Equivalent-mutant note: `form.toString() !== ''` — and its truthiness
-      // twin — cannot be told apart from the field count by any input. A
-      // `URLSearchParams` holding one pair serializes to at least `=` (that is
-      // what `append('', '')` produces), so "no pairs" and "empty serialization"
-      // coincide for every possible form. The count is kept because it is the
-      // question actually being asked; the string test would agree here only by
-      // arithmetic, and would stop agreeing the moment someone reached for `!`.
-      if (form.size > 0) body = form.toString();
     }
+
+    // 3. Place the auth params, then build the pinned, allowlisted URL. CC-PROC-25
+    //    — the credential travels with the payload. A request that sends a form
+    //    body (every write that has fields: a caption, a comment `message`,
+    //    `user_tags`, `creation_id`) carries `access_token` and
+    //    `appsecret_proof` in that body too, so the request line of a write names
+    //    the path and nothing else: no caption percent-encoded 3–4× into a URL an
+    //    intermediary can refuse with an opaque 414, and no credential in the one
+    //    line proxies and access logs record by default. Graph documents both
+    //    params as ordinary request parameters, accepted from the form body of a
+    //    POST exactly as from the query string. A request with NO body — every
+    //    GET, and the bodyless `DELETE /{comment-id}` — keeps them on the query
+    //    string, unchanged: a DELETE's content has no defined semantics
+    //    (RFC 9110 §9.3.5), so inventing a body just to carry the token would
+    //    trade a known-good request for an unverified one.
+    //
+    //    Auth wins on BOTH channels, the rule the query merge has always
+    //    enforced: `form.set` replaces a caller field of the same name, and the
+    //    `undefined` written over the query copy removes it (`buildUrl` skips an
+    //    `undefined` value), so a caller-supplied `access_token` cannot ride the
+    //    request line beside the real one in the body — Graph would then see two
+    //    credentials and the caller would have chosen which one it reads.
+    //
+    //    The decision is the FIELD COUNT, never "a body was passed": `body: {}`
+    //    and an all-nullish body send nothing (CC-DATA-15), so they must keep the
+    //    credential on the query string rather than conjure a body of auth alone.
+    //
+    //    Equivalent-mutant note: `delete query[key]` cannot be told apart from
+    //    the `undefined` assignment — `buildUrl` skips an `undefined` value, so
+    //    both leave the key off the URL.
+    //
+    // CC-DATA-15 — two spellings of "no payload" were two different requests.
+    // `init.body` and the `content-type` header below are set together on
+    // `body !== undefined`, so assigning unconditionally here meant `body: {}`
+    // — and, since CC-DATA-12 closed, a body whose every field is nullish —
+    // sent an empty form payload PLUS an
+    // `application/x-www-form-urlencoded` header that `body: undefined` does
+    // not send, and a DELETE went out carrying a zero-length form body. A
+    // caller that spelled "nothing to send" the other way got a different
+    // request on the wire for no reason it could see.
+    //
+    // The test is the FIELD COUNT, never "the serialized string is empty":
+    // `{ caption: '' }` contributed a field whose value the caller chose and
+    // must still send `caption=`. The two spellings happen to agree — a
+    // `URLSearchParams` holding one pair serializes to at least `=` — but only
+    // the count says what is meant, and the next reader has to know which.
+    //
+    // Reachability, stated exactly rather than assumed: no in-repo caller
+    // builds an empty form today — every body-carrying write in `api/` has at
+    // least one always-present field, and `deleteComment` passes no body at
+    // all. The guard holds because "an empty body and no body are the same
+    // request" is the kind of invariant a future api function will assume
+    // rather than check, and because since CC-PROC-25 the count ALSO decides
+    // where the credential travels (above).
+    //
+    // Equivalent-mutant note: `form.toString() !== ''` — and its truthiness
+    // twin — cannot be told apart from the field count by any input. A
+    // `URLSearchParams` holding one pair serializes to at least `=` (that is
+    // what `append('', '')` produces), so "no pairs" and "empty serialization"
+    // coincide for every possible form. The count is kept because it is the
+    // question actually being asked; the string test would agree here only by
+    // arithmetic, and would stop agreeing the moment someone reached for `!`.
+    const query: Record<string, string | number | boolean | undefined> = {
+      ...opts.params,
+      ...authParams,
+    };
+    let body: string | undefined;
+    if (form.size > 0) {
+      for (const [key, value] of Object.entries(authParams)) {
+        form.set(key, value);
+        query[key] = undefined;
+      }
+      body = form.toString();
+    }
+    const url = buildUrl(host, opts.path, query);
 
     const idempotent = opts.idempotent ?? opts.method === 'GET';
 
-    // Never log the token or the query string (both carry secrets) — path only.
+    // Never log the token, the query string or the body (all can carry
+    // secrets) — path only.
     log.debug('graph request', { method: opts.method, host, path: opts.path });
 
     // A cancelled call leaves here, before any slot or socket is spent on it:
@@ -531,7 +595,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
       for (let attempt = 0; ; attempt++) {
         const lastAttempt = attempt >= MAX_ATTEMPTS - 1;
 
-        // 3. Per-attempt timeout signal combined with the caller's signal.
+        // 4. Per-attempt timeout signal combined with the caller's signal.
         const timeout = AbortSignal.timeout(settings.timeoutMs);
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeout])
@@ -586,7 +650,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
           continue;
         }
 
-        // 4. Success: parse usage, DRAIN THE BODY, then throttle if hot.
+        // 5. Success: parse usage, DRAIN THE BODY, then throttle if hot.
         //
         // The order is the whole point. `sleep` here waits on `opts.signal`, not
         // on the per-attempt `timeout` from the top of the loop - so the throttle

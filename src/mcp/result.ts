@@ -38,9 +38,33 @@ import { isInstagramError } from '../core/types.js';
 const FENCE_OPEN = '[UNTRUSTED source: "instagram-user-content"]';
 const FENCE_CLOSE = '[/UNTRUSTED]';
 
-/** Defanged forms substituted for any forged delimiter found inside content. */
-const FENCE_OPEN_DEFANGED = '[ UNTRUSTED source: "instagram-user-content"]';
-const FENCE_CLOSE_DEFANGED = '[ /UNTRUSTED]';
+/**
+ * Filler a forged delimiter may carry inside its brackets and still read as the
+ * tag: any whitespace, and any format character (`\p{Cf}` — the zero-width
+ * space, joiner and non-joiner, the BOM, bidi controls, the tag block).
+ */
+const TAG_GAP = '[\\s\\p{Cf}]*';
+
+/**
+ * A forged fence delimiter, open or close, as a model would read one rather than
+ * as a parser would (CC-DATA-125): a `[`, an optional `/`, the word `UNTRUSTED`
+ * in any case, with {@link TAG_GAP} filler allowed before the slash and between
+ * every letter, then whatever else sits on the line up to the next bracket (the
+ * `source: "…"` attribute of an open delimiter, or any other), and the closing
+ * `]` when there is one. Until 2026-09-30 only the two exact, case-sensitive
+ * delimiters were defanged, so `[/untrusted]`, `[ /UNTRUSTED ]` or a zero-width
+ * space inside the tag passed through as written — and a model is not a parser.
+ *
+ * `i` with `u` is Unicode case folding, so the long s (U+017F) and the Kelvin
+ * sign (U+212A) fold onto `s` and `k` and are caught too; `u` is also what lets
+ * `\p{Cf}` be spelled at all. `g` defangs every forgery, not just the first.
+ * The run after the word stops at a newline, so a forgery cannot swallow the
+ * next line into its brackets; a `[` it leaves unclosed is still defanged.
+ */
+const FORGED_DELIMITER = new RegExp(
+  `\\[(${TAG_GAP}/?${TAG_GAP}${[...'UNTRUSTED'].join(TAG_GAP)}[^\\[\\]\\n]*)(\\])?`,
+  'giu',
+);
 
 /** True for a non-null, non-array object — the shape MCP `structuredContent` accepts. */
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -143,25 +167,24 @@ export function errorResult(err: unknown): ToolResult {
  * Wrap untrusted third-party text (a caption, comment, bio, …) in the
  * injection fence so a caller can embed it in a result and have the model
  * treat it as data, not instructions. Any attempt by the content to forge the
- * fence boundary (an embedded open/close delimiter) is defanged so the true
- * delimiters bound the data exactly once.
+ * fence boundary — an embedded open or close delimiter, or a near-miss of one
+ * ({@link FORGED_DELIMITER}) — is defanged so the true delimiters bound the
+ * data exactly once.
+ *
+ * Defanging swaps the forgery's square brackets for white ones, `⟦…⟧`, and
+ * leaves everything between them byte-exact (CC-DATA-125). Until 2026-09-30 it
+ * inserted a space instead — `[ /UNTRUSTED]` — which a parser cannot confuse
+ * with the delimiter but a model still reads as a closing tag. `⟦` is not `[`,
+ * so no defanged form can match {@link FORGED_DELIMITER} or either real
+ * delimiter again, and one pass covers both kinds. A bracketed phrase that
+ * merely starts with the word — `[untrusted input]` — is defanged too; that is
+ * the price of matching what a model reads, and it edits two characters.
  */
 export function fence(untrusted: string): string {
-  // Equivalent-mutant note: swapping the order of the two defang passes is not
-  // observable, so there is no test to write for it. Neither delimiter is a
-  // substring of the other, and they cannot overlap: an overlap needs a proper
-  // suffix of one to be a prefix of the other, every prefix of either starts with
-  // `[`, and neither string contains a `[` anywhere but at index 0 — so the only
-  // suffix that could match is the whole string, which is not a proper one.
-  // Neither replacement reintroduces a delimiter either: `[ /UNTRUSTED]` does
-  // not contain FENCE_OPEN, and `[ UNTRUSTED source: …]` does not contain
-  // FENCE_CLOSE. Neither pass can therefore create or destroy an occurrence of
-  // the other's pattern, and the two sets of split boundaries are independent,
-  // so both orders emit byte-identical output for every input.
-  const neutralized = untrusted
-    .split(FENCE_CLOSE)
-    .join(FENCE_CLOSE_DEFANGED)
-    .split(FENCE_OPEN)
-    .join(FENCE_OPEN_DEFANGED);
+  const neutralized = untrusted.replace(
+    FORGED_DELIMITER,
+    (_forgery, inner: string, close: string | undefined) =>
+      `⟦${inner}${close === undefined ? '' : '⟧'}`,
+  );
   return `${FENCE_OPEN}\n${neutralized}\n${FENCE_CLOSE}`;
 }

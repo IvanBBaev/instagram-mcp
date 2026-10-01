@@ -1,7 +1,7 @@
 /**
- * Secret redaction (Layer 0). A pure, dependency-free redactor that deep-clones
- * its input and masks secret values before anything is serialized to logs,
- * error payloads, or MCP results. See docs/security.md §2 and the security
+ * Secret redaction (Layer 0). A pure redactor, depending on nothing but the
+ * sibling token-shape list, that deep-clones its input and masks secret values
+ * before anything is serialized to logs, error payloads, or MCP results. See docs/security.md §2 and the security
  * review's finding F-4 (redaction must cover runtime-minted tokens and
  * `appsecret_proof` HMACs, not only statically-configured secrets).
  *
@@ -14,12 +14,15 @@
  *      {@link SECRET_KEY_PATTERN} is masked wholesale, regardless of content.
  *   3. Token-shape patterns — Facebook (`EAA…`) and Instagram (`IG…`) tokens and
  *      64-hex `appsecret_proof` HMACs are masked in free text even when not
- *      registered, as a best-effort backstop for the mint→register window.
+ *      registered, as a best-effort backstop for the mint→register window. The
+ *      vocabulary is `core/token-shapes.ts`, shared with `core/errors.ts`.
  *
  * The redactor never mutates its input: it returns a fresh deep copy. Inputs are
  * expected to be JSON-like (log fields, Graph responses): objects, arrays,
  * strings, and primitives.
  */
+
+import { maskTokenShapes } from './token-shapes.js';
 
 /** The fixed marker that replaces every redacted secret. */
 export const REDACTED = '[REDACTED]';
@@ -32,97 +35,26 @@ const CIRCULAR = '[Circular]';
  * name contains one of these is masked wholesale. Mirrors docs/security.md §2
  * and the secret env vars in docs/architecture.md §12.
  *
+ * Separator-insensitive (CC-DATA-124). The three compound names match with an
+ * underscore, a hyphen or nothing between their halves, so the wire spelling
+ * (`access_token`), a header spelling (`x-ig-app-secret`) and a code-built
+ * camelCase field (`accessToken`, `appSecret`, `clientSecret`,
+ * `appsecretProof`) are all masked; with `i` the camelCase capital is free.
+ * Until 2026-09-30 only the underscore forms matched, so a secret under an
+ * options object's `appSecret` — or an `err.cause` logged whole — was masked
+ * only if it happened to be registered or token-shaped, and the 32-hex app
+ * secret is neither before `registerSecret` runs. `authorization` is one word
+ * and needs no variant, and `appsecret_proof` needs no alternative of its own:
+ * the separator-free `appsecret` head of every spelling of it is already an
+ * `app[_-]?secret` match. Spelling it out anyway would be a branch no input can
+ * reach, which mutation testing reports as a survivor.
+ *
  * Equivalent-mutant note: adding the `m` flag here is unobservable. `m` only
  * changes what `^` and `$` mean, and this pattern is unanchored, so no input can
- * tell the two apart. The `i` flag, by contrast, is load-bearing and pinned.
- * Four of the five alternatives are underscore-spelled (`authorization` is one
- * word and needs no variant); the hyphenated header forms
- * (`app-secret`, `client-secret`) are deliberately out of scope — see the
- * "matches as a substring" test for why that is safe for this server's own
- * request builder and where it stops being safe.
+ * tell the two apart. The `i` flag, by contrast, is load-bearing and pinned, as
+ * is every `?` and each member of every separator class.
  */
-const SECRET_KEY_PATTERN = /access_token|appsecret_proof|app_secret|client_secret|authorization/i;
-
-/**
- * Token-shape backstop patterns for free strings (docs/security.md §2; F-4):
- *  - Facebook Graph tokens start `EAA` followed by a long token body.
- *  - Instagram tokens start `IG` plus an alphanumeric family letter (`IGQ…`,
- *    `IGAA…`) followed by a long body. TWO rules keep that shape off this
- *    server's own `IG_*` environment-variable names, which clear the length
- *    floor (`IG_PROFILE_<NAME>_ACCESS_TOKEN`) and turn up in exactly the
- *    diagnostics an operator must read verbatim — the unrecognised-name warning
- *    at startup (CC-CFG-13) and a "set IG_…" error. Requiring the third
- *    character to be alphanumeric excludes the `IG_` at the FRONT of such a
- *    name; until 2026-09-19 that class admitted `_` and the names came out
- *    whole as `[REDACTED]` (CC-PROC-72). The run rule excludes a SECOND `IG`
- *    further inside the name, which the front rule never looked at: a profile
- *    slug can spell `IG` inside itself — `DIGITALSTORE` does, in `DIGITAL` —
- *    which puts a token-shaped run in the MIDDLE of the key, `IG` plus 22 more
- *    name characters, two past the floor. The pattern matched there, so the key
- *    came out truncated at the embedded `IG` with the marker spliced onto the
- *    stump and named nothing: CC-PROC-72 over again, now keyed on the operator's
- *    own profile names, and invisible to a corpus whose only fixtures
- *    (`DEFAULT`, `BRAND`) are the two spellings with no embedded `IG`
- *    (CC-PROC-186). The gate in `test/env-catalog.test.ts` had already met the same
- *    hazard from the other side and anchored its own `IG_` scanner so it could
- *    not start mid-identifier; the lesson never came back here.
- *
- *    The exemption asks whether the run the match sits in begins `IG_`, which
- *    is the precise statement of "this is a name we own" and costs the backstop
- *    nothing measurable: a token reached through any delimiter — `=`, a quote,
- *    `/`, `?`, `&`, whitespace, the spliced marker — has no `IG_`-rooted run
- *    behind it and is still masked, as is one glued onto an unrelated identifier
- *    (`cursor7IGQ…`). It is unbounded on purpose: a `{0,64}` bound reads as the
- *    tighter rule but silently resumes eating names once the profile slug pushes
- *    the embedded `IG` past the bound.
- *
- *    "Begins" is literal — `startsWith` on the maximal run: the `IG_` must
- *    itself start the run. Without it the exemption fired for ANY `IG_`
- *    earlier in the run, so a token glued onto an identifier that merely
- *    contains one — `CONFIG_`, `SIG_`, `ORIG_` — was printed whole. That is the
- *    same unanchored-`IG_` hazard the environment-name scanners in the test gates
- *    already spell `(?<![A-Za-z0-9_])IG_`; here the run class also carries `-`.
- *    The class itself is the name alphabet and every member is pinned: a
- *    profile slug is whatever follows `IG_PROFILE_` in the environment, digits,
- *    hyphens and lowercase included.
- *
- *    The exemption is a check on the whole run, not a lookbehind (CC-DATA-121).
- *    Until 2026-09-26 it was spelled `(?<!(?<![A-Za-z0-9_-])IG_[A-Za-z0-9_-]*)`
- *    after the third character, which states the same rule but rescans the run
- *    back to its start at every `IG<alnum>` candidate: a run that begins `IG_`
- *    and then repeats `IGa` is exempt at every candidate, so every candidate
- *    paid a walk back to the front — quadratic, 2.7 s on 64 000 characters and
- *    15 s on 200 000, inside the synchronous redactor that every tool argument,
- *    log line and upstream string passes through. The split below is linear and
- *    equal on every input: a candidate's `IG` is followed by an alphanumeric, so
- *    it never starts an `IG_` run itself, and the greedy body cannot leave the
- *    run it starts in, so "the maximal run begins `IG_`" is exactly what the
- *    lookbehind asked. A differential test holds the two spellings equal.
- *  - `appsecret_proof` is a 64-char hex HMAC-SHA256 with no distinguishing prefix.
- * The length thresholds are set high enough that ordinary words (e.g. `IGNORE`)
- * cannot match; over-redaction is preferred to under-redaction here — a long
- * `IGNORE_…` identifier is still masked, and only a name this server itself owns
- * is not: an `IG_`-rooted run, or an `IG-` one.
- *
- * Order matters: each pattern runs over the output of the previous one, and
- * substituting the marker introduces word boundaries that the `\b`-bounded proof
- * pattern needs. See the "token-first" test.
- *
- * Equivalent-mutant note: adding the `m` flag to the proof pattern is
- * unobservable — it is unanchored, so `m` changes nothing. Its `g` and `i` flags
- * and both `\b`s are load-bearing and pinned by tests. Dropping the `g` from the
- * IG shape applied inside a run is equally unobservable: a match there runs
- * greedily to the end of the run it starts in, so a run holds at most one. The
- * `g` on the split into runs is load-bearing.
- */
-const TOKEN_SHAPE_PATTERNS: readonly ((text: string) => string)[] = [
-  (text) => text.replace(/EAA[A-Za-z0-9_-]{20,}/g, REDACTED),
-  (text) =>
-    text.replace(/[A-Za-z0-9_-]+/g, (run) =>
-      run.startsWith('IG_') ? run : run.replace(/IG[A-Za-z0-9][A-Za-z0-9_-]{19,}/g, REDACTED),
-    ),
-  (text) => text.replace(/\b[a-f0-9]{64}\b/gi, REDACTED),
-];
+const SECRET_KEY_PATTERN = /access[_-]?token|app[_-]?secret|client[_-]?secret|authorization/i;
 
 /**
  * Registrations shorter than this are ignored. Empty and short strings are
@@ -175,6 +107,55 @@ export function createRedactor(opts?: RedactorOptions): (value: unknown) => unkn
 }
 
 /**
+ * Every spelling of `value` that can appear in a surfaced string: the credential
+ * as the caller holds it, and the credential as `buildUrl` wrote it into a
+ * query. Pass both to {@link RedactorOptions.extraSecrets}. Used by
+ * `core/refresh.ts` and `cli/login.ts`, whose exchanges put the same credentials
+ * through the same encoder (CC-AUTH-76). It lived in `core/refresh.ts` until
+ * 2026-09-30, which made the login CLI import a redaction rule from a
+ * token-exchange module; it is a fact about what the redactor must be handed,
+ * so it lives beside the redactor (the wave-18 open question).
+ *
+ * `createRedactor` masks **exact substrings** — there is no shape matching for a
+ * registered secret, by design (see the module header). `buildUrl` serialises the
+ * query with `URLSearchParams`, which form-encodes it: `+` becomes `%2B`, `/`
+ * becomes `%2F`, `=` becomes `%3D`, a space becomes `+`. So registering only the
+ * raw value masked a credential that survived encoding unchanged and missed the
+ * same credential once it had been through the URL — the exact string a
+ * transport that names the failing request puts in its message. Registering both
+ * spellings is what makes the "no credential VALUE reaches an
+ * operator-visible message" guarantee hold for a credential the caller did not
+ * choose the alphabet of, rather than only for one that happens to be URL-safe.
+ * (A hex app secret and an `EAA…` token are URL-safe; an arbitrary stored token, which is
+ * all an exchange is promised, is not.)
+ *
+ * Both spellings are returned unconditionally, even when they are identical:
+ * `createRedactor` de-duplicates through a `Set`, so the duplicate costs
+ * nothing, and a `raw === encoded ? … : …` test would add a branch whose two
+ * arms produce the same redaction for every input.
+ *
+ * Equivalence note, corrected on 2026-09-23: the `'v'` key is a placeholder with
+ * no observable identity, but NOT for "any single-character name" — only for one
+ * the form encoder leaves alone. `URLSearchParams` percent-encodes the KEY as
+ * well as the value, so a name outside `[0-9A-Za-z*._-]` widens the `<name>=`
+ * prefix past the fixed `'v='.length` slice: `'%'` serialises as `%25=<encoded>`
+ * and the slice then yields `5=<encoded>`, registering a mask that matches
+ * nothing the transport will ever print. Measured 2026-09-23: renaming the key to
+ * `'%'` is killed by "a credential is masked in BOTH the spelling it has and the
+ * spelling the URL has". Inside the URL-safe alphabet the rename is genuinely
+ * unobservable — the name encodes to itself and the same two-character slice
+ * strips it.
+ * The slice length is NOT equivalent and is pinned: taking one character less
+ * registers `=<encoded>` instead of `<encoded>`, which still masks the value
+ * inside a URL (where a `=` always precedes it) and masks nothing at all in the
+ * message where Meta quotes the value back on its own.
+ */
+export function surfaceForms(value: string): readonly string[] {
+  const encoded = new URLSearchParams([['v', value]]).toString().slice('v='.length);
+  return [value, encoded];
+}
+
+/**
  * Mask exact registered secrets, then token-shape patterns, inside one string.
  *
  * Each round matches against `out`, not against `input`: the marker is spliced
@@ -193,10 +174,9 @@ function redactString(input: string, secrets: readonly string[]): string {
     // split/join avoids treating secret characters as a regex.
     if (out.includes(secret)) out = out.split(secret).join(REDACTED);
   }
-  for (const mask of TOKEN_SHAPE_PATTERNS) {
-    out = mask(out);
-  }
-  return out;
+  // The token-shape backstop: the one vocabulary shared with the Graph error
+  // mapper, whose doc says which shapes and why (CC-PROC-19).
+  return maskTokenShapes(out, REDACTED);
 }
 
 /**
@@ -231,6 +211,29 @@ function redactValue(value: unknown, secrets: readonly string[], seen: WeakSet<o
   try {
     if (Array.isArray(value)) {
       return value.map((item) => redactValue(item, secrets, seen));
+    }
+    // An INHERITED `toJSON` is what `JSON.stringify` would have written, so the
+    // clone is built from its result (CC-DATA-123). Walked as an object, a `Date`
+    // and a `URL` came out as `{}` — they hold no own enumerable fields — and a
+    // `Buffer` as its index keys, bytes no token shape can see. The call is made
+    // here, BEFORE redaction, and its result is redacted like any value, so the
+    // own-`toJSON` rule below (which exists because a call AFTER redaction would
+    // write whatever it returns, unmasked — CC-AUTH-48) is untouched. A `toJSON`
+    // that returns its own receiver is ignored: the fields are walked instead,
+    // which is what `JSON.stringify` then writes too. `JSON.stringify` passes
+    // the property key; this has none to pass, and `Date`, `URL` and `Buffer`
+    // all ignore it.
+    const toJSON: unknown = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === 'function' && !Object.hasOwn(value, 'toJSON')) {
+      // A `Buffer` serialises to its bytes as numbers. Those are decoded and
+      // checked as text first: bytes that spell a secret mask the whole buffer
+      // as a unit, because no number in the array could be masked on its own.
+      if (value instanceof Uint8Array) {
+        const text = new TextDecoder().decode(value);
+        if (redactString(text, secrets) !== text) return REDACTED;
+      }
+      const json: unknown = toJSON.call(value, '');
+      if (json !== value) return redactValue(json, secrets, seen);
     }
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {

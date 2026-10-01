@@ -1876,15 +1876,15 @@ test('refresh exposes no automatic refresh-decision helper, because nothing refr
   // no caller in `src/`: its tests pinned a contract for dead code, and it was a
   // second, unenforced copy of the threshold rule that could drift from the one
   // the tools report. Re-adding such a helper is a design change that must come
-  // with the caller the docs would then have to describe. `surfaceForms` is a
-  // redaction helper shared with `cli/login.ts` (CC-AUTH-76), not a decision.
+  // with the caller the docs would then have to describe. The redaction helper
+  // `surfaceForms` (CC-AUTH-76) lives in `core/redact.ts` since 2026-09-30.
   const mod: Record<string, unknown> = await import('../../src/core/refresh.js');
   assert.equal('needsRefresh' in mod, false);
   assert.deepEqual(
     Object.keys(mod)
       .filter((k) => typeof mod[k] === 'function')
       .sort(),
-    ['createTokenExchange', 'refreshToken', 'surfaceForms'],
+    ['createTokenExchange', 'refreshToken'],
   );
 });
 

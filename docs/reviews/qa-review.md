@@ -153,7 +153,7 @@ The `appsecret_proof` rule is a perfect *invariant test*: iterate every
 registered tool under a recording mock, once per auth path:
 
 - `invariant: every graph.facebook.com request carries appsecret_proof; every graph.instagram.com request carries none` (all-tools sweep, both env configurations)
-- `appsecret_proof is HMAC-SHA256(access_token, app_secret) — known-answer vector`
+- `appsecret_proof is HMAC-SHA256(app_secret, access_token|appsecret_time) — known-answer vector` (time-bound since CC-AUTH-15)
 
 Flows:
 

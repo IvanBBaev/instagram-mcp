@@ -39,9 +39,9 @@ Mirrors the reference plan-and-apply gate:
 
 | Tool | Ann. | Purpose / Graph call |
 |---|---|---|
-| `instagram_list_media` | RO | Own media, cursor-paginated: `GET /{ig-id}/media?fields=id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count`. Stories are not on this edge (Meta serves them on `GET /{ig-id}/stories`, which no tool reads), and Meta caps it at the 10K most recent media |
-| `instagram_get_media` | RO | Single media by ID, same field set + `children{...}` for carousels. An album whose inline expansion is missing, empty or not a list falls back to `GET /{media-id}/children`; `children` is omitted (never `[]`) when neither lists an item |
-| `instagram_set_comments_enabled` | I | Toggle commenting: `POST /{media-id}?comment_enabled=true\|false` |
+| `instagram_list_media` | RO | Own media, cursor-paginated: `GET /{ig-id}/media?fields=id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count`. Stories are not on this edge (Meta serves them on `GET /{ig-id}/stories`, read by `instagram_list_stories`), and Meta caps it at the 10K most recent media |
+| `instagram_list_stories` | RO | Own **live** stories, cursor-paginated: `GET /{ig-id}/stories` with the `list_media` field set and paging. Only stories inside their 24-hour window are on this edge, so an empty result means none is live, not that none was posted; stories carry no `like_count`/`comments_count` (CC-DATA-119) |
+| `instagram_get_media` | RO | Single media by ID, same field set + `children{...}` for carousels. An album whose inline expansion is missing, empty or not a list falls back to `GET /{media-id}/children`; `children` is omitted (never `[]`) when neither lists an item, and when the fallback call itself fails the detail is still returned, `children` omitted, with a `note` naming the error kind (CC-DATA-120) |
 
 ## Package `publishing`
 
@@ -74,6 +74,25 @@ story and reel cover; PNG is not supported), ≤ 8 MB, aspect 0.8–1.91; reels 
 min, **≤ 300 MB**; stories video ≤ 60 s, ≤ 100 MB *[verified 2026-07-21 against
 official docs]*.
 
+**Format hints and the composite preview.** A still-image field (feed image, story
+image, reel cover) whose URL's last path segment ends in a clearly non-JPEG image
+extension draws the "suggests a non-JPEG image" warning; one ending in a video
+extension (`.mp4`, `.mov`, `.webm`, …) draws a separate "suggests a video, but this
+field takes a still image" warning (CC-PUB-23). Video fields are never hinted. The
+composites (`post_image`, `post_reel`, `post_story`) carry these warnings in
+`details.warnings` of the preview and again as `warnings` on every applied result —
+`published`, `already_published` and `in_progress` — so a caller under
+`IG_WRITE_MODE=apply`, who never sees a preview, still reads them (CC-PUB-25). A
+resume (`resumeContainerId`) publishes the existing container unchanged, so any
+media input passed beside it is named in a warning as ignored (CC-PUB-59). A fresh
+composite preview shows `details.caption.excerpt` — the caption with control
+characters turned into spaces, whitespace collapsed, and cut after 200 code points
+with `…` — and `details.media_hosts`, the distinct hosts Instagram will fetch from
+(never the path, query or userinfo) (CC-PUB-60). Every URL field's published input
+schema carries the JSON Schema `pattern` `^ *[Hh][Tt][Tt][Pp][Ss]:\/\/` (an optional
+leading-space run, a case-insensitive `https://`); the full well-formedness check runs
+in the server and refuses with the same message (CC-PUB-35, CC-PUB-36).
+
 **Write acknowledgements.** A write Instagram answers with HTTP 200 but an error
 envelope (`{ error: { ... } }`) is reported as that Graph error — same kind and
 code as the 4xx carrying it — never as a missing id (CC-PUB-53). A carousel is
@@ -90,11 +109,12 @@ detail ends `…"` followed by its full length (CC-DATA-95).
 |---|---|---|
 | `instagram_list_comments` | RO | `GET /{media-id}/comments?fields=id,text,username,timestamp,like_count,replies{...}`, cursor-paginated |
 | `instagram_get_comment` | RO | `GET /{comment-id}?fields=...` incl. parent/media context |
-| `instagram_reply_to_comment` | — | `POST /{comment-id}/replies?message=...` (threaded reply); an empty or whitespace-only `message` is refused before any call (CC-COM-18) |
-| `instagram_create_comment` | — | Top-level comment on own media: `POST /{media-id}/comments?message=...`; an empty or whitespace-only `message` is refused before any call (CC-COM-18) |
+| `instagram_reply_to_comment` | — | `POST /{comment-id}/replies?message=...` (threaded reply); an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18) |
+| `instagram_create_comment` | — | Top-level comment on own media: `POST /{media-id}/comments?message=...`; an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18) |
 | `instagram_hide_comment` | I | `POST /{comment-id}?hide=true` (reversible moderation — preferred over delete) |
 | `instagram_unhide_comment` | I | `POST /{comment-id}?hide=false` |
 | `instagram_delete_comment` | **D** | `DELETE /{comment-id}` — irreversible; double-gated (apply + `IG_ALLOW_DESTRUCTIVE`) |
+| `instagram_set_comments_enabled` | I | Toggle commenting on a media object: `POST /{media-id}?comment_enabled=true\|false`. Tagged `comments`, so the `comments` package controls reach it (CC-PROC-9) |
 | `instagram_list_tagged_media` | RO | Media the account is **tagged in**: `GET /{ig-id}/tags` (both auth paths). Note *[verified 2026-07-21]*: tags ≠ @mentions — pull-based @mention lookup (`mentioned_media`/`mentioned_comment`) is **Path B only**; Path A can only *reply* to mentions (`POST /{ig-id}/mentions`); story @mentions unsupported on Path A |
 
 ## Package `insights`
@@ -158,8 +178,9 @@ a `null` or non-object entry counts the same way, including in `search_hashtag`
 (CC-DATA-62) and `list_linked_accounts` (CC-DATA-64). A `get_account` profile Meta
 returns without an id publishes the configured account id it was read by, or fails
 as an `upstream` error on a `me` read (CC-DATA-65); a `discover_business` answer with
-no `business_discovery` profile in it publishes only a `note` saying so, never an empty
-profile (CC-DATA-79). `get_container_status`, `get_media` and `get_comment` read one
+no `business_discovery` profile in it, or with a profile that has no usable id, fails as
+an `upstream` error saying which, never an empty or id-less profile — `id` is the one
+field its output requires (CC-DATA-79, CC-DATA-32). `get_container_status`, `get_media` and `get_comment` read one
 object by the id they are given, so an answer without a usable id publishes that requested
 id rather than failing the call (CC-DATA-76, CC-DATA-77, CC-DATA-78); a body that
 is not an object at all fails `get_comment`, `get_account`, `token_status` and the four
@@ -203,9 +224,10 @@ either way (CC-DATA-30).
 `token_status` reads a Path-B `data_access_expires_at` of `0` the way it reads
 `expires_at: 0`: as "no expiry", not as the 1970 epoch. `dataAccessExpiresAt` is then
 absent, exactly as when Meta leaves the field out, and no warning is raised
-(CC-DATA-113). A window that has already closed keeps its `dataAccessExpiresAt` and adds
-its own sentence to `warning` — the token can still be valid while every data read
-fails — beside any token-expiry warning, never instead of it (CC-AUTH-77).
+(CC-DATA-113). A window that has already closed, or closes within 7 days, keeps its
+`dataAccessExpiresAt` and adds its own sentence to `warning` — the token can still be
+valid while every data read fails — beside any token-expiry warning, never instead of it
+(CC-AUTH-77).
 
 A failed call is `isError: true` with one text line and **no** `structuredContent`:
 `Instagram error (<kind>): <message>`, followed by ` (code N)`, ` (subcode M)` or
@@ -218,7 +240,7 @@ The envelope is text-only on purpose: the MCP SDK client validates any
 
 ## Tool-count budget
 
-Initial surface: **28 tools** across 6 packages — deliberately compact; every tool
+Initial surface: **29 tools** across 6 packages — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

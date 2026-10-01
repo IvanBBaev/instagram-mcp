@@ -3492,6 +3492,19 @@ test('Path B: doctor reports the data-access window, which expires independently
     `  OK    Data access expiry: open until ${new Date(openSec * 1000).toISOString()}.`,
   );
 
+  // Closing within 7 days: a WARN with the date and the remedy, and the run
+  // stays healthy — data reads still work today.
+  const soonSec = (NOW + 3 * DAY) / 1000;
+  const soon = await run(soonSec);
+  const soonIso = new Date(soonSec * 1000).toISOString();
+  assert.equal(
+    lineOf(soon.report),
+    `  WARN  Data access expiry: expiring soon — Data access expires at ${soonIso} (~3 day(s) ` +
+      'left): after that, reads of Instagram data fail with a permission error even while the ' +
+      'token is valid; run the `login` CLI to renew the data-access window before then.',
+  );
+  assert.equal(soon.exitCode, 0, 'a WARN, not a FAIL');
+
   // Closed window on a valid token: a WARN naming the remedy. The exit code is
   // left to the reachability check, which is the authority on data reads.
   const closedSec = NOW / 1000;

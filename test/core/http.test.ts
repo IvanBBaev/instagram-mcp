@@ -19,6 +19,7 @@ import type { Clock } from '../../src/core/clock.js';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.js';
 import { ALLOWED_HOSTS, GRAPH_VERSION, assertAllowedHost, buildUrl } from '../../src/core/host.js';
 import { createIgRequest, createSemaphoreRegistry } from '../../src/core/http.js';
+import { REDACTED, createRedactor } from '../../src/core/redact.js';
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -380,7 +381,18 @@ test('appsecret_proof is present on graph.facebook.com and absent on graph.insta
   assert.match(ig.calls[0]!.url, /access_token=IG_TOKEN/);
 });
 
-test('POST sends opts.body form-encoded while auth params stay on the query string', async () => {
+/*
+ * CC-PROC-25 — a write's parameters ride the form body, and the credential rides
+ * WITH them. Before this, every write put caption, user_tags, message and
+ * image_url on the query string — a 2200-character caption percent-encodes 3–4×
+ * onto the request line, and the request line is what proxies, load balancers
+ * and access logs keep — while the `body` sink sat unused. Moving the payload
+ * and leaving `access_token` on the URL would have kept the one field that most
+ * needs to stay off the request line on it, so the credential follows the body.
+ * The whole payload string is pinned, not matched: a sink that also left the
+ * token on the query, or dropped a field, fails here.
+ */
+test('POST sends opts.body form-encoded and moves the auth params into it (CC-PROC-25)', async () => {
   const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
   const req = createIgRequest({
     auth: igAuth,
@@ -390,10 +402,170 @@ test('POST sends opts.body form-encoded while auth params stay on the query stri
     fetchImpl,
   });
   await req({ method: 'POST', path: '/123/media', body: { caption: 'hi there', image_url: 'u' } });
-  assert.match(calls[0]!.url, /access_token=IG_TOKEN/); // auth on the query
-  assert.equal(typeof calls[0]!.body, 'string');
-  assert.match(calls[0]!.body!, /caption=hi\+there/); // body is form-encoded
-  assert.match(calls[0]!.body!, /image_url=u/);
+  assert.equal(calls[0]!.url, 'https://graph.instagram.com/v25.0/123/media');
+  assert.equal(calls[0]!.body, 'caption=hi+there&image_url=u&access_token=IG_TOKEN');
+  assert.deepEqual(calls[0]!.headers, { 'content-type': 'application/x-www-form-urlencoded' });
+});
+
+test('on graph.facebook.com both auth params move into the body of a write (CC-PROC-25)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: fbAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'POST', path: '/123/comments', body: { message: 'hey' } });
+  assert.equal(calls[0]!.url, 'https://graph.facebook.com/v25.0/123/comments');
+  assert.equal(calls[0]!.body, 'message=hey&access_token=FB_TOKEN&appsecret_proof=PROOF');
+});
+
+/*
+ * The other half of the placement rule: the credential leaves the query string
+ * only when a body is actually sent. A request with no payload — every GET, the
+ * bodyless `DELETE /{comment-id}`, and each spelling CC-DATA-15 collapses to "no
+ * body" — keeps it on the URL, because moving it would manufacture a form body
+ * nothing asked for (a DELETE with content has no defined semantics, RFC 9110
+ * §9.3.5) and would reintroduce the content-type header CC-DATA-15 removed. The
+ * decision is the FIELD COUNT, so `{}` and an all-nullish body must behave as no
+ * body; a guard spelled `opts.body !== undefined` fails the third and fourth rows.
+ */
+test('a request that sends no body keeps the auth params on the query string (CC-PROC-25)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { success: true } }));
+  const req = createIgRequest({
+    auth: fbAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me' });
+  await req({ method: 'DELETE', path: '/123' });
+  await req({ method: 'POST', path: '/123/media', body: {} });
+  await req({
+    method: 'POST',
+    path: '/123/media',
+    body: { a: null, b: undefined } as unknown as { [k: string]: string | undefined },
+  });
+  await req({ method: 'GET', path: '/me', body: { caption: 'stray' } });
+  const base = 'https://graph.facebook.com/v25.0';
+  const auth = 'access_token=FB_TOKEN&appsecret_proof=PROOF';
+  assert.deepEqual(
+    calls.map((c) => [c.url, c.body]),
+    [
+      [`${base}/me?${auth}`, undefined],
+      [`${base}/123?${auth}`, undefined],
+      [`${base}/123/media?${auth}`, undefined],
+      [`${base}/123/media?${auth}`, undefined],
+      [`${base}/me?${auth}`, undefined],
+    ],
+  );
+});
+
+/*
+ * Auth wins on BOTH channels once it moves. In the body, `set` replaces a
+ * caller's same-named field in place — `append` would send two `access_token`
+ * values and leave the choice to Meta's parser. On the query, a caller-supplied
+ * `access_token` in `params` would otherwise stay on the URL beside the real one
+ * in the body: a credential the caller chose reaches Meta, and the defence the
+ * read path has (auth merged last) would be lost on every write.
+ */
+test('a caller can never plant an auth param on either channel of a write (CC-PROC-25)', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth: fbAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({
+    method: 'POST',
+    path: '/123/comments',
+    params: { access_token: 'ATTACKER_TOKEN', appsecret_proof: 'FORGED', fields: 'id' },
+    body: { access_token: 'BODY_ATTACKER', message: 'hey', appsecret_proof: 'BODY_FORGED' },
+  });
+  assert.equal(calls[0]!.url, 'https://graph.facebook.com/v25.0/123/comments?fields=id');
+  assert.equal(calls[0]!.body, 'access_token=FB_TOKEN&message=hey&appsecret_proof=PROOF');
+});
+
+/*
+ * The redaction half of CC-PROC-25. A credential in a form body is spelled the
+ * way `URLSearchParams` encodes it, which is not the spelling the provider
+ * returned: `+`, `/`, `=` and a space all change. A transport error, a proxy
+ * echo or a debug dump of the payload carries the ENCODED spelling, so masking
+ * only the raw value would leave it readable (the CC-AUTH-76 precedent, on the
+ * login/refresh body). Both spellings of the access token are registered
+ * before the request leaves. The token is chosen so neither token-shape
+ * backstop covers it — only the registry can — and so each spelling differs
+ * from the other. `appsecret_proof` and `appsecret_time` are NOT registered:
+ * since CC-AUTH-15 both change every second, so registering them would grow the
+ * process-wide registry without bound, and a registered 10-digit time would
+ * mask that digit run inside any Graph id. The proof stays masked through the
+ * 64-hex shape backstop, in either spelling, because hex survives form
+ * encoding unchanged.
+ */
+test('the access token is registered for redaction in its raw and form-encoded spellings (CC-PROC-25)', async () => {
+  const token = 'wr1te tok/en+x=';
+  const proof = 'a'.repeat(32) + '0123456789abcdef'.repeat(2);
+  const time = '1790000017';
+  const auth: AuthProvider = {
+    path: 'fb-login',
+    defaultHost: 'graph.facebook.com',
+    authParams: () =>
+      Promise.resolve({ access_token: token, appsecret_proof: proof, appsecret_time: time }),
+  };
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: 'created' } }));
+  const req = createIgRequest({
+    auth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'POST', path: '/123/comments', body: { message: 'hey' } });
+  const payload = String(calls[0]!.body);
+  const encodedToken = 'wr1te+tok%2Fen%2Bx%3D';
+  assert.equal(
+    payload,
+    `message=hey&access_token=${encodedToken}&appsecret_proof=${proof}&appsecret_time=${time}`,
+  );
+  const redact = createRedactor();
+  assert.equal(
+    redact(`raw ${token} | ${proof}`),
+    `raw ${REDACTED} | ${REDACTED}`,
+    'the raw spellings are masked',
+  );
+  assert.equal(
+    redact(payload),
+    `message=hey&access_token=${REDACTED}&appsecret_proof=${REDACTED}&appsecret_time=${time}`,
+    'the spellings the body puts on the wire are masked, and the time is not',
+  );
+  assert.equal(
+    redact(`id 17841${time}42`),
+    `id 17841${time}42`,
+    'appsecret_time is never registered, so a Graph id containing it survives',
+  );
+});
+
+test('an auth provider with no access_token still sends, registering nothing', async () => {
+  const auth: AuthProvider = {
+    path: 'ig-login',
+    defaultHost: 'graph.instagram.com',
+    authParams: () => Promise.resolve({}),
+  };
+  const { fetchImpl, calls } = mockFetch(() => ({ body: { id: '1' } }));
+  const req = createIgRequest({
+    auth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me', params: { fields: 'id' } });
+  assert.equal(calls.length, 1);
+  assert.equal(/access_token/.test(calls[0]!.url), false);
 });
 
 test('a caller param can never override an auth param', async () => {
@@ -470,7 +642,7 @@ test('an undefined body field is omitted, never sent as the string "undefined"',
     path: '/123/media',
     body: { caption: 'ok', alt_text: undefined, location_id: undefined },
   });
-  assert.equal(calls[0]!.body, 'caption=ok');
+  assert.equal(calls[0]!.body, 'caption=ok&access_token=IG_TOKEN');
 });
 
 /*
@@ -509,7 +681,7 @@ test('a null body field is omitted, never sent as the literal string "null" (CC-
   assert.equal(/null/.test(payload), false, 'no spelling of null reaches the wire');
   assert.equal(
     payload,
-    'caption=ok&location_id=42',
+    'caption=ok&location_id=42&access_token=IG_TOKEN',
     'the null field must vanish from the payload, and the fields behind it must survive',
   );
 
@@ -560,7 +732,7 @@ test('a POST body keeps falsy-but-meaningful values and drops only the nullish o
       also_gone: null,
     } as unknown as { [k: string]: string | number | boolean | undefined },
   });
-  assert.equal(calls[0]!.body, 'share_to_feed=false&thumb_offset=0&caption=');
+  assert.equal(calls[0]!.body, 'share_to_feed=false&thumb_offset=0&caption=&access_token=IG_TOKEN');
 });
 
 /*
@@ -634,7 +806,7 @@ test('a body whose only field is an empty string still sends a payload (CC-DATA-
     fetchImpl,
   });
   await req({ method: 'POST', path: '/123/media', body: { caption: '' } });
-  assert.equal(calls[0]!.body, 'caption=');
+  assert.equal(calls[0]!.body, 'caption=&access_token=IG_TOKEN');
   assert.deepEqual(calls[0]!.headers, { 'content-type': 'application/x-www-form-urlencoded' });
   // The write path's whole init key set, for the reason the GET test above
   // spells out. `headers` pins the inner record; this pins the outer one, which

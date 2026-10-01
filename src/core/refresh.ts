@@ -57,7 +57,7 @@
 import { MAX_RESPONSE_BYTES, readCappedText } from './body.js';
 import { mapGraphError, toInstagramError } from './errors.js';
 import { buildUrl } from './host.js';
-import { createRedactor } from './redact.js';
+import { createRedactor, surfaceForms } from './redact.js';
 import { expiryFromLifetime } from './time.js';
 import { InstagramError } from './types.js';
 // `IgRequestFn` is deliberately NOT imported here: this module must not be able
@@ -161,51 +161,6 @@ function parseBody(text: string): unknown {
  * exchange, so masking them would buy nothing and cost the diagnosis.
  */
 const SECRET_PARAM_KEYS: readonly string[] = ['access_token', 'client_secret', 'fb_exchange_token'];
-
-/**
- * Every spelling of `value` that can appear in a string this module surfaces:
- * the credential as the caller holds it, and the credential as `buildUrl` wrote
- * it into the query. Exported for `cli/login.ts`, whose exchanges put the same
- * credentials through the same encoder (CC-AUTH-76).
- *
- * `createRedactor` masks **exact substrings** — there is no shape matching for a
- * registered secret, by design (`core/redact.ts`). `buildUrl` serialises the
- * query with `URLSearchParams`, which form-encodes it: `+` becomes `%2B`, `/`
- * becomes `%2F`, `=` becomes `%3D`, a space becomes `+`. So registering only the
- * raw value masked a credential that survived encoding unchanged and missed the
- * same credential once it had been through the URL — the exact string a
- * transport that names the failing request puts in its message. Registering both
- * spellings is what makes the "no credential VALUE reaches an
- * operator-visible message" guarantee hold for a credential the module did not
- * choose the alphabet of, rather than only for one that happens to be URL-safe. (A hex app
- * secret and an `EAA…` token are URL-safe; an arbitrary stored token, which is
- * all this module is promised, is not.)
- *
- * Both spellings are returned unconditionally, even when they are identical:
- * `createRedactor` de-duplicates through a `Set`, so the duplicate costs
- * nothing, and a `raw === encoded ? … : …` test would add a branch whose two
- * arms produce the same redaction for every input.
- *
- * Equivalence note, corrected on 2026-09-23: the `'v'` key is a placeholder with
- * no observable identity, but NOT for "any single-character name" — only for one
- * the form encoder leaves alone. `URLSearchParams` percent-encodes the KEY as
- * well as the value, so a name outside `[0-9A-Za-z*._-]` widens the `<name>=`
- * prefix past the fixed `'v='.length` slice: `'%'` serialises as `%25=<encoded>`
- * and the slice then yields `5=<encoded>`, registering a mask that matches
- * nothing the transport will ever print. Measured 2026-09-23: renaming the key to
- * `'%'` is killed by "a credential is masked in BOTH the spelling it has and the
- * spelling the URL has". Inside the URL-safe alphabet the rename is genuinely
- * unobservable — the name encodes to itself and the same two-character slice
- * strips it.
- * The slice length is NOT equivalent and is pinned: taking one character less
- * registers `=<encoded>` instead of `<encoded>`, which still masks the value
- * inside a URL (where a `=` always precedes it) and masks nothing at all in the
- * message where Meta quotes the value back on its own.
- */
-export function surfaceForms(value: string): readonly string[] {
-  const encoded = new URLSearchParams([['v', value]]).toString().slice('v='.length);
-  return [value, encoded];
-}
 
 /**
  * Re-throw an exchange failure with every credential this request put on the

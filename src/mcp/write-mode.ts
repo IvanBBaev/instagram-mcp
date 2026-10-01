@@ -81,7 +81,8 @@ const redactJournalEntry = createRedactor();
  *
  * An error message is the riskiest string this gate ever emits: the MCP SDK, the
  * transport and `node:fs` all compose messages out of URLs and paths, and Graph
- * carries `access_token` in the query string.
+ * reads carry `access_token` in the query string (writes send it in the form
+ * body since CC-PROC-25, but a GET URL or a body echo can still surface it).
  *
  * Two passes, both deliberate:
  *  - {@link redactSecrets} masks the *active profile's* credentials even when

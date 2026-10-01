@@ -663,10 +663,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorResult> {
       renderExpiry(info.expiresAtSec);
       // The data-access window expires independently of the token (CC-AUTH-12),
       // and doctor used to say nothing about it: a valid token with a closed
-      // window printed only OK lines here (CC-AUTH-77). A closed window is a
-      // WARN, not a FAIL, for the reason a lapsed Path-A record is: the
-      // reachability check below is the authority on whether data reads work,
-      // and it fails on its own when they do not. No window (`0` or omitted)
+      // window printed only OK lines here (CC-AUTH-77). A closed window, and one
+      // closing within DATA_ACCESS_WARN_DAYS, is a WARN, not a FAIL, for the
+      // reason a lapsed Path-A record is: the reachability check below is the
+      // authority on whether data reads work, and it fails on its own when they
+      // do not. No window (`0` or omitted)
       // prints nothing, exactly as `token_status` publishes nothing.
       const dataAccess = summarizeDataAccessExpiry({
         dataAccessExpiresAtSec: info.dataAccessExpiresAtSec,
@@ -674,6 +675,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorResult> {
       });
       if (dataAccess.state === 'open') {
         item('ok', `Data access expiry: open until ${dataAccess.expiresAt}.`);
+      } else if (dataAccess.state === 'expiring_soon') {
+        // A WARN like the closed window: data reads still work today, and the
+        // point of the line is to renew before they stop.
+        item('warn', `Data access expiry: expiring soon — ${dataAccess.warning}`);
       } else if (dataAccess.state === 'expired') {
         item('warn', `Data access expiry: expired — ${dataAccess.warning}`);
       } else if (dataAccess.state === 'unknown') {

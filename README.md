@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-28-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-29-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -47,16 +47,17 @@ _Built and maintained in my own time — a
 
 ## What it does
 
-The server exposes an Instagram professional account through **28 MCP tools**
+The server exposes an Instagram professional account through **29 MCP tools**
 grouped into six packages:
 
 - **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
   via the container → publish flow, plus one-call helpers (`instagram_post_image`
   / `_reel` / `_story`) and publishing-limit reporting.
 - **Media management** — list/read own media (including album children) and
-  toggle whether a post accepts comments.
+  the account's live stories.
 - **Comment moderation** — list threads, reply, hide/unhide (reversible,
-  preferred over delete) and delete; read tagged media.
+  preferred over delete) and delete; toggle whether a post accepts comments;
+  read tagged media.
 - **Insights** — account and media metrics on the post-2025 `views`-based metric
   set, audience demographics and online-follower distribution.
 - **Discovery** — hashtag search, hashtag top/recent media and public
@@ -235,21 +236,21 @@ explicit comma list of packages:
 
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
-| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 25 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 15 |
-| `publisher` | `account, media, publishing, comments` | publish and moderate | 21 |
-| `all` | every package | the full surface | 28 |
+| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 26 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 16 |
+| `publisher` | `account, media, publishing, comments` | publish and moderate | 22 |
+| `all` | every package | the full surface | 29 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
 packages after the profile resolves, and `IG_PACKAGES_READONLY` forces a
 package's write tools off (its read tools stay).
 
-`reader` is read-only **by name, not by arithmetic**: its `comments` and `media`
-packages do contain write tools, so selecting it forces every package it resolves
+`reader` is read-only **by name, not by arithmetic**: its `comments` package
+does contain write tools, so selecting it forces every package it resolves
 to read-only, exactly as if `IG_PACKAGES_READONLY` had listed them all. No tool
 that posts, hides, deletes or toggles anything is ever registered under `reader`
-— that is why it exposes 15 tools and not 21. A hand-written package list is not
+— that is why it exposes 16 tools and not 22. A hand-written package list is not
 a read-only boundary; only the profile name (or `IG_PACKAGES_READONLY`) is.
 
 Auth-path capability filtering runs on top: a tool restricted to one login path
@@ -275,7 +276,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_token_status` | account | both | Read | Report the active credential: auth path (A = ig-login / B = fb-login), whether a token is configured, the resolved account ID, and — on Path B, via debug_token — validity, granted scopes, absolute expiry and days-left (with a refresh warning as the threshold nears). |
 | `instagram_get_media` | media | both | Read | Fetch a single media object by id, including its carousel children (album items) under `children`. |
 | `instagram_list_media` | media | both | Read | List the operated account's own media (feed posts, reels, albums), newest first, cursor-paginated. |
-| `instagram_set_comments_enabled` | media | both | Write | Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true\|false). |
+| `instagram_list_stories` | media | both | Read | List the operated account's live stories — only those still inside Instagram's 24-hour window, newest first, cursor-paginated. |
 | `instagram_get_account_insights` | insights | both | Read | Account-level insights for the operated Instagram professional account (GET /{ig-id}/insights). |
 | `instagram_get_audience_demographics` | insights | both | Read | Follower / engaged-audience demographics for the operated account (GET /{ig-id}/insights with metric_type=total_value). |
 | `instagram_get_media_insights` | insights | both | Read | Insights for a single media object (GET /{media-id}/insights). |
@@ -294,6 +295,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies). |
 | `instagram_list_tagged_media` | comments | both | Read | List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated. |
 | `instagram_reply_to_comment` | comments | both | Write | Post a threaded reply under an existing comment (POST /{comment-id}/replies). |
+| `instagram_set_comments_enabled` | comments | both | Write | Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true\|false). |
 | `instagram_unhide_comment` | comments | both | Write | Unhide a previously hidden comment (POST /{comment-id}?hide=false). |
 | `instagram_discover_business` | discovery | fb-login | Read | Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(&lt;handle&gt;){followers_count,media_count,media{...}}. |
 | `instagram_get_hashtag_media` | discovery | fb-login | Read | List PUBLIC media under a hashtag id via GET /{hashtag-id}/top_media or /{hashtag-id}/recent_media (choose via `edge`), which require the operated account's id as user_id. |

@@ -13,7 +13,7 @@
 > (task IDs `T-*`, integration gates G1–G5 mapped to the M-phases below). The
 > roadmap stays the milestone view; the workplan is the execution view.
 
-## Current state (updated 2026-09-23)
+## Current state (updated 2026-10-01)
 
 Status vocabulary used throughout this file and [workplan.md](workplan.md):
 **DONE** · **PARTIAL** (some of it shipped, rest named below) · **BLOCKED**
@@ -24,17 +24,29 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M0 Scaffold | **DONE** | Closed 2026-08-25: the last open item, the npm name, was claimed by publishing the real `instagram-mcp-ai@0.7.0` rather than the planned `0.0.1` stub. The exit claim "npm name owned" now holds. |
 | M1 Core read path | **PARTIAL** | All code shipped and unit-tested; **no live run has ever happened** — the exit gate ("works on both paths against a real account") is unmet, and the PCA probe is unanswered. |
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
-| M3 Moderation | **PARTIAL** | 8 comment tools (plus the `media`-tagged comment toggle) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
+| M3 Moderation | **PARTIAL** | 9 comment tools (the comment toggle moved from `media` to `comments` on 2026-09-30, CC-PROC-9) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
 | M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle, the plugin-marketplace listing, and clean-machine install testing of any channel. Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
-**Where the project stands (2026-09-23).** `instagram-mcp-ai` 0.7.0 has been on
-npm since 2026-08-25. Seven audit waves have since run over the tree; the suite
-is at 2101 tests with 100% coverage on every axis, and every module has been
-through mutation testing. None of that changes a milestone status below: M1–M4
-stay **PARTIAL** because each exit gate names a live account, and no live run
-has happened yet.
+**Where the project stands (2026-10-01).** `instagram-mcp-ai` 0.7.0 has been on
+npm since 2026-08-25. The tree is versioned 0.8.0 (`CHANGELOG.md` dates that
+section 2026-09-24, and the work since sits under `[Unreleased]`), but 0.8.0 is
+**not published** — npm still serves 0.7.0 and the repository has no tag for
+it. Publishing it, like the MCP-registry submission (workplan T-R5) and the
+MCPB and marketplace channels (T-R6, T-R8), is an outward act that waits on the
+owner's go-ahead. Audit waves 18 and 19 have run since 0.7.0, and on
+2026-09-30 every recorded owner-decision recommendation was applied — the
+[corner-cases.md](corner-cases.md) §10 register plus the wave-18/19 rows (see
+item 6 of the open-question register below). The surface is now **29 tools**
+(`instagram_list_stories` joined `media`, CC-DATA-119; the comment toggle moved to
+`comments`, CC-PROC-9): 26 under the default `core` profile, 16 under `reader`, 22
+under `publisher`. The suite is at 2549 tests with 100% coverage on every axis,
+and every module has been through mutation testing. Two of those tests fail, both
+the CC-CFG-69 canary tripping on a stray `./   /` directory in the working tree —
+an owner action (delete the directory), not a code defect. None of that changes a
+milestone status below: M1–M4 stay **PARTIAL** because each exit gate names a live
+account, and no live run has happened yet.
 
 **Cross-cutting blocker.** Lane E (live QA, `T-E1`–`T-E4`) is **harness done,
 execution blocked**: there are no live Meta credentials in this environment, so
@@ -78,7 +90,7 @@ is already narrower than it reads:
 - `all` means *every package*. Excluding one from it would make the profile lie.
 
 What is given up: an operator on Path B who selects `reader` may get a permission
-error from three of fifteen tools. That is a documented, recoverable outcome, not
+error from three of sixteen tools. That is a documented, recoverable outcome, not
 data loss. **This is reversible** — if the probe ever runs and says NO-GO, drop
 `'discovery'` from the `reader` and `all` profile lists in `src/mcp/registry.ts`
 and the snapshot test will pin the new counts.
@@ -235,9 +247,9 @@ no code path can publish twice from one instruction.
 
 ## M3 — Moderation (size M) — **PARTIAL**
 
-**Left:** the live half only. The `comments` package ships **8** tools as planned
-(`src/tools/comments.ts` also defines `instagram_set_comments_enabled`, but that
-tool is tagged `media` — CC-PROC-9),
+**Left:** the live half only. The `comments` package ships **9** tools: the 8
+planned plus `instagram_set_comments_enabled`, which was tagged `media` until
+2026-09-30 and now sits in `comments` with the file that defines it (CC-PROC-9),
 the `IG_ALLOW_DESTRUCTIVE` double gate is implemented and unit-tested, and
 hide-vs-delete guidance is in the docs. The live probes for hide rules and length
 caps (CC-COM-5/6) are **BLOCKED**, so the exit gate ("moderation flow exercised
@@ -311,7 +323,7 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   with build provenance. That unblocked **two** channels at once: `npx
   instagram-mcp-ai` directly, and the plugin, whose manifest launches the server
   through that same name — a pin that until then resolved to nothing.
-- **NOT DONE:** the MCP-registry submission; the MCPB bundle build and attach; the
+- **NOT DONE:** the MCP-registry submission; the MCPB bundle attach (built and smoke-tested locally 2026-10-01, never installed in a client); the
   plugin-marketplace listing. All three are manual, outward acts.
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
   users, and the exit gate's install testing of all **four** channels — including
@@ -386,8 +398,9 @@ and re-issuing the verdict there.
    cheapest insurance in the plan" and it was never bought — the name simply
    stayed free while adjacent ones were squatted. The risk was real and the
    mitigation was skipped; the outcome was luck, not judgement.
-6. *(new)* Open **owner decisions** — [corner-cases.md](corner-cases.md) §10,
-   consolidated 2026-09-02. Eighteen cases where the behaviour is measured, pinned
+6. *(new)* Owner decisions — [corner-cases.md](corner-cases.md) §10,
+   consolidated 2026-09-02. **RECOMMENDATIONS APPLIED 2026-09-30** — see the update
+   at the end of this item. Eighteen cases where the behaviour is measured, pinned
    by test and deliberately unchanged because the cost is a published surface, a
    documented CLI contract, or bytes on the wire — plus three settled in passing
    with no case row at all, one of which has since been acted on (CC-PROC-73). **NONE ARE BUGS**; each is the current tested behaviour, gathered so the
@@ -397,3 +410,18 @@ and re-issuing the verdict there.
    is classified `upstream` and retried three times instead of telling the operator
    to re-authenticate), **CC-PROC-25** (every write travels in the query string
    while the documented body sink is dead code).
+   **Update 2026-09-30:** the owner chose "apply every recommendation", and each
+   §10 row now records its outcome. CC-AUTH-23 had already been applied on
+   2026-09-19. **CC-AUTH-15 — RESOLVED:** Path B sends `appsecret_time` beside
+   `appsecret_proof`, now an HMAC over `access_token|appsecret_time` on the injected
+   clock (with CC-AUTH-78: only `access_token` is registered with the redactor, so
+   the per-second proof no longer grows the registry). **CC-PROC-25 — RESOLVED:**
+   writes carry their parameters, auth included, in a form body; GETs and DELETE
+   keep the query string. The rest of the recommended changes landed the same day
+   (CC-PROC-9, CC-PROC-19, CC-CFG-11, CC-CFG-26, CC-DATA-32, CC-PUB-23/25/35/36,
+   plus CC-DATA-119/120 and the wave-18/19 rows); the full list is in `CHANGELOG.md`
+   `[Unreleased]`. What stays open is by design, not by default: the "keep/leave"
+   recommendations (CC-AUTH-18, CC-CFG-14, CC-PROC-16/21/29, CC-PUB-25 (b)) were
+   applied by leaving the behaviour as it is, and **CC-AUTH-17** and **CC-PUB-61**
+   wait on a live probe — as does live validation of the CC-PROC-25 body move and
+   of `/stories`, both added to the §9 register.

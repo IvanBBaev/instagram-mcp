@@ -166,7 +166,10 @@ const businessMediaOutput = hashtagMediaOutput;
 // passthrough, and are published `additionalProperties: true`; their items come
 // straight off the wire, so additive fields really do arrive there.
 const businessOutput = z.object({
-  id: z.string().optional(),
+  // `id` is the one field every result carries (CC-DATA-32): a profile read
+  // with no usable id is not a result, so the handler fails it instead (see
+  // `businessId`), exactly as `instagram_get_account` pins `required: ['id']`.
+  id: z.string(),
   username: z.string().optional(),
   name: z.string().optional(),
   biography: z.string().optional(),
@@ -359,16 +362,29 @@ const UNREADABLE_MEDIA_EDGE_NOTE =
  * OPERATED account has been fenced all along in `tools/account`, which made a
  * stranger’s copy of it the more trusted of the two (CC-PROC-172).
  */
+/**
+ * The id `discover_business` publishes — REQUIRED by its output (CC-DATA-32).
+ * Unlike `get_media` there is no requested id to fall back on: the read is keyed
+ * by handle, and the account's id is exactly what it was meant to learn. So a
+ * profile-less answer (the api layer's `NO_PROFILE_NOTE`, CC-DATA-79 /
+ * CC-DATA-106) and a profile whose id is absent, empty or not a string both
+ * fail as `upstream` with a message saying which, where they used to publish a
+ * note-only or id-less result that read as "this account exists".
+ */
+function businessId(b: BusinessDiscovery): string {
+  if (typeof b.id === 'string' && b.id !== '') return b.id;
+  throw new InstagramError(
+    b.note ??
+      'Instagram returned the business_discovery profile without a usable id, so the result ' +
+        'cannot identify the account; retry later',
+    { kind: 'upstream' },
+  );
+}
+
 function businessToRecord(b: BusinessDiscovery, notes: string[]): Record<string, unknown> {
+  // `b.note` (a profile-less answer) and a non-string `b.id` never reach here:
+  // `businessId` has already failed both, so `id` is published as it came.
   const rec: Record<string, unknown> = { ...b };
-  // The api layer's own note joins the handler's rather than overwriting them.
-  // Equivalent-mutant note: dropping this `delete` is not observable today — a
-  // string `b.note` is pushed below, so the handler always overwrites `rec.note`
-  // with the joined list. It stays so the record never carries the api's note
-  // under the handler's key by accident of ordering.
-  delete rec.note;
-  if (typeof b.note === 'string') notes.push(b.note);
-  stringField(rec, 'id');
   fenceField(rec, 'username');
   fenceField(rec, 'name');
   fenceField(rec, 'biography');
@@ -607,7 +623,8 @@ const discoverBusinessTool = defineTool({
     'via GET /{ig-id}?fields=business_discovery.username(<handle>){followers_count,' +
     'media_count,media{...}}. The nested media edge is bounded by the server item ' +
     'cap (IG_MAX_ITEMS). Username, name, biography, website, and captions are ' +
-    'returned as fenced, untrusted text; a personal/private/unknown handle returns an error. ' +
+    'returned as fenced, untrusted text; a personal/private/unknown handle returns an error, as ' +
+    'does an answer carrying no profile or no account id. ' +
     'When mediaLimit exceeds the cap, mediaLimitApplied carries the number actually requested ' +
     'and note says so. mediaPaging.truncated=true means the media list may continue: pass ' +
     'mediaPaging.after back as mediaAfter to read the next page (no after: nothing can resume it, ' +
@@ -652,7 +669,8 @@ const discoverBusinessTool = defineTool({
       .optional()
       .describe(
         "Continuation cursor for the media list: a previous response's mediaPaging.after for the " +
-          'same username. Omit to read the most recent media.',
+          'same username. The cursor is opaque, so one taken from a different username is not ' +
+          'detected. Omit to read the most recent media.',
       ),
   },
   output: businessOutput.shape,
@@ -676,6 +694,7 @@ const discoverBusinessTool = defineTool({
       mediaLimit,
       mediaAfter: args.mediaAfter,
     });
+    const id = businessId(biz);
     const notes: string[] = [];
     // An EXPLICIT mediaLimit the cap lowered is surfaced: without it, a profile
     // with fewer media than asked for and a clamped request look identical, and
@@ -688,7 +707,7 @@ const discoverBusinessTool = defineTool({
           'media objects were requested instead',
       );
     }
-    const rec = businessToRecord(biz, notes);
+    const rec = businessToRecord({ ...biz, id }, notes);
     if (clamped) rec.mediaLimitApplied = mediaLimit;
     if (notes.length > 0) rec.note = notes.join('; ');
     return json(rec, { pretty: ctx.settings.prettyJson });

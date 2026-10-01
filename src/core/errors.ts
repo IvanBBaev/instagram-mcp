@@ -27,11 +27,12 @@
  * Layer-0 mapper, so it cannot depend on `createRedactor`, whose output varies
  * with the process-global secret registry — and an `InstagramError` is read in
  * places that never pass through a sink at all (a `catch` in a CLI, a test).
- * The cost of a second copy is drift, and drift is what actually happened: the
- * copy here recognized `EAA…` and `IGQ…` only, missing `IGAA…` tokens and the
- * 64-hex `appsecret_proof` entirely. The two vocabularies are now pinned to each
- * other behaviourally by a drift test in `test/core/errors.test.ts`.
+ * A second copy of the vocabulary drifted — the copy here once recognized
+ * `EAA…` and `IGQ…` only, missing `IGAA…` tokens and the 64-hex
+ * `appsecret_proof` entirely — so since 2026-09-30 both this mapper and the
+ * redactor call the one list in `core/token-shapes.ts` (CC-PROC-19).
  */
+import { maskTokenShapes } from './token-shapes.js';
 import { InstagramError, isInstagramError } from './types.js';
 import type { ErrorKind, GraphErrorBody } from './types.js';
 import { quoteUntrusted, quoteUntrustedString, visibleText } from './untrusted.js';
@@ -40,67 +41,15 @@ import { quoteUntrusted, quoteUntrustedString, visibleText } from './untrusted.j
 type GraphErrorFields = Partial<GraphErrorBody['error']>;
 
 /**
- * Meta secret shapes (docs/security.md §2). Deliberately the *same vocabulary* as
- * `TOKEN_SHAPE_PATTERNS` in `core/redact.ts`, kept as a separate copy because a
- * Layer-0 mapper cannot import a redactor (see the module header), and pinned to
- * it by the drift test in `test/core/errors.test.ts`:
- *  - Facebook Graph tokens start `EAA` followed by a long body.
- *  - Instagram tokens start `IG` — `IGQ…` and `IGAA…` both, which is why the
- *    prefix is `IG` and not the narrower `IGQ` this list carried until
- *    2026-08-30 — plus an alphanumeric family letter: `IG_…` is one of this
- *    server's own environment-variable names, never a token, and an error that
- *    says "set IG_PROFILE_<NAME>_ACCESS_TOKEN" must keep saying it (CC-PROC-72).
- *    A check on the whole run extends that exemption from the front of such a
- *    name to the whole of it. A profile slug can spell `IG` inside itself — `DIGITALSTORE`
- *    does, in `DIGITAL` — and the family-letter rule never looked past the first
- *    two characters, so the run starting at that second `IG` matched: this
- *    mapper answered "set … and retry" with the key truncated at the slug and
- *    the marker spliced onto the stump, naming no key at all. See the head of
- *    `TOKEN_SHAPE_PATTERNS` in `core/redact.ts` for why the exemption is
- *    unbounded and what it costs the backstop (CC-PROC-186), why the `IG_`
- *    it keys on must itself start the run: unanchored, it also exempted a token
- *    glued onto `CONFIG_`, `SIG_` or any other identifier that merely contains
- *    `IG_`, and this mapper handed that token to the model whole — and why it is
- *    a split into runs rather than the lookbehind it replaced, which was
- *    quadratic on a long `IG_`-rooted run and runs here over the whole wire
- *    text, before the length cap (CC-DATA-121).
- *  - `appsecret_proof` is a 64-char hex HMAC-SHA256 with no prefix to key on.
- *    Meta echoes it back in `error.message` on a malformed-parameter failure, so
- *    a prefix-only dictionary cannot see the one secret it is most likely to meet.
- *
- * The length floors keep ordinary prose from matching (`IGNORE` is far too
- * short); where they do over-reach, over-redaction is the preferred failure.
- *
- * Order matters and mirrors `core/redact.ts`: each pattern runs over the previous
- * one's output, and splicing the marker in introduces the word boundaries the
- * `\b`-bounded proof pattern relies on. Both directions are pinned by the drift
- * corpus: a proof abutting an `IG` token is only masked because the IG pattern
- * runs first and splices a boundary in front of it, and an `EAA` token whose body
- * happens to start `IG` is only masked whole because `EAA` runs first.
- *
- * Equivalent-mutant note: adding the `m` flag to the proof pattern is
- * unobservable — it is unanchored, so `m` only changes what `^` and `$` would
- * mean and no input can separate the two. Every other flag here is load-bearing
- * and pinned: `g` on each pattern (a message can carry the same shape twice), and
- * `i` on the proof (hex renders either case) — save the `g` on the IG shape applied
- * inside one run, which is unobservable: a match there runs greedily to the end
- * of the run it starts in, so a run can hold at most one.
+ * Meta secret shapes (docs/security.md §2), masked with this mapper's own
+ * lowercase marker. The vocabulary itself — which shapes, in which order, and why
+ * the `IG_` exemption is spelled the way it is — lives in `core/token-shapes.ts`,
+ * the one list this mapper and `core/redact.ts` share (CC-PROC-19). Until
+ * 2026-09-30 this file held a second copy, pinned to the redactor's only by a
+ * corpus-bound drift test.
  */
-const TOKEN_SHAPES: readonly ((text: string) => string)[] = [
-  (text) => text.replace(/EAA[A-Za-z0-9_-]{20,}/g, '[redacted]'),
-  (text) =>
-    text.replace(/[A-Za-z0-9_-]+/g, (run) =>
-      run.startsWith('IG_') ? run : run.replace(/IG[A-Za-z0-9][A-Za-z0-9_-]{19,}/g, '[redacted]'),
-    ),
-  (text) => text.replace(/\b[a-f0-9]{64}\b/gi, '[redacted]'),
-];
-
 function stripTokens(text: string): string {
-  let out = text;
-  for (const mask of TOKEN_SHAPES) {
-    out = mask(out);
-  }
-  return out;
+  return maskTokenShapes(text, '[redacted]');
 }
 
 /**

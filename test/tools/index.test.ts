@@ -54,8 +54,9 @@ const V1_SURFACE: readonly string[] = [
   'instagram_get_account',
   'instagram_list_linked_accounts',
   'instagram_token_status',
-  // media (2)
+  // media (3)
   'instagram_list_media',
+  'instagram_list_stories',
   'instagram_get_media',
   // insights (4)
   'instagram_get_account_insights',
@@ -70,7 +71,7 @@ const V1_SURFACE: readonly string[] = [
   'instagram_post_image',
   'instagram_post_reel',
   'instagram_post_story',
-  // comments (8, plus the media-tagged comment switch below)
+  // comments (9, the comment switch included since CC-PROC-9)
   'instagram_list_comments',
   'instagram_get_comment',
   'instagram_list_tagged_media',
@@ -88,18 +89,17 @@ const V1_SURFACE: readonly string[] = [
 
 /**
  * The package tag carried by each entry of {@link V1_SURFACE}, in the same
- * order. Written out separately because tag and source file are not the same
- * thing: `instagram_set_comments_enabled` is defined in `tools/comments.ts` but
- * tagged `media`, so the tag sequence is not a run-length encoding of the
- * spreads and the registry regroups that one tool under a different package.
+ * order. Written out separately because tag and source file need not be the
+ * same thing: until CC-PROC-9 `instagram_set_comments_enabled` was defined in
+ * `tools/comments.ts` but tagged `media`. Today the tag sequence is a run-length
+ * encoding of the spreads, and a tool that breaks that has to be an edit here.
  */
 const V1_PACKAGE_TAGS: readonly string[] = [
   ...Array<string>(3).fill('account'),
-  ...Array<string>(2).fill('media'),
+  ...Array<string>(3).fill('media'),
   ...Array<string>(4).fill('insights'),
   ...Array<string>(7).fill('publishing'),
-  ...Array<string>(8).fill('comments'),
-  'media',
+  ...Array<string>(9).fill('comments'),
   ...Array<string>(3).fill('discovery'),
 ];
 
@@ -119,7 +119,7 @@ test('allTools is exactly the v1 surface, in registration order', () => {
     [...V1_SURFACE],
     'the exposed tool surface changed — update V1_SURFACE only if the change is intended',
   );
-  assert.equal(allTools.length, 28, 'the v1 surface is 28 tools');
+  assert.equal(allTools.length, 29, 'the v1 surface is 29 tools');
 });
 
 test('allTools carries the pinned package tag for every position', () => {
@@ -259,7 +259,7 @@ test('the published surface is frozen: allTools cannot be grown, shrunk or reord
 });
 
 test('every published spec is frozen, with its annotations and its input/output shapes', () => {
-  assert.equal(allTools.length, 28, 'guard: an empty surface would pass this test vacuously');
+  assert.equal(allTools.length, 29, 'guard: an empty surface would pass this test vacuously');
   for (const spec of allTools) {
     assert.throws(
       () => {

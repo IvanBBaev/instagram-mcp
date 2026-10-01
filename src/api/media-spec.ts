@@ -6,8 +6,9 @@
  * enforces only what is structurally checkable from the request itself:
  *
  *   - captions: code-point length ≤ 2200, ≤ 30 hashtags, ≤ 20 @mentions;
- *   - media URLs: well-formed `https://` (a clearly non-JPEG extension warns,
- *     but is never treated as proof — format stays unverifiable pre-fetch);
+ *   - media URLs: well-formed `https://` (a clearly non-JPEG or video extension
+ *     on a still-image field warns, but is never treated as proof — format
+ *     stays unverifiable pre-fetch);
  *   - carousels: 2–10 children;
  *   - the container `media_type` enum (feed images send NO `media_type`).
  *
@@ -52,10 +53,46 @@ export const userTagSchema = z.object({
 });
 export type UserTag = z.infer<typeof userTagSchema>;
 
-/** A well-formed `https://` URL. Structural only — reachability is unverifiable. */
-export const httpsUrlSchema = z
-  .string()
-  .refine((v) => isHttpsUrl(v), { message: 'must be a well-formed https:// URL' });
+/**
+ * The prefix every URL {@link isHttpsUrl} accepts begins with, published as the
+ * input schema's `pattern` so a client is told the rule before it guesses a value
+ * (CC-PUB-36). A `.refine()` renders to nothing in JSON Schema; a `.regex()` does.
+ *
+ * It is exactly the NECESSARY half of the verdict and nothing more, so it can
+ * never refuse a URL the server accepts: the parser drops leading spaces (the
+ * byte-for-byte forwarding contract keeps them — CC-PUB-57/62) and reads the
+ * scheme case-insensitively (`HTTPS://` is accepted), and {@link isHttpsUrl}
+ * requires the raw text to continue with exactly `//`. Leading C0 controls, tabs
+ * and newlines are refused by the verdict anyway, so a space is the only edge
+ * character the pattern has to admit. It is deliberately WEAKER than the verdict
+ * — `https://` alone matches and does not parse — because its job is to steer,
+ * not to enforce; the refine below stays the real gate.
+ */
+export const HTTPS_URL_PATTERN = /^ *[Hh][Tt][Tt][Pp][Ss]:\/\//;
+
+/** The one refusal both halves of {@link httpsUrl} use (CC-PUB-36). */
+const HTTPS_URL_MESSAGE = 'must be a well-formed https:// URL';
+
+/**
+ * A well-formed `https://` URL. Structural only — reachability is unverifiable.
+ *
+ * A FACTORY, not a shared instance (CC-PUB-35): `zod-to-json-schema` renders the
+ * second and later fields built from one instance as `{"$ref": …, "description": …}`,
+ * and under the declared draft-07 dialect a strict client ignores every keyword
+ * beside `$ref` — so each such field published its first twin's description, not
+ * its own. Every URL field calls this once, so no twin exists to point at.
+ *
+ * The pattern and the verdict share one message, and the refine runs only when
+ * the pattern passed, so a refused value carries exactly ONE issue whichever half
+ * refused it (zod keeps running refinements after a failed string check, which
+ * would otherwise repeat the same sentence twice).
+ */
+export function httpsUrl(): z.ZodEffects<z.ZodString, string, string> {
+  return z
+    .string()
+    .regex(HTTPS_URL_PATTERN, { message: HTTPS_URL_MESSAGE })
+    .refine((v) => !HTTPS_URL_PATTERN.test(v) || isHttpsUrl(v), { message: HTTPS_URL_MESSAGE });
+}
 
 // --- Caption analysis -------------------------------------------------------
 
@@ -199,13 +236,10 @@ export function assertHttpsUrl(value: string, field: string): void {
 /**
  * File extensions that clearly are NOT JPEG images.
  *
- * Still-image formats only. The warning below says "suggests a non-JPEG image",
- * so an extension that is not an image at all (`mp4`/`mov` handed to an image
- * field) is deliberately absent: it would be described wrongly, and the same
- * extension is exactly right on `instagram_post_reel`. `avif` and `jxl` are the
- * modern entries that matter — both are ordinary output of an image CDN today,
- * and `jxl` in particular reads as a JPEG in its own name while being a format
- * Instagram does not take.
+ * Still-image formats only; video extensions have their own set and their own
+ * sentence below (CC-PUB-23). `avif` and `jxl` are the modern entries that matter
+ * — both are ordinary output of an image CDN today, and `jxl` in particular reads
+ * as a JPEG in its own name while being a format Instagram does not take.
  *
  * The JPEG spellings must never appear here: `jpg`, `jpeg`, `jfif`, `jpe`, and
  * `pjpeg` are all JPEG, and warning on one would send the operator off to
@@ -228,11 +262,42 @@ const CLEARLY_NOT_JPEG = new Set([
 ]);
 
 /**
- * A non-fatal warning when a URL's extension clearly denotes a non-JPEG image
- * (Instagram accepts JPEG only for images — feed, story, and reel cover, which
- * is why the sentence names all three rather than "feed"). Returns `undefined`
- * when the extension is JPEG, absent, or ambiguous — this is a hint only; format
- * is truly unverifiable until Instagram fetches the URL.
+ * File extensions that clearly denote a VIDEO (CC-PUB-23). Handed to an image
+ * field — `imageUrl`, a carousel url, a story image, a reel `coverUrl` — the
+ * problem is not the format but the field, so these draw their own sentence
+ * instead of the "non-JPEG image" one, which would send the operator looking for
+ * an image converter. No entry may also be an image format: the two sets are
+ * disjoint, and that is pinned.
+ */
+const CLEARLY_VIDEO = new Set([
+  'mp4',
+  'm4v',
+  'mov',
+  'qt',
+  'avi',
+  'webm',
+  'mkv',
+  'wmv',
+  'flv',
+  'mpg',
+  'mpeg',
+  '3gp',
+  '3g2',
+]);
+
+/** The clause both hints end on: the hint is never proof (CC-PUB-25 (c)). */
+const UNVERIFIABLE =
+  'Instagram accepts JPEG only for images (feed, story, and reel cover). Format, byte size, and ' +
+  'dimensions cannot be verified before Instagram fetches the URL.';
+
+/**
+ * A non-fatal warning when the URL handed to a still-image field has an
+ * extension that clearly denotes a non-JPEG image, or a video (Instagram accepts
+ * JPEG only for images — feed, story, and reel cover, which is why the sentence
+ * names all three rather than "feed"). Returns `undefined` when the extension is
+ * JPEG, absent, or ambiguous — this is a hint only; format is truly unverifiable
+ * until Instagram fetches the URL. Callers hand it still-image fields only: a
+ * video extension is exactly right on a video field.
  */
 export function imageUrlFormatWarning(url: string): string | undefined {
   let pathname: string;
@@ -279,10 +344,12 @@ export function imageUrlFormatWarning(url: string): string | undefined {
   if (dot === -1) return undefined;
   const ext = segment.slice(dot + 1).toLowerCase();
   if (CLEARLY_NOT_JPEG.has(ext)) {
+    return `URL extension ".${ext}" suggests a non-JPEG image; ${UNVERIFIABLE}`;
+  }
+  if (CLEARLY_VIDEO.has(ext)) {
     return (
-      `URL extension ".${ext}" suggests a non-JPEG image; Instagram accepts JPEG only for images ` +
-      '(feed, story, and reel cover). Format, byte size, and dimensions cannot be verified before ' +
-      'Instagram fetches the URL.'
+      `URL extension ".${ext}" suggests a video, but this field takes a still image; ` +
+      UNVERIFIABLE
     );
   }
   return undefined;

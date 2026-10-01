@@ -672,6 +672,36 @@ test('token_status still renders a representable data-access expiry with no warn
   assert.equal(body.warning, undefined);
 });
 
+test('token_status warns when the data-access window closes within 7 days', async () => {
+  // CC-AUTH-12 asks for a warning as the window nears its end, not only once it
+  // has closed: the token itself is far from expiry, so the warning is the
+  // data-access sentence alone, and the date is still published.
+  const nowMs = 10 * DAY;
+  const dataAccessSec = nowMs / 1000 + 3 * 86_400;
+  const { req } = stubReq(() => ({
+    data: {
+      is_valid: true,
+      expires_at: (nowMs + 80 * DAY) / 1000,
+      data_access_expires_at: dataAccessSec,
+    },
+  }));
+  const ctx = makeCtx({
+    req,
+    clock: fakeClock(nowMs),
+    profile: { authPath: 'fb-login', accessToken: 'EAAsecret', appId: '55500' },
+  });
+
+  const body = sc(await tool('instagram_token_status').handler({}, ctx));
+  const iso = new Date(dataAccessSec * 1000).toISOString();
+  assert.equal(body.dataAccessExpiresAt, iso);
+  assert.equal(
+    body.warning,
+    `Data access expires at ${iso} (~3 day(s) left): after that, reads of Instagram data fail ` +
+      'with a permission error even while the token is valid; run the `login` CLI to renew the ' +
+      'data-access window before then.',
+  );
+});
+
 test('token_status treats a null data-access expiry as unknown, not as absent or as 1970', async () => {
   // `req` casts the payload, so `null` lands in a slot typed `number?`. The
   // `!== undefined` test is what keeps it on the warning path: relaxed to

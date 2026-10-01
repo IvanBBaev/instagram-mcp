@@ -29,7 +29,7 @@
  * ## How "actually performs a write" is derived
  *
  * Not from a list of tool names — a list rots and would only restate the
- * annotation it is supposed to check. Each of the 28 specs is **executed**
+ * annotation it is supposed to check. Each of the 29 specs is **executed**
  * against an injected `WriteGateContext` whose seams are instrumented, and the
  * verdict is read off what the handler did with them:
  *
@@ -273,6 +273,11 @@ async function runProbe(spec: ToolSpec, config: ProbeConfig): Promise<Observatio
     if (options.path.endsWith('/content_publishing_limit')) {
       return { data: [{ quota_usage: 0 }] } as T;
     }
+    // business_discovery refuses an answer without a profile id (CC-DATA-32),
+    // so it too is answered with the minimum it accepts.
+    if (String(options.params?.fields ?? '').startsWith('business_discovery')) {
+      return { business_discovery: { id: '17841400000000001' } } as T;
+    }
     return {} as T;
   };
 
@@ -387,7 +392,7 @@ async function classifyAll(): Promise<Classification[]> {
   return out;
 }
 
-/** Probes are executed once and shared: 28 tools x 4 configurations. */
+/** Probes are executed once and shared: 29 tools x 4 configurations. */
 let classification: Promise<Classification[]> | undefined;
 function classified(): Promise<Classification[]> {
   classification ??= classifyAll();
@@ -398,7 +403,7 @@ function classified(): Promise<Classification[]> {
 
 test('every tool classifies the same way under every write-mode configuration', async () => {
   const results = await classified();
-  assert.equal(results.length, 28, 'the probe must cover the whole v1 surface');
+  assert.equal(results.length, 29, 'the probe must cover the whole v1 surface');
 
   for (const { spec, perProbe } of results) {
     const disagreement = perProbe.map((p) => `${p.config.label}: ${p.verdict}`);
@@ -456,7 +461,7 @@ test('no tool that declares readOnlyHint: true goes through the write gate', asy
   assert.deepEqual(gated, [], 'a tool advertised as read-only reached the write gate');
 });
 
-test('the two axes agree for all 28 tools, in both directions', async () => {
+test('the two axes agree for all 29 tools, in both directions', async () => {
   // The summary form: one table, so a failure shows which tool moved and which
   // way, rather than only that some set was non-empty.
   const table = (await classified()).map((c) => ({
@@ -479,7 +484,7 @@ test('every tool declares readOnlyHint explicitly, write tools included', async 
   // added in. Requiring the literal makes the omission a test failure instead of
   // a silent default, so annotating a new write tool is a step you cannot skip.
   //
-  // Stated over all 28 rather than only the write ones: it costs nothing (every
+  // Stated over all 29 rather than only the write ones: it costs nothing (every
   // read tool already declares `true`) and it also catches a read tool whose
   // hint is present but `undefined`. Writes are where it bites in practice.
   const undeclared = (await classified())
@@ -613,9 +618,9 @@ test('the reader profile registers only tools derived as read-only', async () =>
  * defined in is where a maintainer looks for it. Where the two disagree, every
  * `IG_TOOL_PACKAGES` / `IG_PACKAGES_DENY` / `IG_PACKAGES_READONLY` value an
  * operator would reason about from the source tree points at the wrong package.
- * The mismatch below is deliberate (see the comment at the tool's definition),
- * so this section pins it rather than corrects it: moving the tool would change
- * the published surface and the profile counts, which is the owner's call.
+ * The one former mismatch — `instagram_set_comments_enabled`, defined with the
+ * comment tools but tagged `media` — was moved to `comments` (CC-PROC-9), so the
+ * tag now equals the module for every tool and this section pins that.
  */
 const MODULES: readonly (readonly [string, readonly ToolSpec[]])[] = [
   ['account', accountTools],
@@ -641,7 +646,7 @@ test('every tool is defined in exactly one package module', () => {
   }
 });
 
-test('the package tag differs from the defining module for exactly one tool', () => {
+test('the package tag equals the defining module for every tool (CC-PROC-9)', () => {
   const mismatches = allTools
     .filter((spec) => definingModule(spec)[0] !== spec.package)
     .map((spec) => ({
@@ -650,61 +655,55 @@ test('the package tag differs from the defining module for exactly one tool', ()
       taggedAs: spec.package,
     }));
 
-  // Written out, not derived: this is the whole point of the pin. A second
-  // cross-package tool — or this one moving — has to be an edit here.
-  assert.deepEqual(mismatches, [
-    { name: 'instagram_set_comments_enabled', definedIn: 'comments', taggedAs: 'media' },
-  ]);
+  // A cross-package tool has to be a deliberate edit here, never an accident.
+  assert.deepEqual(mismatches, []);
 });
 
-test('IG_PACKAGES_DENY=comments does not reach the comment switch, IG_PACKAGES_DENY=media does', () => {
+test('IG_PACKAGES_DENY=comments removes the comment switch, IG_PACKAGES_DENY=media does not', () => {
   // The consequence of the tag, made executable. An operator who wants "no
-  // comment mutations" denies `comments` and still ships a tool that turns
-  // commenting off on any media object.
+  // comment mutations" denies `comments`, and that now includes the tool that
+  // turns commenting off on a media object.
   const denyComments = registeredUnder({
     IG_TOOL_PACKAGES: 'all',
     IG_PACKAGES_DENY: 'comments',
   });
-  assert.ok(
-    denyComments.includes('instagram_set_comments_enabled'),
-    'IG_PACKAGES_DENY=comments is expected to miss the media-tagged comment switch',
-  );
+  assert.equal(denyComments.includes('instagram_set_comments_enabled'), false);
   assert.equal(denyComments.includes('instagram_delete_comment'), false);
+  assert.ok(denyComments.includes('instagram_list_media'));
 
   const denyMedia = registeredUnder({ IG_TOOL_PACKAGES: 'all', IG_PACKAGES_DENY: 'media' });
-  assert.equal(denyMedia.includes('instagram_set_comments_enabled'), false);
-  // ...and it takes the two genuine media read tools with it.
+  assert.ok(denyMedia.includes('instagram_set_comments_enabled'));
+  // ...while denying media takes exactly the media read tools.
   assert.equal(denyMedia.includes('instagram_list_media'), false);
+  assert.equal(denyMedia.includes('instagram_list_stories'), false);
   assert.equal(denyMedia.includes('instagram_get_media'), false);
   assert.ok(denyMedia.includes('instagram_delete_comment'));
 });
 
-test('IG_PACKAGES_READONLY=comments leaves the comment switch writable', () => {
+test('IG_PACKAGES_READONLY=comments drops the comment switch with the other comment writes', () => {
   const readonlyComments = registeredUnder({
     IG_TOOL_PACKAGES: 'all',
     IG_PACKAGES_READONLY: 'comments',
   });
-  assert.ok(
-    readonlyComments.includes('instagram_set_comments_enabled'),
-    'forcing the comments package read-only is expected to miss the media-tagged switch',
-  );
+  assert.equal(readonlyComments.includes('instagram_set_comments_enabled'), false);
   assert.equal(readonlyComments.includes('instagram_delete_comment'), false);
+  assert.ok(readonlyComments.includes('instagram_list_comments'));
 
   const readonlyMedia = registeredUnder({
     IG_TOOL_PACKAGES: 'all',
     IG_PACKAGES_READONLY: 'media',
   });
-  assert.equal(readonlyMedia.includes('instagram_set_comments_enabled'), false);
+  assert.ok(readonlyMedia.includes('instagram_set_comments_enabled'));
 });
 
-test('an explicit IG_TOOL_PACKAGES=comments list omits the comment switch', () => {
+test('an explicit IG_TOOL_PACKAGES=comments list includes the comment switch', () => {
   const commentsOnly = registeredUnder({ IG_TOOL_PACKAGES: 'comments' });
-  assert.equal(commentsOnly.includes('instagram_set_comments_enabled'), false);
+  assert.ok(commentsOnly.includes('instagram_set_comments_enabled'));
 
   const mediaOnly = registeredUnder({ IG_TOOL_PACKAGES: 'media' });
   assert.deepEqual(mediaOnly, [
     'instagram_list_media',
+    'instagram_list_stories',
     'instagram_get_media',
-    'instagram_set_comments_enabled',
   ]);
 });

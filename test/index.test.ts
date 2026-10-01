@@ -22,6 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -1515,6 +1516,22 @@ test('doctor judges token expiry against the injected clock, not against an unse
       '  FAIL  Token expiry: expired — Token expired at 2025-07-31T22:13:20.000Z; ' +
         'run the `login` CLI to obtain a new one.',
     );
+    // The same injected instant signs Path B's time-bound proof (CC-AUTH-15):
+    // every call carries `appsecret_time` at that second and a proof over
+    // `<token>|<time>`, so the entry's clock reaches the signing path too.
+    const requests = await recordedRequests(sandbox);
+    assert.ok(requests.length > 0, 'doctor made no Graph call');
+    for (const req of requests) {
+      const url = new URL(req.slice(req.indexOf(' ') + 1));
+      assert.equal(url.searchParams.get('appsecret_time'), String(Math.floor(nowMs / 1000)), req);
+      assert.equal(
+        url.searchParams.get('appsecret_proof'),
+        createHmac('sha256', APP_SECRET)
+          .update(`${TOKEN}|${Math.floor(nowMs / 1000)}`)
+          .digest('hex'),
+        req,
+      );
+    }
     // The report is emitted as one write TERMINATED by a newline. Without it the
     // operator's next shell prompt lands mid-line on the summary, and a
     // line-oriented reader (a runbook `grep`, a CI log collector) can drop the

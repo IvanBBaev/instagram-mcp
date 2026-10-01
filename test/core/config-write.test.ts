@@ -1797,27 +1797,61 @@ test('a blank configDir override falls back to the platform config home', async 
   }
 });
 
-test('a relative configDir override still produces an absolute credential path', async () => {
+test('a relative configDir resolves against the config home, never the cwd (CC-CFG-11)', async () => {
   // `configDir` is the caller's own choice, so a relative one is obeyed rather
-  // than ignored — but it is resolved before use. The returned path is what the
-  // CLI prints for the operator to inspect afterwards, and `./instagram-mcp-ai/
-  // .env` names a different file the moment they have changed directory. The
-  // relative form here points AT the temp home, so the bytes land in the same
-  // place either way and only the reported path is under test.
+  // than ignored — but against the platform config home the `env` selects. It
+  // used to be resolved against the cwd, which deposited a 0600 store wherever
+  // the caller happened to run (the CC-CFG-24 leak through the other door). It
+  // runs in a throwaway cwd so the old behaviour would leave evidence there, and
+  // the reported path is absolute because a CLI prints it for inspection.
   const home = await makeTempConfigHome('igmcp-reldir-');
-  const relative = path.relative(process.cwd(), home);
-  assert.equal(path.isAbsolute(relative), false, 'the fixture must actually be relative');
+  const cwd = await makeTempConfigHome('igmcp-reldir-cwd-');
+  const savedCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    const res = await writeCredentials(
+      'default',
+      { accessToken: LONG_TOKEN, authPath: 'ig-login' },
+      { configDir: ' profiles/work ', env: configHomeEnv(home) },
+    );
+
+    assert.equal(res.path, envFileIn(path.join(home, 'profiles', 'work')));
+    const { profiles } = loadProfiles(await parseEnvFile(res.path));
+    assert.equal(profiles[0]?.accessToken, LONG_TOKEN);
+    assert.deepEqual(await readdir(cwd), [], 'nothing was written relative to the cwd');
+
+    // `..` climbs from the config home, not from the cwd.
+    const up = await writeCredentials(
+      'default',
+      { accessToken: LONG_TOKEN, authPath: 'ig-login' },
+      { configDir: path.join('..', path.basename(home), 'up'), env: configHomeEnv(home) },
+    );
+    assert.equal(up.path, envFileIn(path.join(home, 'up')));
+    assert.deepEqual(await readdir(cwd), [], 'nothing was written relative to the cwd');
+  } finally {
+    process.chdir(savedCwd);
+  }
+});
+
+test('an absolute configDir stands on its own, even beside a refused config-home variable (CC-CFG-11)', async () => {
+  // The config home is consulted only to anchor a RELATIVE configDir. An
+  // absolute one never reads it, so a config-home variable that would be refused
+  // (a shell-only spelling, CC-CFG-61) does not block a write the caller pinned.
+  const home = await makeTempConfigHome('igmcp-absdir-');
+  const shellOnly: NodeJS.ProcessEnv =
+    process.platform === 'win32' ? { APPDATA: '%USERPROFILE%\\x' } : { XDG_CONFIG_HOME: '$HOME/x' };
+  assert.throws(
+    () => resolveConfigHome(shellOnly),
+    isInstagramError,
+    'premise: the variable is refused',
+  );
 
   const res = await writeCredentials(
     'default',
     { accessToken: LONG_TOKEN, authPath: 'ig-login' },
-    { configDir: relative },
+    { configDir: path.join(home, 'a', '..', 'b'), env: shellOnly },
   );
-
-  assert.equal(path.isAbsolute(res.path), true, 'a relative credential path is never acceptable');
-  assert.equal(res.path, envFileIn(home));
-  const { profiles } = loadProfiles(await parseEnvFile(res.path));
-  assert.equal(profiles[0]?.accessToken, LONG_TOKEN);
+  assert.equal(res.path, envFileIn(path.join(home, 'b')), 'normalized, and written there');
 });
 
 test('resolveConfigHome reads APPDATA on win32 and XDG_CONFIG_HOME elsewhere', () => {

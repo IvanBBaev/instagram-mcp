@@ -94,6 +94,11 @@ const CASES: LogCase[] = [
     expect: { limit: 25, fetchAll: true, hasCursor: true },
   },
   {
+    name: 'instagram_list_stories',
+    args: { limit: 5, after: 'CURSOR' },
+    expect: { limit: 5, fetchAll: false, hasCursor: true },
+  },
+  {
     name: 'instagram_get_media',
     args: { mediaId: 'M1' },
     expect: { mediaId: 'M1' },

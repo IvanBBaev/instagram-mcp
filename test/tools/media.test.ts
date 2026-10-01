@@ -112,10 +112,11 @@ function assertMentions(body: string, fragment: string): void {
   assert.ok(body.includes(fragment), `missing from the model-facing text: ${fragment}`);
 }
 
-test('mediaTools exposes exactly the two read-only specs from docs/tools.md', () => {
+test('mediaTools exposes exactly the three read-only specs from docs/tools.md', () => {
   assert.deepEqual(mediaTools.map((t) => t.name).sort(), [
     'instagram_get_media',
     'instagram_list_media',
+    'instagram_list_stories',
   ]);
   for (const t of mediaTools) {
     assert.equal(t.package, 'media');
@@ -898,7 +899,8 @@ test('real McpServer: the published contract of instagram_list_media is pinned e
         description:
           "List the operated account's own media (feed posts, reels, albums), newest first, " +
           'cursor-paginated. Stories are not included: Instagram serves live stories on a separate edge ' +
-          'this tool does not read, so an empty or story-free page says nothing about active stories. ' +
+          'this tool does not read, so an empty or story-free page says nothing about active stories; ' +
+          'read those with instagram_list_stories. ' +
           'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
           "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more media remained. " +
           'Captions are returned as fenced, untrusted text. Some fields (like_count, media_url) may be ' +
@@ -1003,7 +1005,8 @@ test('real McpServer: the published contract of instagram_get_media is pinned ex
           'The caption is returned as fenced, untrusted text. Fields Instagram does not disclose are omitted ' +
           'rather than nulled; a deleted object or an expired story (stories last 24h) returns an error. ' +
           'A carousel child Instagram returns without an id is left out, and omittedWithoutId plus note ' +
-          'say how many were.',
+          "say how many were. If an album's items cannot be read, the detail is still returned with " +
+          'children omitted and a note naming the error.',
         annotations: { readOnlyHint: true, openWorldHint: true },
         inputSchema: {
           type: 'object',
@@ -1132,11 +1135,11 @@ test('real McpServer: get_media returns every documented field through output va
   }
 });
 
-test('real McpServer: both media tools register on the fb-login auth path too', async () => {
+test('real McpServer: every media tool registers on the fb-login auth path too', async () => {
   // D1 capability filtering drops a tool whose `spec.paths` does not include the
   // configured profile's auth path — at registration time, so the tool simply is
   // not there. Reading your own media works on both the Instagram Login token
-  // and the Facebook Login (business) token, which is why neither spec declares
+  // and the Facebook Login (business) token, which is why no media spec declares
   // `paths` at all. Pinning `undefined` matters because the failure mode is
   // invisible from the ig-login side: a spec that quietly narrowed itself to
   // `['ig-login']` still lists fine in every other test in this file, and only
@@ -1151,8 +1154,8 @@ test('real McpServer: both media tools register on the fb-login auth path too', 
     const { tools } = await live.client.listTools();
     assert.deepEqual(
       tools.map((t) => t.name).sort(),
-      ['instagram_get_media', 'instagram_list_media'],
-      'an fb-login-only deployment still gets both readers',
+      ['instagram_get_media', 'instagram_list_media', 'instagram_list_stories'],
+      'an fb-login-only deployment still gets every reader',
     );
 
     const res = await live.client.callTool({ name: 'instagram_list_media', arguments: {} });
@@ -1355,7 +1358,7 @@ test('mediaTools advertises the listing before the fetch', () => {
   // cannot use yet — it has no media id until it has listed something.
   assert.deepEqual(
     mediaTools.map((t) => t.name),
-    ['instagram_list_media', 'instagram_get_media'],
+    ['instagram_list_media', 'instagram_list_stories', 'instagram_get_media'],
   );
 });
 
@@ -1386,7 +1389,8 @@ test('list_media describes whose media it lists, that stories are not among them
   assertMentions(
     d,
     'Stories are not included: Instagram serves live stories on a separate edge this tool does ' +
-      'not read, so an empty or story-free page says nothing about active stories.',
+      'not read, so an empty or story-free page says nothing about active stories; read those with ' +
+      'instagram_list_stories.',
   );
   assert.doesNotMatch(d, /reels, stories|counts on stories/);
   // One page unless asked. A model that reads the default as a full walk presents
@@ -1592,4 +1596,290 @@ test('get_media keeps the id Meta sends over the requested one (CC-DATA-77)', as
     makeCtx(fakeReq(() => ({ id: 'M-GRAPH', media_type: 'IMAGE' })).req),
   );
   assert.equal(res.structuredContent?.id, 'M-GRAPH');
+});
+
+// --- instagram_list_stories (CC-DATA-119) ------------------------------------
+
+test('instagram_list_stories reads /{ig-user-id}/stories, caps at maxItems and fences captions', async () => {
+  // The stories edge is paged exactly like the media edge, so the same whole-body
+  // pin applies: an item record carries the fenced caption and nothing added.
+  const responder = (opts: IgRequestOptions) => {
+    const after = opts.params?.after;
+    if (after === undefined)
+      return {
+        data: [{ id: 'S1', caption: 'story text', media_type: 'IMAGE' }],
+        paging: { cursors: { after: 'SA1' }, next: 'https://graph.facebook.com/next' },
+      };
+    if (after === 'SA1')
+      return {
+        data: [{ id: 'S2' }],
+        paging: { cursors: { after: 'SA2' }, next: 'https://graph.facebook.com/next' },
+      };
+    throw new Error('unexpected');
+  };
+  const { req, calls } = fakeReq(responder);
+  const ctx = makeCtx(req, { settings: { maxItems: 1 } });
+
+  const res = await tool('instagram_list_stories').handler({ fetchAll: true }, ctx);
+
+  assert.deepEqual(res.structuredContent, {
+    items: [{ id: 'S1', caption: fence('story text'), media_type: 'IMAGE' }],
+    paging: { truncated: true, after: 'SA1' },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.path, '/999/stories');
+});
+
+test('instagram_list_stories follows cursors only when fetchAll is set', async () => {
+  const responder = (opts: IgRequestOptions) =>
+    opts.params?.after === undefined
+      ? {
+          data: [{ id: 'S1' }],
+          paging: { cursors: { after: 'SA1' }, next: 'https://graph.facebook.com/next' },
+        }
+      : { data: [{ id: 'S2' }], paging: {} };
+
+  const single = fakeReq(responder);
+  const one = await tool('instagram_list_stories').handler({}, makeCtx(single.req));
+  assert.equal(single.calls.length, 1, 'no fetchAll means exactly one Graph request');
+  assert.deepEqual(one.structuredContent, {
+    items: [{ id: 'S1' }],
+    paging: { truncated: false, after: 'SA1' },
+  });
+
+  const walk = fakeReq(responder);
+  const all = await tool('instagram_list_stories').handler({ fetchAll: true }, makeCtx(walk.req));
+  assert.equal(walk.calls.length, 2, 'fetchAll walks to the end of the edge');
+  assert.deepEqual(all.structuredContent, {
+    items: [{ id: 'S1' }, { id: 'S2' }],
+    paging: { truncated: false },
+  });
+});
+
+test('instagram_list_stories forwards limit and after, and falls back to /me/stories', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
+
+  await tool('instagram_list_stories').handler({ limit: 7, after: 'CUR-S' }, makeCtx(req));
+  await tool('instagram_list_stories').handler(
+    {},
+    makeCtx(req, { profile: { accountId: undefined } }),
+  );
+
+  assert.equal(calls[0]?.path, '/999/stories');
+  assert.equal(calls[0]?.params?.limit, 7, 'the page-size hint reaches Graph');
+  assert.equal(calls[0]?.params?.after, 'CUR-S', 'the resume cursor reaches Graph');
+  assert.equal(calls[1]?.path, '/me/stories', 'no configured account id means /me');
+});
+
+test('instagram_list_stories reads an empty edge as an empty, complete listing', async () => {
+  // No live story is the normal state of most accounts; it must read as "none
+  // right now", not as a failure or a truncated read.
+  const { req } = fakeReq(() => ({ data: [], paging: {} }));
+  const res = await tool('instagram_list_stories').handler({}, makeCtx(req));
+  assert.deepEqual(res.structuredContent, { items: [], paging: { truncated: false } });
+});
+
+test('instagram_list_stories leaves out and counts id-less stories', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: 'S1' }, { caption: 'x' }], paging: {} }));
+  const res = await tool('instagram_list_stories').handler({}, makeCtx(req));
+  const sc = res.structuredContent as {
+    items: unknown[];
+    omittedWithoutId?: number;
+    note?: string;
+  };
+  assert.deepEqual(sc.items, [{ id: 'S1' }]);
+  assert.equal(sc.omittedWithoutId, 1);
+  assert.equal(typeof sc.note, 'string');
+});
+
+test('instagram_list_stories logs exactly limit/fetchAll/hasCursor — and never the cursor itself', () => {
+  const fn = tool('instagram_list_stories').logFields;
+  assert.ok(fn, 'the listing declares an audit line');
+  assert.deepEqual(fn({ limit: 10, after: 'QVFIUm5xd0...', fetchAll: true, account: 'work' }), {
+    limit: 10,
+    fetchAll: true,
+    hasCursor: true,
+  });
+  assert.deepEqual(fn({}), { limit: undefined, fetchAll: false, hasCursor: false });
+});
+
+test('real McpServer: the published contract of instagram_list_stories is pinned exactly', async () => {
+  // Same reasoning as the list_media pin. The description is the only place a
+  // model learns the 24-hour window, that an empty result means "nothing live"
+  // and that engagement counts are not part of a story.
+  const { req } = fakeReq(() => ({ data: [], paging: {} }));
+  const live = await liveMediaServer(req);
+  try {
+    const { tools } = await live.client.listTools();
+    const listed = tools.find((t) => t.name === 'instagram_list_stories');
+    assert.ok(listed, 'instagram_list_stories is registered');
+
+    assert.deepEqual(
+      {
+        name: listed.name,
+        title: listed.title,
+        description: listed.description,
+        annotations: listed.annotations,
+        inputSchema: pinned(listed.inputSchema),
+        outputSchema: pinned(listed.outputSchema),
+      },
+      {
+        name: 'instagram_list_stories',
+        title: 'List Instagram stories',
+        description:
+          "List the operated account's live stories — only those still inside Instagram's 24-hour " +
+          'window, newest first, cursor-paginated. An expired story is gone from this edge (and from ' +
+          'instagram_get_media), so an empty result means no story is live right now, not that none ' +
+          'was ever posted; feed posts, reels and albums are on instagram_list_media instead. ' +
+          'Returns a single page by default; set fetchAll to aggregate pages up to the ' +
+          "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more stories " +
+          'remained. Captions are returned as fenced, untrusted text. Stories carry no like_count or ' +
+          'comments_count, and other fields (media_url) may be absent when Instagram does not disclose ' +
+          'them. An item Instagram returns without an id is left out, and omittedWithoutId plus note ' +
+          'say how many were.',
+        annotations: { readOnlyHint: true, openWorldHint: true },
+        inputSchema: {
+          type: 'object',
+          properties: {
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 100,
+              description:
+                'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that ' +
+                'bounds fetchAll.',
+            },
+            after: {
+              type: 'string',
+              minLength: 1,
+              description:
+                "Opaque pagination cursor from a previous response's paging.after. Omit to start from the " +
+                'newest live story. A story that expires between pages simply drops out.',
+            },
+            fetchAll: {
+              type: 'boolean',
+              description:
+                'When true, follow cursors and aggregate pages up to the server item cap (IG_MAX_ITEMS). The ' +
+                'result sets paging.truncated=true when the cap is reached while more stories remained.',
+            },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: MEDIA_FIELD_SCHEMAS,
+                required: ['id'],
+                additionalProperties: true,
+              },
+            },
+            paging: {
+              type: 'object',
+              properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
+              required: ['truncated'],
+              additionalProperties: true,
+            },
+            note: { type: 'string' },
+            omittedWithoutId: { type: 'integer' },
+          },
+          required: ['items', 'paging'],
+          additionalProperties: false,
+        },
+      },
+    );
+
+    const res = await live.client.callTool({ name: 'instagram_list_stories', arguments: {} });
+    assert.equal(
+      res.isError,
+      undefined,
+      `an empty stories edge passes validation: ${callText(res)}`,
+    );
+  } finally {
+    await live.close();
+  }
+});
+
+// --- get_media: a failed /children fallback (CC-DATA-120) --------------------
+
+test('get_media keeps the album detail and notes the error when the /children fallback fails', async () => {
+  const responder = (opts: IgRequestOptions) => {
+    if (opts.path === '/M7') return { id: 'M7', media_type: 'CAROUSEL_ALBUM', caption: 'album' };
+    throw new InstagramError('throttled', { kind: 'rate_limit' });
+  };
+  const { req, calls } = fakeReq(responder);
+
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M7' }, makeCtx(req));
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.path, '/M7/children');
+  assert.deepEqual(res.structuredContent, {
+    id: 'M7',
+    media_type: 'CAROUSEL_ALBUM',
+    caption: fence('album'),
+    note:
+      "children omitted: the album's items could not be read (the /children fallback failed with a " +
+      'rate_limit error), so the album holds items this result does not list; retry ' +
+      'instagram_get_media to fetch them',
+  });
+});
+
+test('get_media names the actual error kind of a failed fallback', async () => {
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/M8') return { id: 'M8', media_type: 'CAROUSEL_ALBUM' };
+    throw new InstagramError('boom', { kind: 'upstream' });
+  });
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M8' }, makeCtx(req));
+  assert.match(String(res.structuredContent?.note), /failed with a upstream error/);
+});
+
+test('get_media lets a non-Instagram failure of the fallback propagate', async () => {
+  // A plain Error is a defect, not an upstream answer, and must not be dressed
+  // up as a note.
+  const defect = new TypeError('bug');
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/M6') return { id: 'M6', media_type: 'CAROUSEL_ALBUM' };
+    throw defect;
+  });
+  await assert.rejects(
+    async () => tool('instagram_get_media').handler({ mediaId: 'M6' }, makeCtx(req)),
+    (e: unknown) => e === defect,
+  );
+});
+
+test('get_media publishes no note when the fallback succeeds', async () => {
+  const { req } = fakeReq((opts) =>
+    opts.path === '/M4'
+      ? { id: 'M4', media_type: 'CAROUSEL_ALBUM' }
+      : { data: [{ id: 'k1', media_type: 'IMAGE' }] },
+  );
+  const res = await tool('instagram_get_media').handler({ mediaId: 'M4' }, makeCtx(req));
+  assert.deepEqual(res.structuredContent, {
+    id: 'M4',
+    media_type: 'CAROUSEL_ALBUM',
+    children: [{ id: 'k1', media_type: 'IMAGE' }],
+  });
+});
+
+test('real McpServer: a failed /children fallback is a successful, noted call', async () => {
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/M3') return { id: 'M3', media_type: 'CAROUSEL_ALBUM' };
+    throw new InstagramError('server error', { kind: 'upstream' });
+  });
+  const live = await liveMediaServer(req);
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_get_media',
+      arguments: { mediaId: 'M3' },
+    });
+    assert.equal(res.isError, undefined, callText(res));
+    const sc = res.structuredContent as Record<string, unknown>;
+    assert.equal(sc.children, undefined);
+    assert.match(String(sc.note), /^children omitted: /);
+  } finally {
+    await live.close();
+  }
 });

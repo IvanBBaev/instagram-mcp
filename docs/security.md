@@ -125,9 +125,12 @@
     handles, permalinks, ISO timestamps and 17–18-digit object ids survive, pinned
     by byte-identical assertions.
 - Logs are structured JSON on **stderr only** (stdout is the MCP transport channel).
-  Graph puts `access_token` in the query string, so **no assembled URL ever reaches a
-  log call at all** — the request record is `{ method, host, path }` and the params
-  never join it. **Corrected 2026-09-01:** this bullet used to credit a `safeUrl`
+  A read (and the bodyless comment `DELETE`) carries `access_token` in the query
+  string; a write carries it, together with its whole payload, in an
+  `x-www-form-urlencoded` body (CC-PROC-25), and both spellings of every auth param
+  are registered with the redactor before the request leaves. So **no assembled URL
+  and no request body ever reaches a log call at all** — the request record is
+  `{ method, host, path }` and neither the params nor the body ever join it. **Corrected 2026-09-01:** this bullet used to credit a `safeUrl`
   query-stripping helper. No such function exists, and none is needed: the URL that
   `buildUrl` assembles in `core/http.ts` is passed to `fetch` and nowhere else. Two
   independent controls stand behind that anyway — the injected redactor is applied at
@@ -252,13 +255,13 @@ exactly where a caller may paste a token by mistake.
   `IG_PACKAGES_READONLY` / `IG_TOOL_PACKAGES=reader` filter on `readOnlyHint`, so a
   tool mis-annotated as read-only would be both advertised as safe *and* survive
   the filter. Since 2026-08-27 the annotation is bound to real behaviour rather
-  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 28
+  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 29
   handlers against an instrumented write-gate context and derives read-vs-write
   from what each one actually does, under four `IG_WRITE_MODE` ×
   `IG_ALLOW_DESTRUCTIVE` configurations that must all agree. A handler whose
   behaviour cannot be classified fails the test rather than defaulting to "read".
-  Current surface: 17 read, 11 write, all axes agreeing. Since 2026-08-29 the hint
-  is also **present on all 28** — the six `comments` writes previously omitted it
+  Current surface: 18 read, 11 write, all axes agreeing. Since 2026-08-29 the hint
+  is also **present on all 29** — the six `comments` writes previously omitted it
   and leaned on the MCP default — and its presence is enforced by the same test, so
   a new tool cannot ship with the annotation silently absent. Behaviour did not
   change (the filter tests `!== true`); what changed is that "absent" is no longer
@@ -313,8 +316,10 @@ rather than replacing it — the env flags remain the floor.
 
 ## 5. Platform-side hardening
 
-- Path B: `appsecret_proof` on every call + **"Require App Secret"** enabled — a
-  stolen bare token is useless against the app.
+- Path B: a time-bound `appsecret_proof` (HMAC over `access_token|appsecret_time`)
+  on every call + **"Require App Secret"** enabled — a stolen bare token is useless
+  against the app, and a captured proof expires with its `appsecret_time`
+  (CC-AUTH-15).
 - Standard Access only, single-operator: no third-party data ever transits the
   server; Data Use Checkup surface is minimal.
 - `doctor` surfaces token scope drift so overgranted scopes get trimmed;
@@ -361,6 +366,12 @@ two surfaces. They follow one rule (CC-DATA-102, CC-DATA-103):
   reviewer cannot see, or break the line and forge a frame such as
   `Instagram error (auth): …` of its own. `JSON.stringify` alone does not give this:
   it escapes C0 but leaves DEL, C1, every `\p{Cf}` character and U+2028/U+2029 raw.
+- **A display summary the server derives is not a wire string.** The composite
+  publish preview's `details.caption.excerpt` is built from the caller's own
+  caption for the confirm prompt (CC-PUB-60): control and format characters become
+  spaces, whitespace collapses, and it is cut after 200 code points with `…`. It is
+  flattened and cut on purpose; the caption itself is sent to Graph byte for byte
+  and is not echoed in `structuredContent`.
 - **Prose the server writes around a wire value** — a note, a warning, an error
   message — quotes it with visible `\u{…}` escapes and a length cap
   (`core/untrusted.ts` `quoteUntrusted`, `core/errors.ts` `quoteGraphText`).

@@ -14,6 +14,7 @@ import {
   getMedia,
   getMediaChildren,
   listMedia,
+  listStories,
   UNUSABLE_CURSOR_NOTE,
 } from '../../src/api/media.js';
 
@@ -1832,4 +1833,66 @@ test('listMedia keeps `cursors.after` authoritative: an unusable one is not repl
   const res = await listMedia(req, { igAccountId: '999', maxItems: 200 });
 
   assert.deepEqual(res, { items: [{ id: '1' }], truncated: true, note: UNUSABLE_CURSOR_NOTE });
+});
+
+// --- listStories (CC-DATA-119) ----------------------------------------------
+
+test('listStories sends exactly the documented stories request', async () => {
+  // Same whole-options pin as listMedia: the stories edge takes the media field
+  // set and the caller's paging hints, and nothing else.
+  const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
+
+  await listStories(req, { igAccountId: '999', maxItems: 50 });
+  await listStories(req, { igAccountId: '999', maxItems: 50, limit: 5, after: 'RESUME' });
+
+  assert.deepEqual(calls[0], {
+    method: 'GET',
+    path: '/999/stories',
+    params: { fields: EXPECTED_MEDIA_FIELDS, limit: undefined, after: undefined },
+  });
+  assert.deepEqual(calls[1], {
+    method: 'GET',
+    path: '/999/stories',
+    params: { fields: EXPECTED_MEDIA_FIELDS, limit: 5, after: 'RESUME' },
+  });
+});
+
+test('listStories pages like listMedia: one page by default, a capped walk with fetchAll', async () => {
+  const responder = (opts: IgRequestOptions) =>
+    opts.params?.after === undefined
+      ? {
+          data: [{ id: 'S1', media_type: 'IMAGE' }, { id: 'S2' }],
+          paging: { cursors: { after: 'C1' }, next: 'https://graph/next' },
+        }
+      : { data: [{ id: 'S3' }], paging: {} };
+
+  const single = fakeReq(responder);
+  const one = await listStories(single.req, { igAccountId: '999', maxItems: 10 });
+  assert.equal(single.calls.length, 1);
+  assert.deepEqual(one.items, [{ id: 'S1', media_type: 'IMAGE' }, { id: 'S2' }]);
+  assert.equal(one.after, 'C1');
+  assert.equal(one.truncated, false);
+
+  const walk = fakeReq(responder);
+  const all = await listStories(walk.req, { igAccountId: '999', maxItems: 10, fetchAll: true });
+  assert.equal(walk.calls.length, 2);
+  assert.deepEqual(
+    all.items.map((m) => m.id),
+    ['S1', 'S2', 'S3'],
+  );
+  assert.equal(all.truncated, false);
+
+  const capped = fakeReq(responder);
+  const cut = await listStories(capped.req, { igAccountId: '999', maxItems: 1, fetchAll: true });
+  assert.deepEqual(
+    cut.items.map((m) => m.id),
+    ['S1'],
+  );
+  assert.equal(cut.truncated, true);
+});
+
+test('listStories percent-encodes the account id into its path segment', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
+  await listStories(req, { igAccountId: 'a/b', maxItems: 5 });
+  assert.equal(calls[0]?.path, '/a%2Fb/stories');
 });

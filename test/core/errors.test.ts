@@ -13,6 +13,7 @@ import {
   toInstagramError,
 } from '../../src/core/errors.js';
 import { createRedactor, REDACTED } from '../../src/core/redact.js';
+import { maskTokenShapes } from '../../src/core/token-shapes.js';
 
 /** Build a Graph error envelope with the given `error` fields. */
 function envelope(error: Partial<GraphErrorBody['error']>): GraphErrorBody {
@@ -577,32 +578,24 @@ test('every module path the errors.ts docstrings name resolves to a real file', 
   }
 });
 
-// --- token-shape dictionary: no drift against core/redact.ts -----------------
+// --- token-shape dictionary: one list, shared with core/redact.ts -----------
 //
-// `core/errors.ts` carries its own copy of the token vocabulary because it is a
-// pure Layer-0 mapper: it must not depend on `createRedactor`, whose output also
-// varies with the process-global secret registry. Two copies of one vocabulary
-// is the classic drift defect, and the weaker copy is the one that runs at the
-// moment it matters — so the copies are pinned to each other here, behaviourally.
+// `core/errors.ts` must not depend on `createRedactor` (it is a pure Layer-0
+// mapper, and the redactor's output varies with the process-global secret
+// registry), so until 2026-09-30 it carried its own copy of the token vocabulary,
+// pinned to the redactor's by a behavioural drift test over the corpus below.
+// That test was corpus-bound by construction — five rewrites of the IG and EAA
+// patterns survived it — so both now call the one list in `core/token-shapes.ts`
+// (CC-PROC-19), and what is pinned here is that each really does.
 
 /** The marker `stripTokens` splices into a message (deliberately not `REDACTED`). */
 const ERRORS_MARKER = '[redacted]';
 
 /**
- * Marker-agnostic view of a redaction: *which* spans were masked, not what with.
- * `core/redact.ts` writes `[REDACTED]`, `core/errors.ts` writes `[redacted]`;
- * normalizing both to one sentinel lets the two dictionaries be compared for the
- * only property that has to match — the set of substrings each recognizes.
- */
-function maskShape(text: string, marker: string): string {
-  return text.split(marker).join('<masked>');
-}
-
-/**
- * The inputs the two dictionaries are compared over: the token shapes this
- * codebase genuinely produces, the boundaries around them, and the non-token
- * lookalikes that must survive. Every value is obviously synthetic — repeated
- * filler characters, never a captured credential.
+ * The inputs both consumers are checked against the shared list over: the token
+ * shapes this codebase genuinely produces, the boundaries around them, and the
+ * non-token lookalikes that must survive. Every value is obviously synthetic —
+ * repeated filler characters, never a captured credential.
  */
 const TOKEN_CORPUS: ReadonlyArray<{ label: string; input: string }> = [
   { label: 'a Facebook EAA token', input: `prefix EAA${'X'.repeat(60)} suffix` },
@@ -710,39 +703,56 @@ const TOKEN_CORPUS: ReadonlyArray<{ label: string; input: string }> = [
     input: `key CONFIG_IGQ${'x'.repeat(25)} end`,
   },
   { label: 'an IG token whose body carries digits', input: `t IGQ${'ab12cd34'.repeat(4)} e` },
-  // Case. The IG pattern is case-SENSITIVE in both copies and the hex one is not;
-  // a copy that went case-insensitive here would both drift and start eating
-  // ordinary lowercase identifiers out of an operator's diagnostics.
+  // Case. The IG pattern is case-SENSITIVE and the hex one is not; an IG pattern
+  // that went case-insensitive would start eating ordinary lowercase
+  // identifiers out of an operator's diagnostics.
   {
     label: 'a long lowercase ig-prefixed identifier',
     input: 'at ignore_this_very_long_symbol_name here',
   },
 ];
 
-test('the token vocabulary in errors.ts recognizes exactly what core/redact.ts does', () => {
-  // The drift guard. It compares the two dictionaries over real shapes rather
-  // than comparing two regex sources, so it stays true however either side is
-  // spelled — and it bites in both directions: it fails if `errors.ts` loses a
-  // shape `redact.ts` masks (the original defect: `IGAA…` and the 64-hex
-  // `appsecret_proof` both walked straight through), and equally if `errors.ts`
-  // starts masking something `redact.ts` leaves alone.
-  //
-  // Nothing in this file calls `registerSecret`, so the redactor's exact-value
-  // pass is empty here and only its token-shape pass is under comparison — which
-  // is the only part `errors.ts` is supposed to mirror.
+test('errors.ts and redact.ts both mask through core/token-shapes.ts, over the whole corpus', () => {
+  // Delegation, per consumer and per marker: a consumer that went back to a
+  // private copy — or passed the other consumer's marker — disagrees with the
+  // shared list somewhere in the corpus. Nothing in this file calls
+  // `registerSecret`, so the redactor's exact-value pass is empty here and only
+  // its token-shape pass is under test.
   const redact = createRedactor();
   for (const { label, input } of TOKEN_CORPUS) {
-    const viaErrors = maskShape(
-      mapGraphError(400, envelope({ message: input })).message,
-      ERRORS_MARKER,
-    );
-    const viaRedactor = maskShape(String(redact(input)), REDACTED);
     assert.equal(
-      viaErrors,
-      viaRedactor,
-      `token-shape dictionaries disagree on ${label} — core/errors.ts and core/redact.ts must ` +
-        'recognize the same shapes; converge them rather than weakening either.',
+      mapGraphError(400, envelope({ message: input })).message,
+      maskTokenShapes(input, ERRORS_MARKER),
+      `core/errors.ts disagrees with core/token-shapes.ts on ${label}`,
     );
+    assert.equal(
+      redact(input),
+      maskTokenShapes(input, REDACTED),
+      `core/redact.ts disagrees with core/token-shapes.ts on ${label}`,
+    );
+  }
+});
+
+test('no token-shape pattern is spelled outside core/token-shapes.ts (CC-PROC-19)', () => {
+  // The structural half, which the corpus cannot give: a second copy that
+  // happens to agree on every fixture is still a second copy, and the drift it
+  // invites is exactly the kind no fixture witnesses. Each of the three shapes
+  // has a distinctive regex spelling; none may reappear in either consumer, and
+  // both must import the shared list.
+  const shapes = ['EAA[', 'IG[A-Za-z0-9]', '[a-f0-9]{64}'];
+  const shared = readFileSync(join(REPO_ROOT, 'src', 'core', 'token-shapes.ts'), 'utf8');
+  for (const shape of shapes) {
+    assert.ok(shared.includes(shape), `core/token-shapes.ts no longer spells ${shape}`);
+  }
+  for (const consumer of ['errors.ts', 'redact.ts']) {
+    const source = readFileSync(join(REPO_ROOT, 'src', 'core', consumer), 'utf8');
+    assert.match(source, /^import \{ maskTokenShapes \} from '\.\/token-shapes\.js';$/m);
+    for (const shape of shapes) {
+      assert.ok(
+        !source.includes(shape),
+        `core/${consumer} spells the token shape ${shape} itself — use core/token-shapes.ts`,
+      );
+    }
   }
 });
 
@@ -908,11 +918,11 @@ test('ordinary Instagram vocabulary is not mistaken for a token', () => {
 });
 
 test('a lowercase ig-prefixed identifier is left in the message', () => {
-  // The IG pattern is case-SENSITIVE in both copies of the vocabulary; only the
-  // 64-hex one is not, because hex renders either way. Nothing pinned that
-  // asymmetry, so adding `/i` to the IG pattern here both drifted the copies
-  // apart and started eating ordinary lowercase identifiers out of an operator's
-  // diagnostics — with every assertion in this file still green.
+  // The IG pattern is case-SENSITIVE; only the 64-hex one is not, because hex
+  // renders either way. Nothing pinned that asymmetry, so adding `/i` to the IG
+  // pattern (then a private copy in this file) started eating ordinary lowercase
+  // identifiers out of an operator's diagnostics — with every assertion in this
+  // file still green.
   const safe = 'at ignore_this_very_long_symbol_name here';
   assert.equal(mapGraphError(400, envelope({ message: safe })).message, safe);
 });
@@ -1247,6 +1257,19 @@ test('an error_user_msg of only zero-width or bidi characters loses to error.mes
   assert.equal(bothInvisible.message, 'Instagram Graph API error (HTTP 400)');
 });
 
+test('an error_user_msg of only blank renderers loses to error.message (CC-DATA-126)', () => {
+  // Hangul fillers, a variation selector, the braille blank and a lone
+  // surrogate are not `\p{Cf}`, yet draw nothing: the model was shown an
+  // apparently blank message in place of Meta's useful one.
+  for (const blank of ['ㅤ', '️', '⠀⠀', 'ᅟᅠ', '\ud800']) {
+    const err = mapGraphError(
+      400,
+      envelope({ message: 'developer detail', error_user_msg: blank }),
+    );
+    assert.equal(err.message, 'developer detail', JSON.stringify(blank));
+  }
+});
+
 test('an invisible type or fbtrace_id is treated as absent (CC-DATA-96)', () => {
   const err = mapGraphError(400, envelope({ type: '\u200bOAuthException\u200b' }));
   assert.equal(err.kind, 'upstream', 'a padded type is a near-miss, not OAuthException');
@@ -1347,8 +1370,9 @@ function lookbehindStrip(text: string): string {
 }
 
 test('the IG exemption strips exactly what the lookbehind it replaced did (CC-DATA-121)', () => {
-  // The drift test holds this copy equal to core/redact.ts; this holds it equal
-  // to its own former spelling, so the two copies cannot go wrong in step.
+  // The shared list in core/token-shapes.ts, driven through this mapper, held
+  // equal to the lookbehind spelling it replaced, so a rewrite of the exemption
+  // cannot change what is masked.
   const pieces = ['IG', 'IG_', 'IGQ', 'CONFIG_', 'EAA', '_', '-', ' ', 'a', '7', 'x'.repeat(10)];
   let seed = 7;
   for (let i = 0; i < 2000; i += 1) {

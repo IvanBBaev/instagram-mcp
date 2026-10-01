@@ -107,14 +107,11 @@ function assertMentions(body: string, fragment: string): void {
 
 // --- surface / spec shape --------------------------------------------------
 
-test('commentsTools exposes 8 comments-package tools + the media-package toggle', () => {
-  assert.equal(commentsTools.length, 9);
-
-  const commentsPkg = commentsTools
-    .filter((t) => t.package === 'comments')
-    .map((t) => t.name)
-    .sort();
-  assert.deepEqual(commentsPkg, [
+test('commentsTools exposes nine tools, all in the comments package (CC-PROC-9)', () => {
+  // The comment switch used to be tagged `media`, so IG_PACKAGES_DENY=comments
+  // left it registered and an explicit IG_TOOL_PACKAGES=comments list omitted
+  // it. Every tool this module defines now carries the tag of its module.
+  assert.deepEqual(commentsTools.map((t) => t.name).sort(), [
     'instagram_create_comment',
     'instagram_delete_comment',
     'instagram_get_comment',
@@ -122,11 +119,10 @@ test('commentsTools exposes 8 comments-package tools + the media-package toggle'
     'instagram_list_comments',
     'instagram_list_tagged_media',
     'instagram_reply_to_comment',
+    'instagram_set_comments_enabled',
     'instagram_unhide_comment',
   ]);
-
-  const mediaPkg = commentsTools.filter((t) => t.package === 'media').map((t) => t.name);
-  assert.deepEqual(mediaPkg, ['instagram_set_comments_enabled']);
+  for (const t of commentsTools) assert.equal(t.package, 'comments', t.name);
 });
 
 test('read tools are read-only; write tools are not; delete carries the destructive hint', () => {
@@ -670,7 +666,7 @@ test('reply_to_comment previews without apply (no request) and performs with app
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/C1/replies');
-  assert.equal(calls[0]?.params?.message, 'hi');
+  assert.equal(calls[0]?.body?.message, 'hi');
 });
 
 test('create_comment previews without apply and performs with apply:true', async () => {
@@ -696,7 +692,7 @@ test('create_comment previews without apply and performs with apply:true', async
   // the complete key set and nothing in it is volatile.
   assert.deepEqual(applied.structuredContent, { commentId: 'comment-1', mediaId: 'M1' });
   assert.equal(calls[0]?.path, '/M1/comments');
-  assert.equal(calls[0]?.params?.message, 'nice');
+  assert.equal(calls[0]?.body?.message, 'nice');
 });
 
 test('hide_comment previews without apply and POSTs hide=true with apply:true', async () => {
@@ -719,7 +715,7 @@ test('hide_comment previews without apply and POSTs hide=true with apply:true', 
   assert.deepEqual(applied.structuredContent, { hidden: 'C1', note: OWN_COMMENT_HIDE_NOTE });
   assert.equal(calls[0]?.method, 'POST');
   assert.equal(calls[0]?.path, '/C1');
-  assert.equal(calls[0]?.params?.hide, true);
+  assert.equal(calls[0]?.body?.hide, true);
 });
 
 // CC-COM-5(a): Instagram acknowledges hiding the media owner's own comment and
@@ -754,7 +750,7 @@ test('unhide_comment POSTs hide=false with apply:true', async () => {
   // twelve observing files (448 pass, 0 fail, exit 0), because `unhidden` was
   // the only key anyone read. The echoed argument is the whole body.
   assert.deepEqual(applied.structuredContent, { unhidden: 'C1' });
-  assert.equal(calls[0]?.params?.hide, false);
+  assert.equal(calls[0]?.body?.hide, false);
 });
 
 test('set_comments_enabled (media package) previews without apply and POSTs comment_enabled with apply:true', async () => {
@@ -778,7 +774,7 @@ test('set_comments_enabled (media package) previews without apply and POSTs comm
   // exit 0). Both values are echoed arguments, so the literal is exact.
   assert.deepEqual(applied.structuredContent, { mediaId: 'M1', commentsEnabled: false });
   assert.equal(calls[0]?.path, '/M1');
-  assert.equal(calls[0]?.params?.comment_enabled, false);
+  assert.equal(calls[0]?.body?.comment_enabled, false);
 });
 
 test('set_comments_enabled tells the human which direction the toggle moves', async () => {
@@ -2790,9 +2786,50 @@ test('reply_to_comment and create_comment refuse a whitespace-only message (CC-C
       assert.equal(ok.isError, undefined, `${name}: ${resultText(ok)}`);
     }
     assert.deepEqual(
-      calls.map((c) => c.params?.message),
+      calls.map((c) => c.body?.message),
       ['  kept as written  ', '  kept as written  '],
       'only the two real messages reach Graph, untrimmed',
+    );
+  } finally {
+    await live.close();
+  }
+});
+
+test('reply_to_comment and create_comment refuse a message of only zero-width characters', async () => {
+  // `\S` accepts these — none is whitespace — yet each posts a comment that
+  // renders blank. `visibleText` is the check; the whitespace rule keeps its
+  // own message, and visible text that merely CONTAINS one is posted as written.
+  const { req, calls } = fakeReq(() => ({ id: 'new' }));
+  const live = await liveCommentsServer(req);
+  try {
+    for (const [name, args] of [
+      ['instagram_reply_to_comment', { commentId: 'C1' }],
+      ['instagram_create_comment', { mediaId: 'M1' }],
+    ] as const) {
+      for (const message of ['\u200b', '\u2060', '\ufeff', '\u200d\u200d', ' \u200b ']) {
+        const res = await live.client.callTool({
+          name,
+          arguments: { ...args, message, apply: true },
+        });
+        assert.equal(res.isError, true, `${name} must refuse ${JSON.stringify(message)}`);
+        assert.match(
+          resultText(res),
+          /must contain a visible character, not only invisible or zero-width ones/,
+        );
+        // U+FEFF is `\s` to JavaScript, so the whitespace rule fires for it too;
+        // every other case here is refused by the visibility check alone.
+        if (message !== '﻿') assert.doesNotMatch(resultText(res), /non-whitespace/);
+      }
+      const ok = await live.client.callTool({
+        name,
+        arguments: { ...args, message: 'hi\u200bthere', apply: true },
+      });
+      assert.equal(ok.isError, undefined, `${name}: ${resultText(ok)}`);
+    }
+    assert.deepEqual(
+      calls.map((c) => c.body?.message),
+      ['hi\u200bthere', 'hi\u200bthere'],
+      'only the two visible messages reach Graph, zero-width character intact',
     );
   } finally {
     await live.close();

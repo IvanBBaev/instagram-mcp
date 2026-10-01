@@ -200,7 +200,11 @@ test('pagination cursors and free-text arguments are deliberately NOT id-constra
   // so it is not part of the path-injection surface — and constraining it would
   // break real paging on the second page of every listing.
   const cursor = 'QVFIUmJ1c3Rlcg==+slash/inside';
-  for (const tool of ['instagram_list_media', 'instagram_list_comments']) {
+  for (const tool of [
+    'instagram_list_media',
+    'instagram_list_stories',
+    'instagram_list_comments',
+  ]) {
     const schema = byName.get(tool)?.input.after;
     assert.ok(schema, `${tool}.after exists`);
     assert.equal(schema.safeParse(cursor).success, true, `${tool}.after accepts a real cursor`);

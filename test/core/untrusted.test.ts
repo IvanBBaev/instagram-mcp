@@ -173,6 +173,35 @@ test('visibleText returns a string with any visible code point exactly as receiv
   assert.equal(visibleText('\u{1F600}'), '\u{1F600}');
 });
 
+test('visibleText rejects a string made only of blank renderers outside \\p{Cf} (CC-DATA-126)', () => {
+  // One string per member of the list, each alone and each padded with an
+  // older member, so dropping any one of them is caught on its own.
+  for (const blank of [
+    '️',
+    '︀',
+    '\u{e0100}',
+    '᠋',
+    'ᅟ',
+    'ᅠ',
+    'ㅤ',
+    'ﾠ',
+    '⠀',
+    '\ud800',
+    '\udfff',
+    ' ㅤ​️⠀ ',
+  ]) {
+    assert.equal(visibleText(blank), undefined, JSON.stringify(blank));
+  }
+});
+
+test('visibleText still sees a visible character next to a blank renderer (CC-DATA-126)', () => {
+  // An emoji with its presentation selector, a Hangul syllable, a braille dot
+  // and a paired surrogate are all visible; only the blank members are listed.
+  for (const shown of ['❤️', 'ㅤ가', '⠁', '\u{1F600}', '\ud800x']) {
+    assert.equal(visibleText(shown), shown, JSON.stringify(shown));
+  }
+});
+
 test('visibleText treats a non-string as absent, never coerced', () => {
   for (const value of [undefined, null, 0, 42, true, {}, ['x']]) {
     assert.equal(visibleText(value), undefined);

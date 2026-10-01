@@ -145,9 +145,9 @@ export const PACKAGE_PROFILES: Readonly<Record<string, readonly string[]>> = Obj
  * tool lacking `readOnlyHint` is ever registered under it.
  *
  * This exists because the package list is not a safety boundary: `reader`
- * includes `comments` (for `instagram_list_comments` / `instagram_get_comment`)
- * and `media` (for `instagram_list_media`), and both packages also carry write
- * tools — comment create/reply/hide/delete and the media comment toggle. Without
+ * includes `comments` (for `instagram_list_comments` / `instagram_get_comment`),
+ * and that package also carries write tools — comment create/reply/hide/delete
+ * and the media comment toggle (tagged `comments` since CC-PROC-9). Without
  * this set a deployment configured `IG_TOOL_PACKAGES=reader` would still expose
  * tools that post and delete comments as the operated account, which is not what
  * the profile name promises.
@@ -566,7 +566,8 @@ function isToolResultShape(value: unknown): value is ToolResult {
  * Mask secrets in the finished result of a tool call — CC-PROC-17.
  *
  * **Why here.** No known path puts a token into a result today: `core/http.ts`
- * keeps the access token in the query string and logs the path only,
+ * keeps the access token in the query string on reads and in the form body on
+ * writes (CC-PROC-25), and logs the path only,
  * `core/errors.ts` builds its message from Meta's own text and never from the
  * request URL or the raw body, and every `api/` function projects the wire
  * response into a narrow shape. But that is a property upheld by a convention

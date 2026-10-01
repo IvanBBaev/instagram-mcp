@@ -7,7 +7,7 @@
 > (G1–G5 below). Sizes reuse the roadmap classes: S < half a day, M ≈ 1–2 days,
 > L ≈ 3+ days — per task, for one agent.
 >
-> **Status (updated 2026-09-23).** Every table below carries a `Status` column:
+> **Status (updated 2026-10-01).** Every table below carries a `Status` column:
 > **DONE** · **PARTIAL** · **BLOCKED** · **NOT STARTED**, with a one-line note on
 > what is left for anything that is not DONE. The headline: Lanes A–D are
 > essentially complete as *code*, Lane R has produced its artifacts but shipped
@@ -17,6 +17,15 @@
 > is unmet. See [roadmap.md](roadmap.md) §"Current state" for the milestone view.
 > Where a task's real files differ from its planned `Owned files`, the status
 > cell says so rather than the plan being quietly rewritten.
+>
+> **What changed on 2026-09-30.** Every recorded owner-decision recommendation
+> ([corner-cases.md](corner-cases.md) §10 and the wave-18/19 rows) was applied;
+> `CHANGELOG.md` `[Unreleased]` lists what landed. Two changes move task rows
+> here: `instagram_list_stories` joined `media` (CC-DATA-119) and
+> `instagram_set_comments_enabled` moved from `media` to `comments` (CC-PROC-9),
+> so the surface is 29 tools. 0.8.0 is prepared but not published — npm still
+> serves 0.7.0 — and, with the MCP-registry submission and the MCPB and
+> marketplace channels, waits on the owner's go-ahead.
 >
 > **What changed on 2026-08-07.** Lane E's status split in two, and the
 > distinction is worth keeping: the *protocol* is now built and testable
@@ -113,10 +122,10 @@
 | ID | Task & scope | Owned files | Depends on | CC owed | Size | Status |
 |---|---|---|---|---|---|---|
 | T-D1 | `account` package (3 tools; `token_status` wraps T-C2's function) | `src/api/account.ts`, `src/tools/account.ts` | G1, C2 (interface) | — | S | **DONE** — 3 tools as planned |
-| T-D2 | `media` package (3 tools; carousel children, deleted-media handling, open enums + passthrough output schemas) | `src/api/media.ts`, `src/tools/media.ts` | G1 | CC-DATA-1/2/5/6/7 | S | **DONE — 3 tools as planned, one of them a write**: `instagram_set_comments_enabled` is *defined* in `src/tools/comments.ts` but *tagged* `media` (it edits the media object), and architecture §4 lists it under `media` accordingly; the file-vs-tag trap is recorded as CC-PROC-9. |
+| T-D2 | `media` package (3 tools; carousel children, deleted-media handling, open enums + passthrough output schemas) | `src/api/media.ts`, `src/tools/media.ts` | G1 | CC-DATA-1/2/5/6/7 | S | **DONE — 3 tools, all reads**: `get_media`, `list_media` and, since 2026-09-30, `list_stories` (CC-DATA-119). The planned third tool, the write `instagram_set_comments_enabled`, was tagged `media` until 2026-09-30, when it moved to `comments` with the file that defines it (CC-PROC-9; see T-D4). |
 | T-D3a | `publishing` primitives (4 tools): container create (**no `media_type` for feed images**), status, publish (**never auto-retried**), runtime quota read; client-side media validation (JPEG-only, size/aspect/duration, code-point captions); `alt_text` support `[verify — live probe]` | `src/api/publishing.ts`, `src/api/media-spec.ts`, `src/tools/publishing.ts` | G1 | CC-PUB-1/3/4/7/8/9/10/11/12/14/15 | M | **DONE** (code) — `alt_text` and the CC-PUB `[verify]` rows still owe a live probe |
 | T-D3b | `publishing` composites (`post_image`/`post_reel`/`post_story`): 60 s poll budget on the injectable clock, resumable results + `resume_container_id`, carousel orchestration, quota refusal | `src/tools/publishing-composites.ts` | D3a, B3 | CC-PUB-2/5/6/13, CC-RATE-5 | M | **DONE** (code) — merged into `src/tools/publishing.ts`; the planned separate file does not exist. Never run live. |
-| T-D4 | `comments` package (8 tools): threading, disabled-comments, `IG_ALLOW_DESTRUCTIVE` double gate, **fencing applied to comment text** (via T-B2), `list_tagged_media` tags-vs-mentions semantics | `src/api/comments.ts`, `src/tools/comments.ts` | G1, B2/B3 (interfaces) | CC-COM-1..7 | M | **DONE — 8 tools** tagged `comments`; `src/tools/comments.ts` also defines `instagram_set_comments_enabled`, which is tagged `media` (see T-D2). CC-COM-5/6 still owe a live probe. |
+| T-D4 | `comments` package (8 tools): threading, disabled-comments, `IG_ALLOW_DESTRUCTIVE` double gate, **fencing applied to comment text** (via T-B2), `list_tagged_media` tags-vs-mentions semantics | `src/api/comments.ts`, `src/tools/comments.ts` | G1, B2/B3 (interfaces) | CC-COM-1..7 | M | **DONE — 9 tools** tagged `comments`: the 8 planned plus `instagram_set_comments_enabled`, moved here from `media` on 2026-09-30 (CC-PROC-9; see T-D2). CC-COM-5/6 still owe a live probe. |
 | T-D5 | `insights` package (4 tools): per-`media_product_type` metric matrix, required `timeframe`, 90-day retention clamp, `online_followers` watch-list, `follower_count` metric `[verify — live probe]` | `src/api/insights.ts`, `src/tools/insights.ts` | G1 | CC-INS-1/2/3/5/6/7 | M | **DONE** (code) — never checked against real metrics; CC-INS-4 timezone still `[verify]` |
 | T-D6 | `discovery` package (3 tools, **gated on T-E3 = GO**): local hashtag-budget tracker (30/7d, self-healing), `business_discovery` | `src/api/discovery.ts`, `src/tools/discovery.ts` | G1, **T-E3** | CC-RATE-4 | M | **DONE — gate decided without the probe 2026-07-29.** Code is complete and registered: absent from `core`, present in `reader` and `all`. T-E3 could not run (no Path-B credentials), so the choice between "keep it registered" and "move it behind an opt-in" was **decided rather than deferred** — it stays, reversibly; the reasoning and the one-line reversal (drop `'discovery'` from two profile lists in `src/mcp/registry.ts`) are in [roadmap.md](roadmap.md). Running the probe later can only confirm or reverse that call, so this task no longer blocks. |
 
@@ -147,7 +156,7 @@
 | T-R3 | README generated sections (tool table, env catalog) + docs-sync tests | `scripts/gen-readme.ts`, `test/docs-sync.test.ts` | B1, A2 | S | **DONE** — generator shipped as `scripts/gen-readme.mjs`; the drift test covers only README's two AUTOGEN blocks |
 | T-R4 | npm packaging: `.cjs` bin launcher (Node guard → ESM `import()`), `prepublishOnly` full gate, provenance | `bin/instagram-mcp-ai.cjs` | T-01 | S | **DONE** — launcher, `prepublishOnly`, `provenance: true`, and an OIDC release workflow all in place |
 | T-R5 | `server.json` + MCP-registry publish (`io.github.IvanBBaev/instagram-mcp-ai`), generated + sync-tested | `server.json`, gen script | R4, A2 | S | **PARTIAL** — `server.json` exists and is version-drift-tested; **the registry submission has not been made** |
-| T-R6 | MCPB bundle: keychain-backed `user_config`, token-acquisition story for non-CLI users | MCPB manifest | R4, C3 | M | **PARTIAL** — `manifest.json` + `docs/mcpb-install.md` exist; the bundle has **never been built or installed** on a clean machine, and the non-CLI token-acquisition story is BLOCKED on live OAuth. `test/release/mcpb-manifest.test.ts` (2026-08-02, 14 tests; since changed: 17 tests as of 2026-09-23) now guards the manifest against the drift a human eye cannot catch in JSON: a **phantom variable** (declared but read by no code — the `IG_FB_ACCESS_TOKEN` defect class, and worse here because it renders as a labelled form field that silently does nothing), a broken `env` ↔ `user_config` bijection, self-referencing interpolation, an unmasked credential, a required-ness flag that disagrees with what `loadProfiles` actually refuses to start without, a default that drifts from the server's, and the Node floor drifting from `package.json` `engines` (compared as parsed floors, so `>=22` and `>=22.0.0` are correctly the same). Defaults are read back from `DEFAULT_SETTINGS`/`selectPackages` rather than restated, with one deliberate exception: an independent `!== 'apply'` interlock that still fails if the *server* default is ever flipped, which the derived checks would otherwise happily agree with. The manifest is currently fully consistent — the tests were proven to bite against mutated copies, not against a passing file alone. |
+| T-R6 | MCPB bundle: keychain-backed `user_config`, token-acquisition story for non-CLI users | MCPB manifest | R4, C3 | M | **PARTIAL** — `manifest.json` + `docs/mcpb-install.md` exist; the bundle has **never been installed** on a clean machine (2026-10-01: built locally with `scripts/build-mcpb.sh` — `mcpb@2` validate passes; `instagram-mcp-ai-0.8.0.mcpb` 3.4 MB / 2,211 files — and smoke-tested from the unzipped archive exactly as `server.mcp_config` launches it: `initialize` reports `instagram-mcp-ai` 0.8.0, `tools/list` returns 26 tools on the default `core` set (29 on `all`) and no network request is made), and the non-CLI token-acquisition story is BLOCKED on live OAuth. `test/release/mcpb-manifest.test.ts` (2026-08-02, 14 tests; since changed: 17 tests as of 2026-09-23) now guards the manifest against the drift a human eye cannot catch in JSON: a **phantom variable** (declared but read by no code — the `IG_FB_ACCESS_TOKEN` defect class, and worse here because it renders as a labelled form field that silently does nothing), a broken `env` ↔ `user_config` bijection, self-referencing interpolation, an unmasked credential, a required-ness flag that disagrees with what `loadProfiles` actually refuses to start without, a default that drifts from the server's, and the Node floor drifting from `package.json` `engines` (compared as parsed floors, so `>=22` and `>=22.0.0` are correctly the same). Defaults are read back from `DEFAULT_SETTINGS`/`selectPackages` rather than restated, with one deliberate exception: an independent `!== 'apply'` interlock that still fails if the *server* default is ever flipped, which the derived checks would otherwise happily agree with. The manifest is currently fully consistent — the tests were proven to bite against mutated copies, not against a passing file alone. |
 | T-R7 | `SECURITY.md`, `CHANGELOG.md`, release checklist, version-drift test across every distribution channel | those files | — | S | **DONE** — the owed correction landed: `CHANGELOG.md` now states plainly that `0.0.1` is a pre-release placeholder, not a published version. The drift test grew from three channels to **four** as T-R8 added one; it is written to take a new channel as a new constant, so the next one costs a line. |
 | **T-R8** | **Claude Code plugin manifest** — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` declaring the stdio server, wired into the version-drift test as a fourth channel | `plugins/instagram-mcp-ai/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | R4 | S | **PARTIAL** (2026-08-02, revised 2026-08-07 — one of the two blockers is closed). The manifest declares the server as `npx -y instagram-mcp-ai@<version>` and **pins the version twice** — in `version` and inside the `npx` args — both covered by the (four-, not three-channel) version-drift test; the npx pin is parsed rather than exact-string-matched, so a floating `@latest` or a missing pin fails distinguishably from a stale one. `.claude-plugin/` and `plugins/` are deliberately outside the npm tarball's `files` allowlist and `test/release/packaging.test.ts` asserts that exclusion: the plugin channel installs from git/marketplace, never from `node_modules`. **Closed since the first revision:** (a) the repo **is** now a marketplace — `.claude-plugin/marketplace.json` lists the single plugin with `"source": "./plugins/instagram-mcp-ai"` (moved off `"./"` on 2026-09-24: the repo-root source made Claude Code copy the whole repo into its plugin cache and `npm ci` the root `package.json` — ~88 MB of dev dependencies per install; the plugin root now holds no `package.json`, locked by `test/release/plugin-manifest.test.ts`), so `/plugin marketplace add IvanBBaev/instagram-mcp` then `/plugin install instagram-mcp-ai@instagram-mcp` resolves; (b) the credential-UX gap is closed — `plugin.json` now declares `userConfig.IG_ACCESS_TOKEN` (`sensitive: true` → OS keychain, `required: true`) and wires it through `mcpServers.instagram.env` as `${user_config.IG_ACCESS_TOKEN}`, so the channel prompts exactly like the MCPB bundle instead of demanding a hand-placed env var. Both files validate against their published JSON schemas (ajv, draft-07), and `test/release/plugin-manifest.test.ts` (16 tests) locks the contract: no unrecognised field, no phantom variable (the `IG_FB_ACCESS_TOKEN` defect class), `env` interpolating *its own* `userConfig` key rather than a neighbour's, required-ness agreeing with what `loadProfiles` actually refuses to start without, and no credential value embeddable in either manifest. **The blocker that was T-03 is cleared** (2026-08-25): `npx` resolves from npm and `instagram-mcp-ai@0.7.0` is published, so an install no longer succeeds only to have the server fail to launch. What keeps this PARTIAL is that the repo is listed in no marketplace but its own, and that the channel has **never been executed by a real client** — the `${user_config.…}` interpolation is schema-valid and unit-asserted but unproven end-to-end. Operator page: `docs/plugin-install.md` (rewritten 2026-08-07 against the real manifests, status refreshed 2026-08-26). |
 
@@ -263,7 +272,9 @@ single-owner work the plan always said only one agent could do:
    `rupload.facebook.com` exclusion identically. The last one was a real drift and
    was fixed the honest way: architecture §4 now lists the comment toggle under
    `media`, which is the tag the env filters actually act on, with the file-vs-tag
-   trap recorded as **CC-PROC-9** rather than silently retagged.
+   trap recorded as **CC-PROC-9** rather than silently retagged. (The retag
+   itself came later, deliberately: on 2026-09-30 the toggle moved to `comments`,
+   as the CC-PROC-9 owner decision recommended.)
 4. **Then, and only then, T-03 + the M5 publishes** (npm, MCP registry, MCPB,
    plugin) and the clean-machine install tests. Note the ordering hardened since
    this was written: T-03 (the npm publish) is now the **sole** remaining blocker
@@ -326,8 +337,12 @@ unbounded write buffering, and `EPIPE` on a client disconnect), and
 CC-DATA-11/12/13/14 (all four from the `buildUrl` work — the `null` cursor carried
 forward by `fetchPagedEdge`, the same nullish hole in the POST body builder, non-finite
 numbers accepted on purpose, and a `null`-prototype value throwing a raw `TypeError`).
+(Update 2026-09-30: CC-AUTH-15 and CC-PROC-9 were applied with the other
+[corner-cases.md](corner-cases.md) §10 recommendations; CC-AUTH-17 still waits on
+the live probe, and CC-AUTH-18, CC-PROC-16 and CC-PROC-21 are kept by decision.
+Each row records its own outcome.)
 Suite at the time of this entry: 1373 tests, all passing, coverage 100/100/100/100,
-`npm audit` clean. (It has grown since: 2101 tests at 2026-09-23, coverage still
+`npm audit` clean. (It has grown since: 2549 tests at 2026-09-30, coverage still
 100% on every axis.)
 
 **A trap for anyone measuring coverage from a private build directory.** Parallel
@@ -347,7 +362,7 @@ This is not hypothetical. On 2026-09-22 a task agent reported the gate as failin
 as a blocker. The numbers came from a `--outDir` run of exactly the shape above. Re-run
 centrally against a freshly built `dist/`, the same tree gives **1847 tests, 1847 pass,
 0 fail**, coverage **100/100/100/100** and `npm audit` clean (the suite has since grown
-to 2101 tests); the full `npm run check`
+to 2549 tests); the full `npm run check`
 (lint → format:check → build → coverage → audit) is green end to end. Read a private-build
 coverage table for the *files you touched*, never as a verdict on the gate — and when the
 two disagree, the central run is the one that counts, because it is the only one whose

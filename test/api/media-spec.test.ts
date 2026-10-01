@@ -18,7 +18,8 @@ import {
   assertCarouselSize,
   assertHttpsUrl,
   containerMediaTypeSchema,
-  httpsUrlSchema,
+  httpsUrl,
+  HTTPS_URL_PATTERN,
   imageUrlFormatWarning,
   isHttpsUrl,
   userTagSchema,
@@ -440,7 +441,7 @@ test('a URL the parser has to re-slash before it reads a host is not the URL tha
           'imageUrl must be a well-formed https:// URL (Instagram fetches media over HTTPS).',
       JSON.stringify(url),
     );
-    assert.equal(httpsUrlSchema.safeParse(url).success, false, JSON.stringify(url));
+    assert.equal(httpsUrl().safeParse(url).success, false, JSON.stringify(url));
   }
   // A backslash in the query or fragment is kept verbatim by the parser, so the
   // forwarded string names the same resource and it stays accepted, as do a
@@ -482,7 +483,7 @@ test('a scheme that merely begins with or contains "https" is not https', () => 
           'videoUrl must be a well-formed https:// URL (Instagram fetches media over HTTPS).',
       url,
     );
-    const result = httpsUrlSchema.safeParse(url);
+    const result = httpsUrl().safeParse(url);
     assert.equal(result.success, false, url);
     assert.equal(
       result.success ? '' : (result.error.issues[0]?.message ?? ''),
@@ -518,7 +519,7 @@ test('a URL the parser has to strip before it reads https is not the URL that ge
           'imageUrl must be a well-formed https:// URL (Instagram fetches media over HTTPS).',
       JSON.stringify(url),
     );
-    assert.equal(httpsUrlSchema.safeParse(url).success, false, JSON.stringify(url));
+    assert.equal(httpsUrl().safeParse(url).success, false, JSON.stringify(url));
   }
   // A space INSIDE the path is not dropped — the parser percent-encodes it, so
   // the forwarded string still names the same resource — and stays accepted.
@@ -634,6 +635,55 @@ test('no spelling of JPEG is ever flagged as non-JPEG', () => {
   }
 });
 
+/**
+ * The exact warning {@link imageUrlFormatWarning} returns for a VIDEO extension
+ * `ext` on a still-image field (CC-PUB-23), restated like
+ * {@link expectedFormatWarning} so a re-wording has to be re-approved here.
+ */
+function expectedVideoWarning(ext: string): string {
+  return (
+    `URL extension ".${ext}" suggests a video, but this field takes a still image; Instagram ` +
+    'accepts JPEG only for images (feed, story, and reel cover). Format, byte size, and ' +
+    'dimensions cannot be verified before Instagram fetches the URL.'
+  );
+}
+
+test('a video extension on a still-image field draws the video sentence, not the image one (CC-PUB-23)', () => {
+  // An `.mp4` handed to `imageUrl` or `coverUrl` is a crossed field, not a
+  // badly-encoded image: the "non-JPEG image" sentence would send the operator
+  // looking for an image converter. Every entry is pinned whole, and each one
+  // yields the VIDEO sentence — which also proves no video extension sits in the
+  // image set, since that set is consulted first and would win.
+  for (const ext of [
+    'mp4',
+    'm4v',
+    'mov',
+    'qt',
+    'avi',
+    'webm',
+    'mkv',
+    'wmv',
+    'flv',
+    'mpg',
+    'mpeg',
+    '3gp',
+    '3g2',
+  ]) {
+    assert.equal(
+      imageUrlFormatWarning(`https://cdn.example.com/clip.${ext}`),
+      expectedVideoWarning(ext),
+      `".${ext}" must draw the video sentence`,
+    );
+  }
+  // Case-insensitive and read off the last path segment only, like the image hint.
+  assert.equal(
+    imageUrlFormatWarning('https://cdn.example.com/clip.MP4?sig=abc'),
+    expectedVideoWarning('mp4'),
+  );
+  assert.equal(imageUrlFormatWarning('https://cdn.example.com/v.mp4/still'), undefined);
+  assert.equal(imageUrlFormatWarning('https://cdn.example.com/still?src=a.mp4'), undefined);
+});
+
 test('the format hint reads the path only — never the host, query, or fragment', () => {
   // A dot outside the path is not an extension. Decide the hint on `href` (or on
   // the host) instead of `pathname` and every one of these starts lying: the
@@ -747,22 +797,22 @@ test('the format hint reads the raw path and does not decode percent-escapes', (
   assert.equal(imageUrlFormatWarning('https://cdn.example.com/pic%2Ejpg'), undefined);
 });
 
-test('httpsUrlSchema rejects every non-https URL with its exact message', () => {
+test('httpsUrl() rejects every non-https URL with its exact message', () => {
   // This schema is what validates `imageUrl`/`videoUrl`/`coverUrl` before any tool
   // body runs, and the server never fetches those URLs itself — so the scheme check
   // IS the control, not a convenience. Neutered, it forwards `http://` (and worse)
   // to Meta, and the SSRF promise in docs/security.md becomes untrue with nothing
   // in the logs to show for it.
-  assert.equal(httpsUrlSchema.safeParse('https://cdn.example.com/a.jpg').success, true);
+  assert.equal(httpsUrl().safeParse('https://cdn.example.com/a.jpg').success, true);
   for (const bad of ['http://cdn.example.com/a.jpg', 'ftp://example.com/a.jpg', 'not a url']) {
-    const result = httpsUrlSchema.safeParse(bad);
+    const result = httpsUrl().safeParse(bad);
     assert.equal(result.success, false, `"${bad}" must be rejected`);
     const message = result.success ? '' : (result.error.issues[0]?.message ?? '');
     assert.equal(message, 'must be a well-formed https:// URL');
   }
 });
 
-test('httpsUrlSchema rejects the empty string with the same refusal as any other non-URL', () => {
+test('httpsUrl() rejects the empty string with the same refusal as any other non-URL', () => {
   // `imageUrl: ""` is what an omitted-but-present field looks like coming out of a
   // model, and it is the one bad value that could plausibly be waved through as
   // "nothing was provided". It must not be: the field is required where it appears,
@@ -771,7 +821,7 @@ test('httpsUrlSchema rejects the empty string with the same refusal as any other
   // the operator never typed. `new URL('')` throws, so it lands in the same branch as
   // "not a url"; pinned so a future `.min(0)`-style relaxation cannot open it.
   assert.equal(isHttpsUrl(''), false);
-  const result = httpsUrlSchema.safeParse('');
+  const result = httpsUrl().safeParse('');
   assert.equal(result.success, false);
   assert.equal(
     result.success ? '' : (result.error.issues[0]?.message ?? ''),
@@ -779,7 +829,61 @@ test('httpsUrlSchema rejects the empty string with the same refusal as any other
   );
 });
 
-test('httpsUrlSchema stops a non-string at the type boundary, before the refine runs', () => {
+test('httpsUrl() publishes its rule as a JSON Schema pattern (CC-PUB-36)', () => {
+  // A refinement renders to nothing in JSON Schema, so a client generating a
+  // validator from the published schema was told the field is any string. The
+  // pattern is the necessary half of the verdict: the case-insensitive scheme,
+  // any leading spaces (forwarded byte for byte — CC-PUB-57/62), then `//`.
+  assert.equal(HTTPS_URL_PATTERN.source, '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/');
+  assert.equal(HTTPS_URL_PATTERN.flags, '');
+  const schema = httpsUrl().safeParse('https://cdn.example.com/a.jpg');
+  assert.equal(schema.success, true);
+  // Everything the verdict accepts, the pattern must accept too — otherwise a
+  // client obeying the published schema would refuse a URL the server takes.
+  for (const url of [
+    'https://cdn.example.com/a.jpg',
+    'HTTPS://cdn.example.com/a.jpg',
+    'HtTpS://cdn.example.com/a.jpg',
+    ' https://cdn.example.com/a.jpg ',
+    '   https://cdn.example.com/a.jpg',
+  ]) {
+    assert.equal(isHttpsUrl(url), true, JSON.stringify(url));
+    assert.equal(HTTPS_URL_PATTERN.test(url), true, JSON.stringify(url));
+    assert.equal(httpsUrl().safeParse(url).success, true, JSON.stringify(url));
+  }
+});
+
+test('httpsUrl() refuses with exactly one issue, whichever half refused (CC-PUB-36)', () => {
+  // The pattern and the verdict share one message. zod keeps running a
+  // refinement after a failed string check, so an unguarded refine would add the
+  // same sentence a second time and the tool refusal would read it twice.
+  // `http://…` fails the pattern; `https://` alone and `https:///…` pass it and
+  // are refused by the verdict; `x https://…` fails the anchor.
+  for (const url of [
+    'http://cdn.example.com/a.jpg',
+    'x https://cdn.example.com/a.jpg',
+    'https://',
+    'https:///cdn.example.com/a.jpg',
+    'https://cdn.example.com/a.jpg\n',
+  ]) {
+    const result = httpsUrl().safeParse(url);
+    assert.equal(result.success, false, JSON.stringify(url));
+    assert.deepEqual(
+      result.success ? [] : result.error.issues.map((i) => i.message),
+      ['must be a well-formed https:// URL'],
+      JSON.stringify(url),
+    );
+  }
+});
+
+test('httpsUrl() builds a fresh schema on every call (CC-PUB-35)', () => {
+  // A shared instance is what `zod-to-json-schema` de-duplicates into a `$ref`
+  // to the first twin, and under draft-07 a strict client then reads the twin's
+  // description instead of the field's own.
+  assert.notEqual(httpsUrl(), httpsUrl());
+});
+
+test('httpsUrl() stops a non-string at the type boundary, before the refine runs', () => {
   // The refine calls `isHttpsUrl`, whose parameter is typed `string` — `new URL(…)`
   // would coerce a number or an object to text and decide the scheme on the result.
   // zod's `z.string()` runs first and short-circuits, so `isHttpsUrl` is never handed
@@ -788,7 +892,7 @@ test('httpsUrlSchema stops a non-string at the type boundary, before the refine 
   // invalid_type, NOT the custom https message, which is exactly what proves the
   // refine did not execute.
   for (const bad of [123, null, undefined, {}, ['https://cdn.example.com/a.jpg']]) {
-    const result = httpsUrlSchema.safeParse(bad);
+    const result = httpsUrl().safeParse(bad);
     assert.equal(result.success, false, `${JSON.stringify(bad)} must be rejected`);
     const issue = result.success ? undefined : result.error.issues[0];
     assert.equal(issue?.code, 'invalid_type', `${JSON.stringify(bad)} must fail on type`);
@@ -803,12 +907,12 @@ test('isHttpsUrl accepts a URL carrying embedded credentials, and nothing echoes
   // matters is that the userinfo stops here: `assertHttpsUrl` does not throw, so it
   // never composes a message around the URL, and the only other function that reads a
   // URL returns a warning built from the extension alone. The tool layer likewise puts
-  // counts, not URLs, in its previews and log fields, so the password has no path into
+  // counts and URL hosts (never userinfo, path or query), not URLs, in its previews and log fields, so the password has no path into
   // a tool result, a write-intent preview, the journal, or a log line.
   const credentialUrl = 'https://user:s3cr3t@cdn.example.com/x.jpg';
   assert.equal(isHttpsUrl(credentialUrl), true);
   assert.doesNotThrow(() => assertHttpsUrl(credentialUrl, 'imageUrl'));
-  assert.equal(httpsUrlSchema.safeParse(credentialUrl).success, true);
+  assert.equal(httpsUrl().safeParse(credentialUrl).success, true);
   assert.equal(imageUrlFormatWarning(credentialUrl), undefined);
 });
 

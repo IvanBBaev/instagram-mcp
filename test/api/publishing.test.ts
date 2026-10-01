@@ -7,9 +7,10 @@
  * happy / already-published / timeout / error branches.
  *
  * This is the write path to a public account, so most assertions compare the
- * WHOLE recorded request (`method` + `path` + `params`) and the WHOLE returned
- * object rather than picking single fields: an extra param, a stray `host`
- * override, a `body` instead of a query param, or an `idempotent: true` on a
+ * WHOLE recorded request (`method` + `path` + `body`/`params`) and the WHOLE
+ * returned object rather than picking single fields: an extra field, a stray
+ * `host` override, a write payload moved back onto the query string (CC-PROC-25),
+ * or an `idempotent: true` on a
  * publish is exactly the kind of change that never shows up in a spot check and
  * costs a duplicate public post.
  */
@@ -122,8 +123,9 @@ test('createMediaContainer for a feed image POSTs image_url and nothing else', a
   // A feed image must send NO media_type at all — `IMAGE`/`VIDEO` are not valid
   // values for this edge, so a "helpfully" added one is rejected by Graph and the
   // post never happens. The whole request is compared because the neighbouring
-  // mistakes are just as expensive: a GET here silently creates nothing, a `body`
-  // instead of query params drops every field, and `idempotent: true` would let
+  // mistakes are just as expensive: a GET here silently creates nothing (and
+  // drops the body), query params instead of the form body put the caption on
+  // the request line (CC-PROC-25), and `idempotent: true` would let
   // the HTTP layer replay a container creation it must never replay.
   const { req, calls } = fakeReq(() => ({ id: 'C1' }));
 
@@ -138,7 +140,7 @@ test('createMediaContainer for a feed image POSTs image_url and nothing else', a
     {
       method: 'POST',
       path: '/999/media',
-      params: { image_url: 'https://cdn/x.jpg', caption: 'hi' },
+      body: { image_url: 'https://cdn/x.jpg', caption: 'hi' },
     },
   ]);
 });
@@ -164,7 +166,7 @@ test('createMediaContainer sets media_type for a reel and passes the reel fields
     {
       method: 'POST',
       path: '/999/media',
-      params: {
+      body: {
         media_type: 'REELS',
         video_url: 'https://cdn/v.mp4',
         cover_url: 'https://cdn/c.jpg',
@@ -192,7 +194,7 @@ test('createMediaContainer forwards a false share_to_feed and a zero thumb_offse
     shareToFeed: false,
   });
 
-  assert.deepEqual(calls[0]?.params, {
+  assert.deepEqual(calls[0]?.body, {
     media_type: 'REELS',
     video_url: 'https://cdn/v.mp4',
     thumb_offset: 0,
@@ -220,7 +222,7 @@ test('createMediaContainer serializes children as a comma list and user_tags as 
     userTags: tags,
   });
 
-  assert.deepEqual(calls[0]?.params, {
+  assert.deepEqual(calls[0]?.body, {
     media_type: 'CAROUSEL',
     children: 'child-c,child-a,child-b',
     user_tags: JSON.stringify(tags),
@@ -236,7 +238,7 @@ test('createMediaContainer only marks is_carousel_item when true', async () => {
     isCarouselItem: true,
   });
 
-  assert.deepEqual(calls[0]?.params, { image_url: 'https://cdn/k.jpg', is_carousel_item: true });
+  assert.deepEqual(calls[0]?.body, { image_url: 'https://cdn/k.jpg', is_carousel_item: true });
 });
 
 test('createMediaContainer omits is_carousel_item entirely when it is explicitly false', async () => {
@@ -255,7 +257,7 @@ test('createMediaContainer omits is_carousel_item entirely when it is explicitly
   });
 
   assert.deepEqual(
-    calls[0]?.params,
+    calls[0]?.body,
     { image_url: 'https://cdn/solo.jpg' },
     'an explicit false must send no carousel flag at all',
   );
@@ -272,7 +274,7 @@ test('createMediaContainer passes a locationId through as location_id', async ()
     locationId: '7770001',
   });
 
-  assert.deepEqual(calls[0]?.params, {
+  assert.deepEqual(calls[0]?.body, {
     image_url: 'https://cdn/x.jpg',
     location_id: '7770001',
   });
@@ -303,7 +305,7 @@ test('createMediaContainer sends a caption byte-for-byte, however long and howev
 
   await createMediaContainer(req, { igId: '999', imageUrl: 'https://cdn/x.jpg', caption });
 
-  assert.equal(calls[0]?.params?.caption, caption);
+  assert.equal(calls[0]?.body?.caption, caption);
   assert.ok(
     caption.length > 2200,
     'the fixture has to outrun the real caption limit to witness a slice',
@@ -346,7 +348,7 @@ test('createMediaContainer repairs nothing it is handed: URLs, ids and handles g
     userTags,
   });
 
-  assert.deepEqual(calls[0]?.params, {
+  assert.deepEqual(calls[0]?.body, {
     media_type: 'REELS',
     image_url: imageUrl,
     video_url: videoUrl,
@@ -378,7 +380,7 @@ test('createMediaContainer sends a present-but-empty string instead of dropping 
     coverUrl: '',
   });
 
-  assert.deepEqual(calls[0]?.params, {
+  assert.deepEqual(calls[0]?.body, {
     image_url: '',
     video_url: '',
     caption: '',
@@ -414,7 +416,7 @@ test('createMediaContainer sends every supported field on one request', async ()
     {
       method: 'POST',
       path: '/4242/media',
-      params: {
+      body: {
         media_type: 'CAROUSEL',
         image_url: 'https://cdn/i.jpg',
         video_url: 'https://cdn/v.mp4',
@@ -454,7 +456,7 @@ test('createCarouselContainer creates each child then a CAROUSEL album referenci
   let n = 0;
   const { req, calls } = fakeReq((opts) => {
     // The album call carries a `children` param; child calls do not.
-    if (opts.params?.children !== undefined) return { id: 'ALBUM' };
+    if (opts.body?.children !== undefined) return { id: 'ALBUM' };
     n += 1;
     return { id: `child-${n}` };
   });
@@ -471,17 +473,17 @@ test('createCarouselContainer creates each child then a CAROUSEL album referenci
     {
       method: 'POST',
       path: '/999/media',
-      params: { image_url: 'https://cdn/1.jpg', is_carousel_item: true },
+      body: { image_url: 'https://cdn/1.jpg', is_carousel_item: true },
     },
     {
       method: 'POST',
       path: '/999/media',
-      params: { image_url: 'https://cdn/2.jpg', is_carousel_item: true },
+      body: { image_url: 'https://cdn/2.jpg', is_carousel_item: true },
     },
     {
       method: 'POST',
       path: '/999/media',
-      params: {
+      body: {
         media_type: 'CAROUSEL',
         children: 'child-1,child-2',
         caption: 'trip',
@@ -596,7 +598,7 @@ test('a carousel that fails on the album container orphans every child it create
   // logs looks wrong, and the whole set is now unreferenced.
   let n = 0;
   const { req } = fakeReq((opts) => {
-    if (opts.params?.children !== undefined) {
+    if (opts.body?.children !== undefined) {
       throw new InstagramError('Invalid children', { kind: 'validation', code: 100 });
     }
     n += 1;
@@ -752,7 +754,7 @@ test('publishMedia POSTs creation_id and returns the new media id', async () => 
 
   assert.deepEqual(r, { id: 'M1' }, 'only the new media id is handed back');
   assert.deepEqual(calls, [
-    { method: 'POST', path: '/999/media_publish', params: { creation_id: 'C1' } },
+    { method: 'POST', path: '/999/media_publish', body: { creation_id: 'C1' } },
   ]);
 });
 
@@ -1002,7 +1004,7 @@ test('runPublishFlow (happy path): FINISHED on first poll → publishes, no slee
   assert.equal(polls(), 1);
   assert.deepEqual(calls, [
     { method: 'GET', path: '/C1', params: { fields: 'status_code,status' } },
-    { method: 'POST', path: '/999/media_publish', params: { creation_id: 'C1' } },
+    { method: 'POST', path: '/999/media_publish', body: { creation_id: 'C1' } },
   ]);
   assert.deepEqual(clock.sleeps, [], 'a container that is already FINISHED is never waited on');
 });
@@ -1544,7 +1546,7 @@ test('runPublishFlow resumes a container without re-creating it', async () => {
   assert.deepEqual(calls[1], {
     method: 'POST',
     path: '/999/media_publish',
-    params: { creation_id: 'RESUME' },
+    body: { creation_id: 'RESUME' },
   });
 });
 
@@ -1803,7 +1805,7 @@ test('a carousel child acknowledged without an id aborts the carousel before the
   );
   assert.equal(calls.length, 2, 'neither the third child nor the album is attempted');
   assert.equal(
-    calls.some((c) => String(c.params?.children ?? '').includes('undefined')),
+    calls.some((c) => String(c.body?.children ?? '').includes('undefined')),
     false,
   );
 });

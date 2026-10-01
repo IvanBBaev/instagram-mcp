@@ -109,3 +109,20 @@ export function renderEnvCatalog(envExampleText: string): string {
 
   return [header, divider, ...rows].join('\n');
 }
+
+/** One entry of the MCPB manifest's `tools` array (`{ name, description }`). */
+export interface ManifestToolEntry {
+  name: string;
+  description: string;
+}
+
+/**
+ * Render the MCPB manifest's `tools` array: one `{ name, description }` entry
+ * per tool, in input order (the registry order when passed `allTools`), with
+ * the description cut to its first sentence — the same summary the README
+ * catalog shows, minus the Markdown-cell escaping (this lands in JSON, which
+ * needs none). Claude Desktop shows this list in the extension's detail pane.
+ */
+export function renderManifestTools(tools: readonly ToolSpec[]): ManifestToolEntry[] {
+  return tools.map((tool) => ({ name: tool.name, description: firstSentence(tool.description) }));
+}

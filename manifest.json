@@ -31,6 +31,124 @@
       }
     }
   },
+  "tools": [
+    {
+      "name": "instagram_get_account",
+      "description": "Fetch the profile of the operated Instagram professional account: username, display name, biography, website, profile-picture URL, and follower / following / media counts."
+    },
+    {
+      "name": "instagram_list_linked_accounts",
+      "description": "Enumerate the Facebook Pages this token can act on and the Instagram business account linked to each (GET /me/accounts)."
+    },
+    {
+      "name": "instagram_token_status",
+      "description": "Report the active credential: auth path (A = ig-login / B = fb-login), whether a token is configured, the resolved account ID, and — on Path B, via debug_token — validity, granted scopes, absolute expiry and days-left (with a refresh warning as the threshold nears)."
+    },
+    {
+      "name": "instagram_list_media",
+      "description": "List the operated account's own media (feed posts, reels, albums), newest first, cursor-paginated."
+    },
+    {
+      "name": "instagram_list_stories",
+      "description": "List the operated account's live stories — only those still inside Instagram's 24-hour window, newest first, cursor-paginated."
+    },
+    {
+      "name": "instagram_get_media",
+      "description": "Fetch a single media object by id, including its carousel children (album items) under `children`."
+    },
+    {
+      "name": "instagram_get_account_insights",
+      "description": "Account-level insights for the operated Instagram professional account (GET /{ig-id}/insights)."
+    },
+    {
+      "name": "instagram_get_media_insights",
+      "description": "Insights for a single media object (GET /{media-id}/insights)."
+    },
+    {
+      "name": "instagram_get_audience_demographics",
+      "description": "Follower / engaged-audience demographics for the operated account (GET /{ig-id}/insights with metric_type=total_value)."
+    },
+    {
+      "name": "instagram_get_online_followers",
+      "description": "Hourly distribution of when the account's followers are online (GET /{ig-id}/insights?metric=online_followers&period=lifetime)."
+    },
+    {
+      "name": "instagram_create_media_container",
+      "description": "Phase 1 of publishing: create a media container that Instagram ingests from a public HTTPS URL."
+    },
+    {
+      "name": "instagram_get_container_status",
+      "description": "Read a media container's processing state: status_code is IN_PROGRESS, FINISHED, ERROR, EXPIRED, or PUBLISHED."
+    },
+    {
+      "name": "instagram_publish_media",
+      "description": "Phase 2 of publishing: publish a media container that has finished processing, returning the new media id."
+    },
+    {
+      "name": "instagram_get_publishing_limit",
+      "description": "Report the account's content-publishing usage against its rolling-window quota."
+    },
+    {
+      "name": "instagram_post_image",
+      "description": "Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish."
+    },
+    {
+      "name": "instagram_post_reel",
+      "description": "Publish a reel in one call: create the REELS container, wait for processing (reels can take a while), then publish."
+    },
+    {
+      "name": "instagram_post_story",
+      "description": "Publish a photo or video story in one call: create the STORIES container, wait for processing, then publish."
+    },
+    {
+      "name": "instagram_list_comments",
+      "description": "List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies)."
+    },
+    {
+      "name": "instagram_get_comment",
+      "description": "Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies (repliesTruncated=true when Instagram returned only the first page of them)."
+    },
+    {
+      "name": "instagram_list_tagged_media",
+      "description": "List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated."
+    },
+    {
+      "name": "instagram_reply_to_comment",
+      "description": "Post a threaded reply under an existing comment (POST /{comment-id}/replies)."
+    },
+    {
+      "name": "instagram_create_comment",
+      "description": "Post a new top-level comment on a media object (POST /{media-id}/comments)."
+    },
+    {
+      "name": "instagram_hide_comment",
+      "description": "Hide a comment (POST /{comment-id}?hide=true) — reversible moderation, preferred over delete."
+    },
+    {
+      "name": "instagram_unhide_comment",
+      "description": "Unhide a previously hidden comment (POST /{comment-id}?hide=false)."
+    },
+    {
+      "name": "instagram_delete_comment",
+      "description": "Permanently delete a comment (DELETE /{comment-id})."
+    },
+    {
+      "name": "instagram_set_comments_enabled",
+      "description": "Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true|false)."
+    },
+    {
+      "name": "instagram_search_hashtag",
+      "description": "Resolve a hashtag name to its Instagram hashtag id(s) via GET /ig_hashtag_search?user_id={ig-id}&q=<hashtag> (the returned id feeds instagram_get_hashtag_media)."
+    },
+    {
+      "name": "instagram_get_hashtag_media",
+      "description": "List PUBLIC media under a hashtag id via GET /{hashtag-id}/top_media or /{hashtag-id}/recent_media (choose via `edge`), which require the operated account's id as user_id."
+    },
+    {
+      "name": "instagram_discover_business",
+      "description": "Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(<handle>){followers_count,media_count,media{...}}."
+    }
+  ],
   "user_config": {
     "IG_ACCESS_TOKEN": {
       "type": "string",

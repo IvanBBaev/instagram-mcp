@@ -130,6 +130,10 @@ the server falls back to its default / auto-resolution.
    the Extensions pane or use **Install extension…** and select the file.
 3. Claude Desktop shows the extension details and the **configuration form** from
    Step 3. Fill in at least **Instagram access token**, then **Install / Enable**.
+   The details pane also lists every tool the bundle can expose: the manifest's `tools`
+   array declares the full `all` surface (regenerated from the tool registry with
+   `npm run gen:manifest`), while the tools the server actually registers follow the
+   **Tool packages** field (default `core`).
 4. The server appears in your MCP tool list. Because `IG_WRITE_MODE` defaults to
    `preview`, write tools return a plan first; switch to `apply` (per call or via the
    Write mode field) when you are ready to execute.

@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   account's live stories from `GET /{ig-user-id}/stories`. It is paged like
   `instagram_list_media`, captions are fenced, and it covers only Instagram's
   24-hour window. The tool count goes from 28 to 29 (CC-DATA-119).
+- `manifest.json` (MCPB) now declares a `tools` array — every tool of the `all`
+  surface with its first-sentence summary — so Claude Desktop's Extensions detail
+  pane lists the tools. It is generated from the registry by `npm run gen:manifest`
+  and locked by a drift gate in `test/release/mcpb-manifest.test.ts`.
 - The MCPB bundle has been built (`scripts/build-mcpb.sh`, 3.4 MB) and smoke-tested
   locally: the unzipped bundle starts as `manifest.json` launches it and lists its
   tools over stdio without any network call.

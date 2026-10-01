@@ -48,6 +48,7 @@
     "audit": "npm audit --audit-level=high --omit=dev",
     "audit:dev": "npm audit --audit-level=high",
     "gen:readme": "npm run build && node scripts/gen-readme.mjs",
+    "gen:manifest": "npm run build && node scripts/gen-manifest-tools.mjs",
     "check": "npm run lint && npm run format:check && npm run build && npm run test:corpus && npm run coverage && npm run audit",
     "prepublishOnly": "npm run check"
   },

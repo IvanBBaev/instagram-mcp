@@ -23,7 +23,11 @@
  *   - credential fields being masked in the UI;
  *   - declared defaults, read back from the code that applies them
  *     (`DEFAULT_SETTINGS`, `selectPackages`) rather than restated here, so the
- *     manifest and the server cannot drift apart while both still pass.
+ *     manifest and the server cannot drift apart while both still pass;
+ *   - the `tools` list Claude Desktop shows in the extension's detail pane, which
+ *     must be exactly the registry's full (`all`) surface, in registry order, with
+ *     the first-sentence summaries `renderManifestTools` derives (regenerate with
+ *     `npm run gen:manifest`).
  *
  * Runs from the repo root (cwd) like the other `test/release/*` gates, with the
  * same walk-up fallback as `version-consistency.test.ts` for the case where the
@@ -43,6 +47,7 @@ import { loadProfiles } from '../../src/core/config.js';
 import { DEFAULT_SETTINGS, loadSettings } from '../../src/core/settings.js';
 import { PACKAGE_PROFILES, buildManifest, selectPackages } from '../../src/mcp/registry.js';
 import { allTools } from '../../src/tools/index.js';
+import { renderManifestTools } from '../helpers/doc-generators.js';
 
 // --- Repo-root resolution ---------------------------------------------------
 
@@ -396,7 +401,14 @@ test('the MCPB manifest cannot carry a credential value', () => {
   // is a published token, and the fix is to revoke it, not to delete the line.
   // The plugin channel has held this property since it shipped; the MCPB channel
   // held it nowhere until 2026-09-23.
+  //
+  // A registered tool name is exempt, and only as an exact match: some are 32+
+  // characters of `[a-z_]` (e.g. `instagram_get_audience_demographics`), which the
+  // long-run heuristic cannot tell from an opaque token, and the `tools` gates
+  // below already pin every declared name to the registry.
+  const toolNames = new Set(allTools.map((tool) => tool.name));
   for (const { path, value } of stringValues(manifest, '')) {
+    if (toolNames.has(value)) continue;
     assert.ok(
       !looksLikeSecret(value),
       `manifest.json${path} contains a token-shaped string. Credentials reach the server only ` +
@@ -774,5 +786,79 @@ test('the tool-packages field advertises exactly the profiles the registry imple
     'the IG_TOOL_PACKAGES description must list exactly the profiles mcp/registry.ts ' +
       'implements — advertising a removed profile hands the operator a value that makes the ' +
       'server refuse to start, and omitting a new one hides it from every bundle user',
+  );
+});
+
+// --- tools list (Claude Desktop detail pane) -------------------------------
+
+/**
+ * The manifest's `tools` array, narrowed to `{ name, description }` records. Any
+ * other shape fails here, naming the offending index, before a comparison runs.
+ */
+function manifestTools(): { name: unknown; description: unknown }[] {
+  const tools = manifest.tools;
+  assert.ok(
+    Array.isArray(tools),
+    'manifest.json must declare a `tools` array — without it Claude Desktop\u2019s ' +
+      'Extensions detail pane shows no tool list. Run `npm run gen:manifest`.',
+  );
+  return tools.map((entry: unknown, index) => asRecord(entry, `tools[${index}]`)) as {
+    name: unknown;
+    description: unknown;
+  }[];
+}
+
+test('the manifest tools list names exactly the tools the registry ships under "all"', () => {
+  // The server's live list depends on IG_TOOL_PACKAGES, so no single profile's
+  // surface is "the" list. The manifest declares the full `all` surface — the
+  // union every profile draws from — so it never omits a tool an operator can turn
+  // on. It is compared against `selectPackages(..., 'all')` rather than restated,
+  // so the claim "this is the `all` surface" is itself checked.
+  const packages = buildManifest(allTools);
+  const all = selectPackages(packages, { IG_TOOL_PACKAGES: 'all' }).active;
+  const allNames = packages
+    .filter((p) => all.has(p.name))
+    .flatMap((p) => p.tools.map((t) => t.name));
+  const declared = manifestTools().map((entry) => entry.name);
+
+  assert.equal(
+    new Set(declared).size,
+    declared.length,
+    `manifest.json tools has duplicate names: ${JSON.stringify(declared)}`,
+  );
+  assert.deepEqual(
+    [...declared].sort(),
+    [...allNames].sort(),
+    'manifest.json tools must name exactly the tools the registry registers under ' +
+      'IG_TOOL_PACKAGES=all — run `npm run gen:manifest` after adding, removing or ' +
+      'renaming a tool',
+  );
+});
+
+test('the manifest tools list is byte-for-byte what gen:manifest derives from the registry', () => {
+  // Registry order (allTools), not sorted: it is the order the server registers
+  // and lists tools in, so the pane matches `tools/list` under `all`, and a
+  // generator that emits a stable order keeps every regeneration diff to the
+  // tools that actually changed. Descriptions are each spec's first sentence,
+  // the same summary the README catalog derives.
+  const expected = renderManifestTools(allTools);
+  assert.deepEqual(
+    manifestTools(),
+    expected,
+    'manifest.json tools has drifted from the tool registry. Run `npm run gen:manifest`, or ' +
+      `set it to:\n${JSON.stringify(expected, null, 2)}`,
+  );
+});
+
+test('the manifest does not claim the server generates tools beyond the declared list', () => {
+  // `tools_generated: true` tells the host the server creates tools at runtime that
+  // the manifest does not list. This server only ever registers a SUBSET of the
+  // declared `all` surface (selected by IG_TOOL_PACKAGES); it never adds one, so
+  // the honest value is the default — absent (or false).
+  assert.notEqual(
+    manifest.tools_generated,
+    true,
+    'manifest.json must not set tools_generated: true — every tool the server can register ' +
+      'is already declared in `tools`',
   );
 });

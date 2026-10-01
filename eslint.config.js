@@ -12,6 +12,8 @@ export default tseslint.config(
       'scripts/**',
       'bin/**',
       'docs/',
+      // Local-only harness dir; agent worktrees there hold full repo copies.
+      '.claude/',
     ],
   },
   js.configs.recommended,

@@ -332,6 +332,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `login` / `refresh` now split the env store on every line ending dotenv honours,
   including a lone CR. A superseded token in a CR-terminated stretch is no longer
   left on disk, and such a file no longer makes the write refuse (CC-CFG-80).
+- A plain `Uint8Array` (a `TextEncoder` result, a stream chunk) whose bytes spell
+  a token or a registered secret is now masked as a unit by the redactor, as a
+  `Buffer` already was. Before, it was copied as one number per byte, which no
+  secret pattern can match, so the secret reached the log byte by byte
+  (CC-AUTH-80).
 
 ## [0.8.0] — 2026-09-24
 

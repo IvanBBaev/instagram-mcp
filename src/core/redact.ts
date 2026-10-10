@@ -223,15 +223,20 @@ function redactValue(value: unknown, secrets: readonly string[], seen: WeakSet<o
     // which is what `JSON.stringify` then writes too. `JSON.stringify` passes
     // the property key; this has none to pass, and `Date`, `URL` and `Buffer`
     // all ignore it.
+    //
+    // Any byte array serialises to its bytes as numbers — a `Buffer` through its
+    // `toJSON`, a plain `Uint8Array` (a `TextEncoder` result, a stream chunk) as
+    // its index keys. Those are decoded and checked as text first: bytes that
+    // spell a secret mask the whole array as a unit, because no number in it
+    // could be masked on its own. The check once sat inside the `toJSON` branch
+    // below, so only a `Buffer` reached it and a plain `Uint8Array` holding a
+    // token was written byte by byte (CC-AUTH-80).
+    if (value instanceof Uint8Array) {
+      const text = new TextDecoder().decode(value);
+      if (redactString(text, secrets) !== text) return REDACTED;
+    }
     const toJSON: unknown = (value as { toJSON?: unknown }).toJSON;
     if (typeof toJSON === 'function' && !Object.hasOwn(value, 'toJSON')) {
-      // A `Buffer` serialises to its bytes as numbers. Those are decoded and
-      // checked as text first: bytes that spell a secret mask the whole buffer
-      // as a unit, because no number in the array could be masked on its own.
-      if (value instanceof Uint8Array) {
-        const text = new TextDecoder().decode(value);
-        if (redactString(text, secrets) !== text) return REDACTED;
-      }
       const json: unknown = toJSON.call(value, '');
       if (json !== value) return redactValue(json, secrets, seen);
     }

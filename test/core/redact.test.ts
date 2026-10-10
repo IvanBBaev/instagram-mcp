@@ -855,6 +855,18 @@ test('a Buffer keeps its JSON form, and is masked as a unit when its bytes spell
   assert.deepEqual(redact([Buffer.from('x registered-secret-bytes y')]), [REDACTED]);
 });
 
+test('a plain Uint8Array is masked as a unit when its bytes spell a secret (CC-AUTH-80)', () => {
+  // A TextEncoder result or a stream chunk has no toJSON, so it was walked as
+  // index keys of numbers that no token shape or registered secret could match.
+  const redact = createRedactor({ extraSecrets: ['registered-secret-bytes'] });
+  const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
+  assert.deepEqual(redact({ b: encode('hi') }), { b: { 0: 104, 1: 105 } });
+  assert.deepEqual(redact({ b: encode(`t EAA${'k'.repeat(30)}`) }), { b: REDACTED });
+  assert.deepEqual(redact([encode('x registered-secret-bytes y')]), [REDACTED]);
+  const line = JSON.stringify(redact({ chunk: encode(`t EAA${'m'.repeat(30)}`) }));
+  assert.equal(line, `{"chunk":"${REDACTED}"}`);
+});
+
 test('an inherited toJSON result is redacted, and one returning its receiver is walked (CC-DATA-123)', () => {
   const token = `EAA${'v'.repeat(30)}`;
   class Wrapped {

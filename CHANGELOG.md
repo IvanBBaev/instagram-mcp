@@ -318,6 +318,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `login` / `refresh` now rewrite an env-store assignment written with dotenv's
   colon separator (`IG_ACCESS_TOKEN: …`) in place, instead of appending below it and
   leaving the superseded token on disk in plaintext (CC-CFG-78).
+- `login` / `refresh` now split the env store on every line ending dotenv honours,
+  including a lone CR. A superseded token in a CR-terminated stretch is no longer
+  left on disk, and such a file no longer makes the write refuse (CC-CFG-80).
 
 ## [0.8.0] — 2026-09-24
 

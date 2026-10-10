@@ -457,6 +457,56 @@ test('a `KEY: value` assignment is recognised, so no stale secret survives the r
   assert.equal(env.IG_AUTH_PATH, 'fb-login', 'our own auth path is still appended');
 });
 
+test('a lone CR ends a line for the merge as it does for dotenv, so no stale secret survives (CC-CFG-80)', async () => {
+  // dotenv reads CRLF, LF and a lone CR alike as a line break; the merge split on
+  // `\r?\n` only. In a CR-only stretch every assignment after the first was
+  // invisible to it: the superseded token stayed on disk in plaintext below the
+  // appended one, and with a managed key first the rewrite replaced the whole
+  // stretch, which `assertReadsBack` refused, so `login` could not write at all.
+  // The fixture mixes all three terminators so every one of them is a boundary.
+  for (const stale of [
+    'IG_ACCESS_TOKEN=stale-token\rIG_LOG_LEVEL=debug\r\nIG_APP_ID=old-app\n# note\rIG_X=1\r',
+    'IG_LOG_LEVEL=debug\rIG_ACCESS_TOKEN=stale-token\r\nIG_APP_ID=old-app\n# note\rIG_X=1\r',
+  ]) {
+    const configDir = await tempConfigDir();
+    const filePath = envFileIn(configDir);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, stale, 'utf8');
+    const before = await parseEnvFile(filePath);
+    assert.equal(before.IG_ACCESS_TOKEN, 'stale-token', 'precondition: dotenv reads the CR line');
+
+    await writeCredentials(
+      'default',
+      { accessToken: LONG_TOKEN, authPath: 'fb-login', appId: '55500' },
+      { configDir },
+    );
+
+    const text = await readFile(filePath, 'utf8');
+    assert.equal(
+      text.includes('stale-token'),
+      false,
+      `the revoked token is still on disk:\n${text}`,
+    );
+    assert.equal(text.includes('old-app'), false, `the stale app id is still on disk:\n${text}`);
+    const expected = stale
+      .replace('stale-token', LONG_TOKEN)
+      .replace('old-app', '55500')
+      .split(/\r\n|\r|\n/)
+      .slice(0, -1);
+    assert.deepEqual(
+      text.split('\n'),
+      [...expected, 'IG_AUTH_PATH=fb-login', ''],
+      'every line is kept in place, each one LF-terminated',
+    );
+    assert.deepEqual(await parseEnvFile(filePath), {
+      ...before,
+      IG_ACCESS_TOKEN: LONG_TOKEN,
+      IG_APP_ID: '55500',
+      IG_AUTH_PATH: 'fb-login',
+    });
+  }
+});
+
 test('`export` is the shell keyword only when whitespace follows it', async () => {
   // The optional `export ` prefix is stripped so `export IG_ACCESS_TOKEN=` is
   // recognised as OUR assignment. The whitespace is what makes it a keyword:

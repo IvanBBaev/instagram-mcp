@@ -25,14 +25,14 @@ pending a decision, or accepted.
 originally designed cases by area, and each heading names the prefix that dominates
 it. Those sections are **not exhaustive for their prefix.** Every case found after the
 sectioning was set is appended at the *end of §8*, in discovery order, carrying
-whatever prefix its subject belongs to — so §8 today holds 519 of the 634 rows the
-catalogue defines, and 307 of those carry a prefix other than the `CC-PROC` its heading
-advertises: 111 `CC-DATA`, 55 `CC-AUTH`, 64 `CC-CFG`, 38 `CC-PUB`, 19 `CC-INS`,
+whatever prefix its subject belongs to — so §8 today holds 520 of the 635 rows the
+catalogue defines, and 308 of those carry a prefix other than the `CC-PROC` its heading
+advertises: 111 `CC-DATA`, 55 `CC-AUTH`, 65 `CC-CFG`, 38 `CC-PUB`, 19 `CC-INS`,
 12 `CC-COM` and 8 `CC-RATE`. That is deliberate on both counts: chronology is the more
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1825 citation sites across the
+Nothing downstream resolves a case by section number; 1827 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -714,6 +714,7 @@ them still resolves.
 | CC-CFG-77 | A dependency major moves its environment switches: dotenv 18 adds `DOTENV_<X>` (with `DOTENV_CONFIG_<X>` as fallback) for `quiet`, `debug`, `encoding`, `fast`, `override` and `path`, and lets a passed option win | **Found on the dotenv 17 → 18 bump, 2026-10-10.** Pin every option the dependency reads from the environment, not only the ones that misbehaved last time. Under 18 the CC-CFG-36 withdrawal no longer covered the knobs: `DOTENV_DEBUG=1` put `┆ no encoding is specified (UTF-8 is used by default)` on line 0 of stdout, and with an encoding passed, `"IG_ACCOUNT_ID" is already defined and was NOT overwritten` for any key the client env shares with the file; `DOTENV_ENCODING=utf16le` decoded the file into keys nothing reads, so the profile went missing; and the load banner moved to stderr, where the stdout-purity test no longer sees `quiet` dropped. `src/index.ts` now passes `dotenvOptions(file)` — `quiet`, `debug`, `encoding`, `override` and `fast` all explicit — and drops the withdraw-and-restore of CC-CFG-36, which an explicit option makes redundant under 18. Planted controls, one option removed at a time: `debug`, `encoding` and `quiet` each fail the knob test (`quiet` through its new stderr assertion); `fast` is an equivalent mutant, noted at the call site. | post-M5 · unit (`test/index.test.ts`) |
 | CC-CFG-78 | The env store holds a dotenv colon assignment, e.g. `IG_ACCESS_TOKEN: EAA…` (a colon right after the key, then whitespace), and `login` / `refresh` rewrites it | **Found by audit 2026-10-10 (wave 21, lane C).** dotenv's line grammar is `KEY(\s*=\s*\|:\s+)value`, so the colon line is an assignment the server reads. `assignmentOn` recognised `=` only: the merge left the line alone and appended the fresh token below it. Last-one-wins served the new token, so `assertReadsBack` passed and `login` reported success, while the superseded token stayed on disk in plaintext (the CC-CFG-9 class). **Fixed:** `assignmentOn` (`src/core/config-write.ts`) also matches `KEY:` followed by whitespace, so the line is rewritten in place as `KEY=value`. `IG_X:glued` and `IG_X : spaced` stay the operator's, as they are not dotenv assignments. Hand mutation: 4/4 killed. | post-M5 · unit (`test/core/config-write.test.ts`) |
 | CC-CFG-79 | `IG_ENV_FILE` names an unreadable file whose name holds a line break (`\n`, `\r`, U+2028) | **Found by audit 2026-10-10 (wave 21, lane C).** The start-up refusal spliced the path in raw (`IG_ENV_FILE names "${explicit}"…`). A one-line stderr refusal therefore became two, and the second line said whatever the file name said, in the log an MCP host keeps of stderr. Every other path refusal already quotes with `home-path.ts`'s `quote` (CC-CFG-51). **Fixed:** `quote` is exported and used by this refusal and by `namedEnvFile`'s relative-path refusal, which had used bare `JSON.stringify` and so left U+2028 / `Cf` raw. Hand mutation: 2/2 killed (raw, bare `JSON.stringify`). | post-M5 · spawned entry (`test/index.test.ts`) |
+| CC-CFG-80 | The env store uses lone CR line endings (a classic-Mac file, or a CR-only stretch in a hand-edited one), and `login` / `refresh` rewrites it | **Found by audit 2026-10-10 (wave 21, lane C).** dotenv normalises CRLF and lone CR to LF before parsing; `mergeEnv` split on `\r?\n` only, so a CR-only stretch was one line to it. With the token past the first line of the stretch, the stale token stayed on disk below the appended one. With a managed key first, the rewrite replaced the whole stretch, `assertReadsBack` refused, and `login` could not write at all. **Fixed:** `mergeEnv` splits on `\r\n?\|\n` (dotenv's terminators) and emits LF, as it already did for CRLF. Hand mutation: 3/3 killed, plus 1 equivalent (`\n\|\r\n?`, the same language). | post-M5 · unit (`test/core/config-write.test.ts`) |
 
 ## 9. Live-probe protocol (cases marked `live`)
 

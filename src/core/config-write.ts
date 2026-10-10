@@ -487,7 +487,13 @@ function mergeEnv(
 ): string {
   const seen = new Set<string>();
   const hadContent = existing.length > 0;
-  const lines = hadContent ? existing.split(/\r?\n/) : [];
+  // Lines end where dotenv's do: it reads CRLF, LF and a lone CR alike as a line
+  // break. Splitting on `\r?\n` alone made a classic-Mac (CR-only) file one
+  // line, so an assignment past its first was invisible here: the superseded
+  // token stayed on disk below the appended one, and a managed key at the very
+  // top took the whole file down with it, which the read-back guard then refused
+  // (CC-CFG-80). The rewrite emits LF, the byte-level equivalent for dotenv.
+  const lines = hadContent ? existing.split(/\r\n?|\n/) : [];
   // Equivalent-mutant note: dropping the length guard is unobservable. On an
   // empty `lines` the index is `-1`, which reads back as `undefined` and is not
   // `''`, so nothing is popped on that path either.

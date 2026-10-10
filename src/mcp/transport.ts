@@ -43,8 +43,8 @@ export interface StdioStreams {
  * Connect `server` to a stdio transport and start serving. Resolves once the
  * transport is listening; the process then stays alive on stdin.
  *
- * **The client leaving must not kill work already in flight.** The SDK's
- * `StdioServerTransport` subscribes to `'error'` on stdin only. When the client
+ * **The client leaving must not kill work already in flight.** SDK v1's
+ * `StdioServerTransport` subscribed to `'error'` on stdin only. When the client
  * exits, the next response written to stdout — a pipe — fails with `EPIPE`,
  * which arrives a tick later as an `'error'` event on the stream; with no
  * listener that is an uncaught exception and the process dies on the spot.
@@ -57,7 +57,7 @@ export interface StdioStreams {
  * error is rethrown to Node exactly as if nothing had subscribed.
  *
  * **stdin EOF is the client leaving too, and it closes the transport the same
- * way (CC-PROC-206).** The SDK transport listens for `'data'` and `'error'`
+ * way (CC-PROC-206).** SDK v1's transport listened for `'data'` and `'error'`
  * only, never `'end'`, so EOF used to change nothing inside the protocol: every
  * request the server had sent the client stayed pending on its own timer. A
  * write parked at the confirmation prompt held the process for the whole
@@ -68,6 +68,13 @@ export interface StdioStreams {
  * not performed and nothing is journaled — and a call already past its gate is
  * left to finish exactly as it is on a dead stdout. A stdin that closes without
  * EOF counts as EOF. The two doors share one close, so a client that shuts both ends closes the transport once.
+ *
+ * **SDK v2 closes on both doors itself** — on any stdout `'error'` and on stdin
+ * `'end'`/`'close'`. These listeners are registered before `server.connect`, so
+ * they still run first: they log the departure once, close the transport (which
+ * makes the SDK's own close a no-op) and rethrow a stdout error that is not a
+ * gone pipe before the SDK listener can swallow it. They are defence in depth
+ * now, and they pin the order (CC-PROC-198, CC-PROC-206).
  */
 export async function startStdio(
   server: McpServer,

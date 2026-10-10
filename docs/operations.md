@@ -101,8 +101,9 @@ same way (CC-DATA-99).
 What the model receives for a failed call is `isError: true` and one text line,
 `Instagram error (<kind>): <message>`, followed by ` (code N)`, ` (subcode M)` or
 ` (code N, subcode M)` when Graph supplied them — and no `structuredContent`, because
-the MCP SDK client validates it against the tool's `outputSchema` even on an error
-and would reject an `{ error }` object as `-32602` (CC-DATA-61).
+a v1 MCP SDK client validates it against the tool's `outputSchema` even on an error
+and would reject an `{ error }` object as `-32602` (the v2 client skips that check,
+but v1 clients are still in the field) (CC-DATA-61).
 
 ## 4. Pagination & response budget
 

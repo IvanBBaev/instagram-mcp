@@ -233,9 +233,10 @@ A failed call is `isError: true` with one text line and **no** `structuredConten
 `Instagram error (<kind>): <message>`, followed by ` (code N)`, ` (subcode M)` or
 ` (code N, subcode M)` when Graph supplied them. `kind` is one of `auth`, `permission`,
 `rate_limit`, `validation`, `upstream`; anything else renders as `Unexpected error`.
-The envelope is text-only on purpose: the MCP SDK client validates any
+The envelope is text-only on purpose: a v1 MCP SDK client validates any
 `structuredContent` against the tool's `outputSchema` even on an error result, so an
-`{ error }` object would turn every typed error into a `-32602` schema rejection
+`{ error }` object would turn every typed error into a `-32602` schema rejection for
+it; the v2 client skips that check, but v1 clients are still in the field
 (CC-DATA-61).
 
 ## Tool-count budget

@@ -2574,21 +2574,23 @@ test('loading an env file puts nothing on stdout, so the JSON-RPC framing surviv
   }
 });
 
-test('a dotenv knob in the environment cannot talk its way onto stdout', async () => {
-  // The sibling test above proves `quiet: true` is PASSED. It cannot prove the
-  // option is OBEYED, and under dotenv 17 it frequently is not: both switches
-  // resolve as `parseBoolean(processEnv.DOTENV_CONFIG_* || (options && options.*))`,
-  // so the environment wins the moment it carries either one. `DOTENV_CONFIG_QUIET`
-  // set to any of `false`/`0`/`no`/`off`/`` brings the banner back, and
-  // `DOTENV_CONFIG_DEBUG` adds a trace per candidate that names the config-home
-  // path — both on the single stream the stdio transport frames, and both while
-  // `loadEnvFiles` is still passing `quiet: true` and looking correct.
+test('a dotenv knob in the environment cannot talk its way onto stdout or into the file', async () => {
+  // The sibling test above proves `quiet: true` is PASSED; this one proves no
+  // switch in the environment outvotes the options `loadEnvFiles` passes. dotenv
+  // reads its own knobs off the environment — `DOTENV_<X>`, with
+  // `DOTENV_CONFIG_<X>` as the fallback spelling — and only an option passed in
+  // code beats them. Under dotenv 17 not even that held: the environment operand
+  // was on the LEFT of `||` and won outright (CC-CFG-36). Under dotenv 18 the
+  // option wins, so the risk moved to the options NOT passed (CC-CFG-77):
+  // `DOTENV_DEBUG=1` adds a `console.log` trace per load — on stdout, the single
+  // stream the stdio transport frames — and `DOTENV_ENCODING` decides how the
+  // file is decoded at all.
   //
   // Nothing here is the operator's fault: these are dotenv's own documented
-  // switches, they are exported for a whole shell rather than one command, and
-  // `baseEnv` hands the ambient environment to the child untouched. A developer
-  // with `DOTENV_CONFIG_DEBUG=1` exported would have watched the test above go
-  // red with no hint that the cause was their shell.
+  // switches, exported for a whole shell rather than one command, and `baseEnv`
+  // hands the ambient environment to the child untouched. Every spelling is set
+  // at once, so a knob dropped from the pinned options fails here whichever
+  // dotenv major is installed.
   const sandbox = await makeSandbox();
   try {
     const { writeCredentials } = await import('../src/core/config-write.js');
@@ -2599,7 +2601,19 @@ test('a dotenv knob in the environment cannot talk its way onto stdout', async (
     );
 
     const running = startEntry(sandbox, [], {
-      env: { IG_LOG_LEVEL: 'info', DOTENV_CONFIG_DEBUG: '1', DOTENV_CONFIG_QUIET: 'false' },
+      env: {
+        IG_LOG_LEVEL: 'info',
+        DOTENV_DEBUG: '1',
+        DOTENV_CONFIG_DEBUG: '1',
+        DOTENV_QUIET: 'false',
+        DOTENV_CONFIG_QUIET: 'false',
+        DOTENV_ENCODING: 'utf16le',
+        DOTENV_CONFIG_ENCODING: 'utf16le',
+        // The same value the file carries. dotenv 18's debug trace speaks per key
+        // the environment already holds ("… is already defined and was NOT
+        // overwritten"), so without a shared key `DOTENV_DEBUG` has nothing to say.
+        IG_ACCOUNT_ID: '17841400000000000',
+      },
     });
     try {
       let stdout = '';
@@ -2633,14 +2647,20 @@ test('a dotenv knob in the environment cannot talk its way onto stdout', async (
         assert.doesNotThrow(
           () => JSON.parse(line),
           `non-JSON-RPC line on stdout: ${JSON.stringify(line)} \u2014 a dotenv switch in the ` +
-            'environment beat the `quiet: true` passed in code, which is what withdrawing ' +
-            '`DOTENV_CONFIG_QUIET`/`DOTENV_CONFIG_DEBUG` around the load is there to stop.',
+            'environment chose an option `loadEnvFiles` left unpinned (see `dotenvOptions`).',
         );
       }
       assert.match(running.stderr(), /tools registered/);
       assert.ok(
         !stdout.includes(sandbox.configHome),
         'the debug trace names the file it loaded, so a leaked path is the shape this takes',
+      );
+      // dotenv 18 moved the load banner to STDERR, so the stdout check above no
+      // longer sees `quiet` dropped. stderr is the logger's stream, not a free one:
+      // a raw banner there bypasses the log format and names the config-home path.
+      assert.ok(
+        !running.stderr().includes('injected env'),
+        `dotenv's load banner reached stderr: ${running.stderr()}`,
       );
       assert.ok(!stdout.includes(TOKEN), 'no credential may reach stdout');
     } finally {

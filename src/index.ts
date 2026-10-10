@@ -50,8 +50,31 @@ const SERVER_VERSION = '0.8.0';
 
 const MIN_NODE_MAJOR = 22;
 
-/** dotenv's own switches, which it reads from the environment and lets win over our options. */
-const DOTENV_ENV_KNOBS = ['DOTENV_CONFIG_QUIET', 'DOTENV_CONFIG_DEBUG'] as const;
+/**
+ * Every option dotenv 18 would otherwise read off the environment, pinned at the
+ * call site. dotenv resolves `{ ...optionsFromEnv(), ...options }`, so an option
+ * passed here beats `DOTENV_<X>` / `DOTENV_CONFIG_<X>`, while an option left out
+ * is the operator's shell's to choose (CC-CFG-36, CC-CFG-77):
+ *
+ *   - `quiet: true` — a load otherwise prints "injected env (N) from <path>" to
+ *     stderr, outside the log format and naming the config-home path (dotenv 17
+ *     printed it to stdout, the stream the stdio transport frames as JSON-RPC).
+ *   - `debug: false` — `DOTENV_DEBUG=1` otherwise adds a `console.log` trace per
+ *     key the environment already holds, on stdout.
+ *   - `encoding: 'utf8'` — `DOTENV_ENCODING=utf16le` otherwise decodes the file
+ *     into keys no code reads, and a configured profile goes missing.
+ *   - `override: false` — client env wins (§6).
+ *
+ * The first three are held by "a dotenv knob in the environment cannot talk its
+ * way onto stdout or into the file". Equivalent-mutant note: `fast: false` is not
+ * observable today — the character-scanner parser and the regex parser agreed on
+ * every spelling tried (comments, quotes, backticks, `export`, `KEY: value`, CRLF,
+ * escapes) — and it is pinned so the operator's shell does not pick the parser
+ * this server's env files are read with.
+ */
+function dotenvOptions(file: string): Parameters<typeof dotenvConfig>[0] {
+  return { path: file, override: false, quiet: true, debug: false, encoding: 'utf8', fast: false };
+}
 
 /** Fail fast on an unsupported runtime before any Node-22-only API is touched. */
 function assertNodeVersion(): void {
@@ -98,27 +121,13 @@ function loadEnvFiles(): Map<string, string> {
   // directory on both sides, and a shell-only spelling (`$HOME/…`, `%APPDATA%…`,
   // `~user/…`) stops the start with IG_ENV_FILE named instead of reaching dotenv.
   const explicit = namedEnvFile({ IG_ENV_FILE: process.env.IG_ENV_FILE });
-  // `quiet: true` alone does NOT hold the stream, because dotenv 17 reads its own
-  // knobs off the environment and lets them BEAT the options passed here:
-  // `parseBoolean(processEnv.DOTENV_CONFIG_QUIET || (options && options.quiet))`
-  // (`dotenv/lib/main.js`). An operator carrying `DOTENV_CONFIG_QUIET=false` for
-  // some other project's benefit therefore gets the banner on OUR stdout in spite
-  // of the option, and `DOTENV_CONFIG_DEBUG=1` adds a trace per candidate that
-  // names the config-home path — both on the one stream the stdio transport owns.
-  // Neither is negotiable by an environment variable, so the knobs are withdrawn
-  // for the length of the load and put back exactly as they were afterwards. Note
-  // that "was not set" is not the same as "set to empty": `''` parses as false,
-  // so restoring a missing knob by assignment would turn quiet OFF for whoever
-  // reads it next.
-  const knobs = DOTENV_ENV_KNOBS.map((knob) => [knob, process.env[knob]] as const);
-  for (const [knob] of knobs) delete process.env[knob];
   // Which file supplied each key the load added (a key absent here was already
   // in the environment the client passed). `override: false` means a file only
   // ever adds keys, so the before/after difference is exactly its contribution.
   const setBy = new Map<string, string>();
   const load = (file: string): ReturnType<typeof dotenvConfig> => {
     const before = new Set(Object.keys(process.env));
-    const loaded = dotenvConfig({ path: file, override: false, quiet: true });
+    const loaded = dotenvConfig(dotenvOptions(file));
     const added = Object.keys(process.env).filter((key) => !before.has(key));
     // CC-CFG-71: a file value is judged by the rule the client's environment is
     // (CC-CFG-46). An unexpanded `${user_config.X}` template written INTO a file
@@ -133,57 +142,40 @@ function loadEnvFiles(): Map<string, string> {
     }
     return loaded;
   };
-  try {
-    // An explicit `IG_ENV_FILE` is a statement of intent, not a candidate: it
-    // REPLACES the list below, so a path that cannot be read would otherwise
-    // leave the process with no env file at all and nothing saying why — the
-    // operator reads "No default profile configured" about a file they did
-    // configure, or, with a token in the real environment, a server that starts
-    // without every other knob that file set. dotenv reports a missing file, a
-    // directory and an unreadable file alike through `error` rather than
-    // throwing, so that is what is checked. The path is echoed; it is where the
-    // operator has to look, and it is not a secret.
-    if (explicit !== undefined) {
-      const loaded = load(explicit);
-      if (loaded.error !== undefined) {
-        throw new InstagramError(
-          `IG_ENV_FILE names "${explicit}", which could not be read as an env file`,
-          { kind: 'validation' },
-        );
-      }
-      return setBy;
-    }
-    const candidates = [
-      path.join(resolveConfigHome(), SERVER_NAME, '.env'),
-      path.resolve(process.cwd(), '.env'),
-    ];
-    for (const file of candidates) {
-      // `quiet: true` is load-bearing, not cosmetic. From dotenv 17 a successful
-      // load prints a banner ("injected env (N) from …" plus a product tip) to
-      // STDOUT. On the stdio transport stdout carries JSON-RPC and nothing else,
-      // so that banner is a framing error the client reports as a parse failure —
-      // and it leaks the config-home path into the stream on the way. dotenv 16
-      // ignores the option, so this is correct under both. Dropping it is caught
-      // by "loading an env file puts nothing on stdout, so the JSON-RPC framing
-      // survives it", and the withdrawal above is held by "a dotenv knob in the
-      // environment cannot talk its way onto stdout".
-      //
-      // Equivalent-mutant note: the `existsSync` guard is an optimisation, not a
-      // behaviour — dotenv 17 given a missing path returns an error object, writes
-      // nothing to either stream (quiet, which the withdrawal above now makes
-      // unconditional) and throws nothing, so calling it unconditionally is
-      // indistinguishable from skipping. It stays because "load the files that
-      // exist" is the documented rule, and because it is what keeps a future
-      // dotenv's missing-file diagnostics off stdout.
-      if (existsSync(file)) load(file);
+  // An explicit `IG_ENV_FILE` is a statement of intent, not a candidate: it
+  // REPLACES the list below, so a path that cannot be read would otherwise
+  // leave the process with no env file at all and nothing saying why — the
+  // operator reads "No default profile configured" about a file they did
+  // configure, or, with a token in the real environment, a server that starts
+  // without every other knob that file set. dotenv reports a missing file, a
+  // directory and an unreadable file alike through `error` rather than
+  // throwing, so that is what is checked. The path is echoed; it is where the
+  // operator has to look, and it is not a secret.
+  if (explicit !== undefined) {
+    const loaded = load(explicit);
+    if (loaded.error !== undefined) {
+      throw new InstagramError(
+        `IG_ENV_FILE names "${explicit}", which could not be read as an env file`,
+        { kind: 'validation' },
+      );
     }
     return setBy;
-  } finally {
-    for (const [knob, value] of knobs) {
-      if (value === undefined) delete process.env[knob];
-      else process.env[knob] = value;
-    }
   }
+  const candidates = [
+    path.join(resolveConfigHome(), SERVER_NAME, '.env'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+  for (const file of candidates) {
+    // Equivalent-mutant note: the `existsSync` guard is an optimisation, not a
+    // behaviour — dotenv given a missing path returns an error object, writes
+    // nothing to either stream (`quiet` holds the banner and `debug: false` the
+    // per-file failure trace — see `dotenvOptions`) and throws nothing, so
+    // calling it unconditionally is indistinguishable from skipping. It stays because "load the files that
+    // exist" is the documented rule, and because it is what keeps a future
+    // dotenv's missing-file diagnostics off stdout.
+    if (existsSync(file)) load(file);
+  }
+  return setBy;
 }
 
 /** Register every secret value so the redactor masks it in all log output. */

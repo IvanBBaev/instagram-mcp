@@ -225,6 +225,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The production dependency tree is clear of audit advisories again.
+  `@modelcontextprotocol/sdk` goes from `^1.30.0` (1.30.0) to `^1.32.1`
+  (GHSA-6qxp-vccf-f47h, high: the SDK's OAuth *client* could send credentials to
+  an authorization server chosen by the MCP server), and the lockfile refresh
+  moves its transitive `proxy-addr` 2.0.7 → 2.0.8 (GHSA-jqcg-44mw-7w3h, critical),
+  `fast-uri` 3.1.7 → 3.1.8 (GHSA-hrr3-gc8f-f4qj, moderate) and `ip-address`
+  10.4.0 → 10.7.3 (four moderate classifier advisories); no `overrides` entry was
+  needed. None was reachable here: this package is an MCP server and never loads
+  the SDK's OAuth client; its HTTP transport is `node:http` plus the SDK's
+  `StreamableHTTPServerTransport`, so the SDK's express app and auth router —
+  the only code that loads `express` (with `proxy-addr`) and `express-rate-limit`
+  (with `ip-address`) — are never imported, and `src/` sets no `trust proxy` and
+  classifies no IP address with a library. `fast-uri` is loaded, through the
+  SDK's ajv validator, but only resolves the server's own schema ids.
 - A secret redactor that throws while masking a tool result (a JSON body nested
   too deep to walk, for one) now withholds the result like any other unusable
   redaction, instead of letting the exception's own message reach the client

@@ -13,7 +13,7 @@
 > (task IDs `T-*`, integration gates G1–G5 mapped to the M-phases below). The
 > roadmap stays the milestone view; the workplan is the execution view.
 
-## Current state (updated 2026-10-01)
+## Current state (updated 2026-10-10)
 
 Status vocabulary used throughout this file and [workplan.md](workplan.md):
 **DONE** · **PARTIAL** (some of it shipped, rest named below) · **BLOCKED**
@@ -29,7 +29,7 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle, the plugin-marketplace listing, and clean-machine install testing of any channel. Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
-**Where the project stands (2026-10-01).** `instagram-mcp-ai` 0.7.0 has been on
+**Where the project stands (2026-10-10).** `instagram-mcp-ai` 0.7.0 has been on
 npm since 2026-08-25. The tree is versioned 0.8.0 (`CHANGELOG.md` dates that
 section 2026-09-24, and the work since sits under `[Unreleased]`), but 0.8.0 is
 **not published** — npm still serves 0.7.0 and the repository has no tag for
@@ -41,7 +41,12 @@ owner's go-ahead. Audit waves 18 and 19 have run since 0.7.0, and on
 item 6 of the open-question register below). The surface is now **29 tools**
 (`instagram_list_stories` joined `media`, CC-DATA-119; the comment toggle moved to
 `comments`, CC-PROC-9): 26 under the default `core` profile, 16 under `reader`, 22
-under `publisher`. The suite is at 2549 tests with 100% coverage on every axis,
+under `publisher`. Since then (2026-10-10) the production dependency advisories were
+cleared, audit wave 20 fixed CC-AUTH-79 (Path-B calls are re-signed on every retry
+and slot wait), and the server moved to the MCP TypeScript SDK v2
+(`@modelcontextprotocol/server` 2.x, zod 4) — the tool surface is unchanged, but the
+published JSON Schemas changed shape (see `CHANGELOG.md` `[Unreleased]`). The suite
+is at 2556 tests with 100% coverage on every axis,
 and every module has been through mutation testing. Two of those tests fail, both
 the CC-CFG-69 canary tripping on a stray `./   /` directory in the working tree —
 an owner action (delete the directory), not a code defect. None of that changes a

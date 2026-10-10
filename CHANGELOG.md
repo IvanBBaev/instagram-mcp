@@ -244,6 +244,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also carried a misleading `Too big: expected string to have <=10 characters`
   (or `>=1 characters`). Item-count limits on real lists and the published
   `minItems` / `maxItems` are unchanged (CC-PUB-67).
+- `login` with an `http:` redirect URI that names no port (or names `:80`, which
+  the URL parser drops) now listens on port 80, where the browser is sent. It used
+  to listen on 8723, so the redirect never arrived and the login waited until
+  the five-minute timeout (CC-CFG-82).
 
 ### Removed
 

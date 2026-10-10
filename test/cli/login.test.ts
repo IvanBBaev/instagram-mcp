@@ -3694,21 +3694,32 @@ test('with no fetch injected the exchanges go through the global fetch', async (
   }
 });
 
-test('captureAuthorizationCode binds the default port when the redirect URI names none', async () => {
+test('captureAuthorizationCode binds the scheme default port when the redirect URI names none', async () => {
   // `http://127.0.0.1/callback` is a legal redirect URI and Meta accepts it, but
-  // `url.port` is then `''`. `Number('')` is 0, which `listen` reads as "any free
-  // port" — the listener would come up somewhere the browser never redirects to
-  // and the login would sit there until the five-minute timeout.
+  // `url.port` is then `''` — and it is `''` for `http://127.0.0.1:80/callback`
+  // too, because the WHATWG parser drops a port equal to the scheme's default.
+  // The browser follows either one to port 80, so that is the port to bind:
+  // `Number('')` is 0 ("any free port") and the old fallback to 8723 were both
+  // somewhere the redirect never arrives, and the login sat there until the
+  // five-minute timeout.
+  for (const redirectUri of ['http://127.0.0.1/callback', 'http://127.0.0.1:80/callback']) {
+    const server = fakeCallbackServer();
+    const clock = fakeClock(0);
+    const pending = captureAuthorizationCode(
+      { redirectUri, state: 's' },
+      { createServerImpl: server.create, clock, timeoutMs: 1000 },
+    );
+    assert.deepEqual(server.listens[0], { port: 80, host: '127.0.0.1' }, redirectUri);
+    server.send('/callback?code=abc&state=s');
+    assert.equal(await pending, 'abc');
+  }
+  // A scheme with no browser default to follow keeps the CLI's own port.
   const server = fakeCallbackServer();
-  const clock = fakeClock(0);
   const pending = captureAuthorizationCode(
-    { redirectUri: 'http://127.0.0.1/callback', state: 's' },
-    { createServerImpl: server.create, clock, timeoutMs: 1000 },
+    { redirectUri: 'foo://127.0.0.1/callback', state: 's' },
+    { createServerImpl: server.create, clock: fakeClock(0), timeoutMs: 1000 },
   );
-  assert.deepEqual(server.listens[0], {
-    port: Number(new URL(DEFAULT_REDIRECT_URI).port),
-    host: '127.0.0.1',
-  });
+  assert.deepEqual(server.listens[0], { port: 8723, host: '127.0.0.1' });
   server.send('/callback?code=abc&state=s');
   assert.equal(await pending, 'abc');
 });

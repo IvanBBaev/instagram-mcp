@@ -63,6 +63,8 @@ const FB_GRAPH_BASE = 'https://graph.facebook.com';
  * added (or `--redirect-uri` passed) — Meta matches redirect URIs literally.
  */
 const DEFAULT_REDIRECT_PORT = 8723;
+/** The port a browser follows an `http:` URI to when the URI names none. */
+const HTTP_DEFAULT_PORT = 80;
 /** The only loopback addresses this CLI will bind (see {@link listenHostFor}). */
 const LOOPBACK_IPV4 = '127.0.0.1';
 const LOOPBACK_IPV6 = '::1';
@@ -688,7 +690,14 @@ export function captureAuthorizationCode(
   deps: CaptureDeps = {},
 ): Promise<string> {
   const url = new URL(params.redirectUri);
-  const port = url.port !== '' ? Number(url.port) : DEFAULT_REDIRECT_PORT;
+  // An empty `url.port` means the URI names no port OR names the scheme's own
+  // default (the WHATWG parser drops `:80` from an `http:` URI). Either way the
+  // browser follows an `http:` redirect to port 80, so that is where to listen;
+  // 8723 there left the listener where the redirect never arrives. Any other
+  // scheme keeps the CLI default. Pinned by "captureAuthorizationCode binds the
+  // scheme default port when the redirect URI names none".
+  const defaultPort = url.protocol === 'http:' ? HTTP_DEFAULT_PORT : DEFAULT_REDIRECT_PORT;
+  const port = url.port !== '' ? Number(url.port) : defaultPort;
   // The `'/'` arm is reached by a redirect URI whose scheme is not special:
   // the WHATWG parser normalises an empty path to `/` only for special schemes,
   // `listenHostFor` below checks the HOST and not the scheme, and nothing between

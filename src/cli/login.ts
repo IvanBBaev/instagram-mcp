@@ -973,7 +973,11 @@ function unknownArgumentLine({ unknownArgument, hint, after }: UnknownArgument):
     );
   }
   const suffix = hint === undefined ? '' : ` (${hint})`;
-  return `login: unknown argument '${unknownArgument}'${suffix}.`;
+  // The token-shape redactor, as on the entry's own refusals (CC-PROC-208): a
+  // token pasted as a positional, or behind a single-dash slip that is never
+  // split at `=` (`-access-token=EAA…`), would otherwise be echoed whole.
+  const named = String(createRedactor()(unknownArgument));
+  return `login: unknown argument '${named}'${suffix}.`;
 }
 
 /**

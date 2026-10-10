@@ -2886,6 +2886,25 @@ test('the inline =value form belongs to the long flags: -p=ig is refused as an u
 
 // --- runLogin: unknown arguments are refused --------------------------------
 
+test('a refused token that is token-shaped is named [REDACTED], never echoed', async () => {
+  // A token pasted where a path name goes (`login EAA…`), or behind a single-dash
+  // slip of a long flag (`-access-token=EAA…`, never split at `=`), reached the
+  // refusal whole. The entry's own refusals run every echoed name through the
+  // token-shape redactor (CC-PROC-208); this one now does too.
+  const help = await helpText();
+  for (const [token, named] of [
+    [LONG_TOKEN, '[REDACTED]'],
+    [`-access-token=${LONG_TOKEN}`, '-access-token=[REDACTED]'],
+  ] as const) {
+    const { deps, out, steps } = mustStopAtParsing();
+    const code = await runLogin(['--path', 'ig', token], deps);
+    assert.equal(code, 2);
+    assert.equal(out(), `login: unknown argument '${named}'.\n\n${help}`);
+    assert.ok(!out().includes(LONG_TOKEN), 'the token must not reach stderr');
+    assert.deepEqual(steps, []);
+  }
+});
+
 test('an unknown long flag is refused with exit 2, the token named whole, and nothing past the parser runs', async () => {
   // Until 2026-09-19 an unknown token was skipped in silence and the command
   // carried on with whatever the rest of the line said — the shape that let

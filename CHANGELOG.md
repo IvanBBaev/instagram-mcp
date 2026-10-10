@@ -341,6 +341,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Buffer` already was. Before, it was copied as one number per byte, which no
   secret pattern can match, so the secret reached the log byte by byte
   (CC-AUTH-80).
+- `login` no longer echoes a token-shaped argument in its unknown-argument
+  refusal. A token pasted as a positional (`login --path ig EAA…`) or after a
+  single-dash slip (`-access-token=EAA…`) is now named `[REDACTED]`, as the entry's
+  own refusals already do (CC-CFG-83).
 
 ## [0.8.0] — 2026-09-24
 

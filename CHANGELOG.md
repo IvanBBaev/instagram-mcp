@@ -229,6 +229,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (CC-DATA-120).
 - `instagram_create_comment` and `instagram_reply_to_comment` refuse a message made
   only of zero-width or invisible characters (CC-COM-20).
+- The start-up refusal for an unreadable `IG_ENV_FILE`, and the refusal for a
+  relative one, now quote the path with every line break and invisible character
+  escaped, so a file name can no longer split the refusal into a forged stderr line
+  (CC-CFG-79).
 
 ### Removed
 

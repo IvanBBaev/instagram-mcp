@@ -36,6 +36,7 @@ import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
 import { refreshToken } from './core/refresh.js';
 import { namedEnvFile, resolveConfigHome, writeCredentials } from './core/config-write.js';
+import { quote } from './core/home-path.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { PACKAGE_ENV_NAMES, registerTools } from './mcp/registry.js';
@@ -150,12 +151,15 @@ function loadEnvFiles(): Map<string, string> {
   // without every other knob that file set. dotenv reports a missing file, a
   // directory and an unreadable file alike through `error` rather than
   // throwing, so that is what is checked. The path is echoed; it is where the
-  // operator has to look, and it is not a secret.
+  // operator has to look, and it is not a secret. It is echoed QUOTED, as every
+  // other path refusal is (CC-CFG-79): a POSIX file name may hold a line break,
+  // and spliced in raw it split this one-line refusal in two, the second line
+  // whatever the name said, in the log file an MCP host keeps of stderr.
   if (explicit !== undefined) {
     const loaded = load(explicit);
     if (loaded.error !== undefined) {
       throw new InstagramError(
-        `IG_ENV_FILE names "${explicit}", which could not be read as an env file`,
+        `IG_ENV_FILE names ${quote(explicit)}, which could not be read as an env file`,
         { kind: 'validation' },
       );
     }

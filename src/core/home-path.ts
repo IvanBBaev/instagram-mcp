@@ -52,9 +52,10 @@ const INVISIBLE = /[\p{Cf}\p{Zl}\p{Zp}]/gu;
 /**
  * `value` as a JSON string literal with every invisible character escaped. An
  * astral match (the Unicode tag block is `Cf`) is two UTF-16 code units, so it is
- * escaped unit by unit, exactly as JSON spells a surrogate pair.
+ * escaped unit by unit, exactly as JSON spells a surrogate pair. Exported for
+ * every refusal that echoes an operator-supplied path (CC-CFG-79).
  */
-function quote(value: string): string {
+export function quote(value: string): string {
   return JSON.stringify(value).replace(INVISIBLE, (c) =>
     c
       .split('')

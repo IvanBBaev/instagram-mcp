@@ -1390,8 +1390,38 @@ test('an IG_ENV_FILE that names no readable file refuses to start and names the 
       assert.equal(run.status, 1, `an unreadable IG_ENV_FILE must refuse, stderr: ${run.stderr}`);
       assert.equal(
         run.stderr,
-        `instagram-mcp-ai failed to start: IG_ENV_FILE names "${explicit}", which could not be read as an env file\n`,
+        `instagram-mcp-ai failed to start: IG_ENV_FILE names ${JSON.stringify(explicit)}, which could not be read as an env file\n`,
       );
+      assert.equal(run.stdout, '');
+      assert.deepEqual(await recordedRequests(sandbox), [], 'nothing may reach the wire');
+    }
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
+test('an unreadable IG_ENV_FILE is echoed quoted, so its name cannot forge a stderr line (CC-CFG-79)', async () => {
+  // The refusal spliced the path in raw between two double quotes. A POSIX file
+  // name may hold a line break (or U+2028, which a log viewer also breaks on),
+  // so the one-line refusal became two, the second one whatever the name said,
+  // in the stderr log an MCP host keeps. Every other path refusal quotes with
+  // `quote` (CC-CFG-51); this one now does too.
+  const sandbox = await makeSandbox();
+  try {
+    const forged = 'instagram-mcp-ai: token refreshed';
+    for (const lineBreak of ['\n', '\r', '\u2028']) {
+      const explicit = path.join(sandbox.configHome, `x.env${lineBreak}${forged}`);
+      const run = runEntry(sandbox, ['doctor'], {
+        env: { IG_ENV_FILE: explicit, IG_ACCESS_TOKEN: TOKEN },
+        routes: [{ match: '/me', body: { id: '17841400000000000' } }],
+      });
+      assert.equal(run.status, 1, `stderr: ${run.stderr}`);
+      const escaped = JSON.stringify(explicit).replace('\u2028', '\\u2028');
+      assert.equal(
+        run.stderr,
+        `instagram-mcp-ai failed to start: IG_ENV_FILE names ${escaped}, which could not be read as an env file\n`,
+      );
+      assert.equal(run.stderr.split(/[\r\n\u2028]/).length, 2, 'one line, then the final newline');
       assert.equal(run.stdout, '');
       assert.deepEqual(await recordedRequests(sandbox), [], 'nothing may reach the wire');
     }

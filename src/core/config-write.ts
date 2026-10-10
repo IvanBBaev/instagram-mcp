@@ -47,7 +47,7 @@ import {
   envVarFor,
   formatExpiryRecord,
 } from './config.js';
-import { assertNotShellSpelling, expandHomeTilde, homeDirectory } from './home-path.js';
+import { assertNotShellSpelling, expandHomeTilde, homeDirectory, quote } from './home-path.js';
 import { isRecordableExpiry } from './time.js';
 import { InstagramError } from './types.js';
 import type { AuthPath } from './types.js';
@@ -269,7 +269,7 @@ export function namedEnvFile(env: NodeJS.ProcessEnv = process.env): string | und
   assertNotShellSpelling(expanded, 'IG_ENV_FILE', STORE_PURPOSE);
   if (!path.isAbsolute(expanded)) {
     throw new InstagramError(
-      `IG_ENV_FILE is set to ${JSON.stringify(expanded)}, which is not an absolute file name. ` +
+      `IG_ENV_FILE is set to ${quote(expanded)}, which is not an absolute file name. ` +
         'A relative name is resolved against the working directory of whichever process ' +
         'reads it — for the server, the directory its MCP client starts it in — so the ' +
         'server and login / refresh could each use a different file; set IG_ENV_FILE to an ' +

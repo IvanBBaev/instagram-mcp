@@ -25,14 +25,14 @@ pending a decision, or accepted.
 originally designed cases by area, and each heading names the prefix that dominates
 it. Those sections are **not exhaustive for their prefix.** Every case found after the
 sectioning was set is appended at the *end of §8*, in discovery order, carrying
-whatever prefix its subject belongs to — so §8 today holds 515 of the 630 rows the
-catalogue defines, and 303 of those carry a prefix other than the `CC-PROC` its heading
-advertises: 111 `CC-DATA`, 54 `CC-AUTH`, 61 `CC-CFG`, 38 `CC-PUB`, 19 `CC-INS`,
+whatever prefix its subject belongs to — so §8 today holds 516 of the 631 rows the
+catalogue defines, and 304 of those carry a prefix other than the `CC-PROC` its heading
+advertises: 111 `CC-DATA`, 55 `CC-AUTH`, 61 `CC-CFG`, 38 `CC-PUB`, 19 `CC-INS`,
 12 `CC-COM` and 8 `CC-RATE`. That is deliberate on both counts: chronology is the more
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1802 citation sites across the
+Nothing downstream resolves a case by section number; 1810 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -710,6 +710,7 @@ them still resolves.
 | CC-DATA-132 | A story expires between two pages of an `instagram_list_stories` walk, or the account has no live story | **Handled by design 2026-09-30.** The expired story drops out of the next page with no error and no note, and an empty result means "nothing live now", not "never posted"; the tool description says both. `[verify — needs a live call: GET /{ig-user-id}/stories on both hosts with limit=1, following paging.cursors.after across a story's expiry, and record the paging shape, the absence of like_count/comments_count, and whether GET /{story-id} 404s after expiry]` | post-M5 · unit + live |
 | CC-DATA-133 | A `mediaAfter` cursor taken from one username's `discover_business` result is passed with a different `username` | **Documented, left 2026-09-30.** The cursor is opaque, so the server cannot bind it to a username; the `mediaAfter` description states that a mismatch is not detected. No recommendation for real binding was recorded, and inventing one would mean parsing Meta's cursor. | post-M5 · docs |
 | CC-COM-20 | A comment or reply `message` made only of zero-width or invisible characters (U+200B, U+2060, U+FEFF, U+200D, or the CC-DATA-126 blank renderers) | **Fixed 2026-09-30.** The `messageField` refines on `visibleText(v) !== undefined` with 'must contain a visible character, not only invisible or zero-width ones'; the `\S` pattern stays in the published schema. Visible text that contains one of them is posted as written. | post-M5 · unit |
+| CC-AUTH-79 | A Path-B call that waits before it is sent — retried after a 429/5xx with `Retry-After` (capped at 60 s, up to three times), or queued behind the per-host concurrency limit — carries the `appsecret_time` and `appsecret_proof` minted for its first attempt | **Fixed 2026-10-10. Found by audit 2026-10-10 (wave 20).** `request` resolved `auth.authParams(host)` once per call, before the semaphore wait and the retry loop, so every retry and every queued call went out with the time and proof of the moment it was first built. That is up to minutes stale, which re-widens the replay window CC-AUTH-15 bounds and lets Graph refuse a stale `appsecret_time`, turning a recoverable 429 into an auth failure. The credential is now placed per attempt, right before `fetch`: in the query of a GET or in the form body of a write (CC-PROC-25), with exactly one copy either way. The path is still validated up front, so a refused path never reaches the auth provider or takes a slot. Pinned in `test/core/http.test.ts` by 'a retried GET is re-signed at the time of the retry, not of the first attempt (CC-AUTH-79)', 'a retried idempotent write is re-signed in its body, carrying one credential (CC-AUTH-79)', 'a call queued for a concurrency slot is signed when it is sent, not when it queued (CC-AUTH-79)' and 'an unpinned path is refused before the auth provider runs or a slot is taken (CC-AUTH-79)'. | post-M5 · unit |
 
 ## 9. Live-probe protocol (cases marked `live`)
 

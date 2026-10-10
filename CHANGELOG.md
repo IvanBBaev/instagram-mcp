@@ -239,6 +239,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (with `ip-address`) — are never imported, and `src/` sets no `trust proxy` and
   classifies no IP address with a library. `fast-uri` is loaded, through the
   SDK's ajv validator, but only resolves the server's own schema ids.
+- A Path-B (Facebook Login) call that is retried after a 429/5xx, or that waits for
+  a concurrency slot, is now signed again when it is sent. Before, every attempt
+  reused the `appsecret_time` and `appsecret_proof` minted for the first one, up to
+  minutes stale, which widened the replay window and could make Graph refuse the
+  retry (CC-AUTH-79).
 - A secret redactor that throws while masking a tool result (a JSON body nested
   too deep to walk, for one) now withholds the result like any other unusable
   redaction, instead of letting the exception's own message reach the client

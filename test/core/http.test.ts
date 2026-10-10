@@ -4,6 +4,7 @@
  * network) and a recording clock (no real time — `sleep` resolves instantly and
  * records its requested duration so backoff/Retry-After math is assertable).
  */
+import { createHmac } from 'node:crypto';
 import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +17,7 @@ import type {
   UsageSnapshot,
 } from '../../src/core/types.js';
 import type { Clock } from '../../src/core/clock.js';
+import { createAuthProvider } from '../../src/core/auth.js';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.js';
 import { ALLOWED_HOSTS, GRAPH_VERSION, assertAllowedHost, buildUrl } from '../../src/core/host.js';
 import { createIgRequest, createSemaphoreRegistry } from '../../src/core/http.js';
@@ -1063,6 +1065,175 @@ test('429 retries then succeeds; Retry-After is honored and capped at 60s', asyn
   assert.equal(out.ok, true);
   assert.equal(calls.length, 3);
   assert.deepEqual(clock.sleeps, [60_000, 2_000]);
+});
+
+// --- http.ts: the time-bound proof is signed per attempt (CC-AUTH-79) -------
+
+/** A clock whose `sleep` advances `now` by the slept duration. */
+function advancingClock(startMs: number): Clock & { advance(ms: number): void } {
+  let nowMs = startMs;
+  return {
+    now: () => nowMs,
+    sleep: (ms: number) => {
+      nowMs += ms;
+      return Promise.resolve();
+    },
+    advance: (ms: number) => {
+      nowMs += ms;
+    },
+  };
+}
+
+const SIGNING_TOKEN = 'EAAsigningtokenfortheretrytests0001';
+const SIGNING_SECRET = 'retry-test-app-secret';
+
+function signingProvider(clock: Pick<Clock, 'now'>): AuthProvider {
+  return createAuthProvider(
+    {
+      name: 'default',
+      authPath: 'fb-login',
+      accessToken: SIGNING_TOKEN,
+      appSecret: SIGNING_SECRET,
+    },
+    clock,
+  );
+}
+
+function expectedProof(time: string): string {
+  return createHmac('sha256', SIGNING_SECRET).update(`${SIGNING_TOKEN}|${time}`).digest('hex');
+}
+
+/** The `appsecret_time` and `appsecret_proof` one recorded call carried. */
+function signedPair(call: FetchCall): { time: string | null; proof: string | null } {
+  const fields =
+    call.body !== undefined ? new URLSearchParams(call.body) : new URL(call.url).searchParams;
+  return { time: fields.get('appsecret_time'), proof: fields.get('appsecret_proof') };
+}
+
+const THROTTLED: MockResponseSpec = {
+  status: 429,
+  headers: { 'retry-after': '60' },
+  body: { error: { code: 4, message: 'throttled' } },
+};
+
+test('a retried GET is re-signed at the time of the retry, not of the first attempt (CC-AUTH-79)', async () => {
+  // Graph refuses a stale `appsecret_time`. The params used to be resolved once
+  // per call, so the attempt sent after a 60 s Retry-After carried the first
+  // attempt's timestamp and a proof over it.
+  const clock = advancingClock(1_790_000_000_000);
+  const { fetchImpl, calls } = mockFetch((n) => (n < 2 ? THROTTLED : { body: { ok: true } }));
+  const req = createIgRequest({
+    auth: signingProvider(clock),
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({ method: 'GET', path: '/me' });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(
+    calls.map(signedPair),
+    ['1790000000', '1790000060', '1790000120'].map((time) => ({
+      time,
+      proof: expectedProof(time),
+    })),
+  );
+});
+
+test('a retried idempotent write is re-signed in its body, carrying one credential (CC-AUTH-79)', async () => {
+  const clock = advancingClock(1_790_000_000_000);
+  const { fetchImpl, calls } = mockFetch((n) => (n === 0 ? THROTTLED : { body: { ok: true } }));
+  const req = createIgRequest({
+    auth: signingProvider(clock),
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await req({
+    method: 'POST',
+    path: '/123/comments',
+    body: { message: 'hey' },
+    idempotent: true,
+  });
+  assert.equal(calls.length, 2);
+  for (const [i, time] of ['1790000000', '1790000060'].entries()) {
+    const call = calls[i]!;
+    assert.equal(
+      call.body,
+      `message=hey&access_token=${SIGNING_TOKEN}&appsecret_proof=${expectedProof(time)}` +
+        `&appsecret_time=${time}`,
+      `attempt ${i} carries exactly one credential, signed at its own instant`,
+    );
+    assert.equal(new URL(call.url).search, '', 'the request line stays credential-free');
+  }
+});
+
+test('a call queued for a concurrency slot is signed when it is sent, not when it queued (CC-AUTH-79)', async () => {
+  const clock = advancingClock(1_790_000_000_000);
+  let releaseFirst!: () => void;
+  const firstHeld = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const { fetchImpl, calls } = mockFetch(async (n) => {
+    if (n === 0) await firstHeld;
+    return { body: { ok: true } };
+  });
+  const req = createIgRequest({
+    auth: signingProvider(clock),
+    settings: s({ maxConcurrent: 1 }),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+    semaphores: createSemaphoreRegistry(),
+  });
+  const first = req({ method: 'GET', path: '/me' });
+  await flush();
+  const second = req({ method: 'GET', path: '/me' });
+  await flush();
+  assert.equal(calls.length, 1, 'the second call is queued behind the first');
+  clock.advance(90_000);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(calls.map(signedPair), [
+    { time: '1790000000', proof: expectedProof('1790000000') },
+    { time: '1790000090', proof: expectedProof('1790000090') },
+  ]);
+});
+
+test('an unpinned path is refused before the auth provider runs or a slot is taken (CC-AUTH-79)', async () => {
+  const seen: string[] = [];
+  const spyAuth: AuthProvider = {
+    path: 'fb-login',
+    defaultHost: 'graph.facebook.com',
+    authParams: (host: GraphHost) => {
+      seen.push(host);
+      return Promise.resolve({ access_token: 'FB_TOKEN' });
+    },
+  };
+  const acquired: string[] = [];
+  const registry = createSemaphoreRegistry();
+  const { fetchImpl, calls } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth: spyAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    semaphores: {
+      acquire: (host, max, signal) => {
+        acquired.push(host);
+        return registry.acquire(host, max, signal);
+      },
+    },
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/../oauth/access_token' }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'validation',
+  );
+  assert.deepEqual(seen, []);
+  assert.deepEqual(acquired, []);
+  assert.equal(calls.length, 0);
 });
 
 test('429 is NOT retried on a non-idempotent write (POST/DELETE) — a replay may duplicate it', async () => {

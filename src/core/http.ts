@@ -440,29 +440,8 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     const host = opts.host ?? auth.defaultHost;
     assertAllowedHost(host);
 
-    // 2. Resolve the auth params and register the access token with the
-    //    redactor in BOTH surface spellings — as held, and form-encoded exactly
-    //    as `URLSearchParams` puts it on the wire, in the query or in the body
-    //    below (CC-PROC-25). The redactor matches exact substrings, so a token
-    //    with a character the form encoder rewrites (`+`, `/`, `=`, a space) is
-    //    masked as held but printed whole in its encoded spelling, which is the
-    //    one a transport or proxy that names the request quotes. `login`/
-    //    `refresh` register the same two forms for the secrets THEY put on the
-    //    wire (CC-AUTH-76). Only `access_token` is registered: since CC-AUTH-15
-    //    `appsecret_proof` and `appsecret_time` change every second, so
-    //    registering them would grow the process-wide registry without bound,
-    //    and a registered 10-digit `appsecret_time` would mask that digit run
-    //    inside any Graph id or payload. The proof is 64-hex by construction,
-    //    which the token-shape backstop masks in either spelling (hex survives
-    //    form encoding unchanged); the time is not a secret. Registration is
-    //    idempotent (the registry is a `Set`), so doing it per request costs a
-    //    lookup.
-    const authParams = await auth.authParams(host);
-    const token = authParams['access_token'];
-    if (token !== undefined) {
-      for (const spelling of surfaceForms(token)) registerSecret(spelling);
-    }
-
+    // 2. Build the caller's form fields once; the credential is placed per
+    //    attempt by `sign` below, because the Path-B proof is time-bound.
     // POST/DELETE carry `opts.body` as an x-www-form-urlencoded request body.
     const form = new URLSearchParams();
     if (opts.method !== 'GET' && opts.body) {
@@ -567,19 +546,69 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     // coincide for every possible form. The count is kept because it is the
     // question actually being asked; the string test would agree here only by
     // arithmetic, and would stop agreeing the moment someone reached for `!`.
-    const query: Record<string, string | number | boolean | undefined> = {
-      ...opts.params,
-      ...authParams,
-    };
-    let body: string | undefined;
-    if (form.size > 0) {
-      for (const [key, value] of Object.entries(authParams)) {
-        form.set(key, value);
-        query[key] = undefined;
+    //
+    // CC-AUTH-79 — signed per ATTEMPT, never once per call. Since CC-AUTH-15 the
+    // Path-B credential is time-bound: `authParams` mints `appsecret_time` from
+    // the clock and signs it into `appsecret_proof`, and Graph refuses a stale
+    // time. Until 2026-10-10 this seam resolved the params once, BEFORE waiting
+    // for a concurrency slot and before the retry loop, so every attempt carried
+    // the instant the call was first made: a call that queued behind
+    // `maxConcurrent` others, or that retried after a capped 60 s Retry-After
+    // (three times over, plus a `timeoutMs` per attempt), went out minutes
+    // late with the first attempt's timestamp — the replay window CC-AUTH-15
+    // bounds, reopened by the transport's own patience, and a recoverable 429
+    // turned into a refusal of the proof. `sign` therefore runs inside the loop,
+    // after the slot is held, so each attempt is signed at the moment it is sent.
+    const sign = async (): Promise<{ url: string; body: string | undefined }> => {
+      // Resolve the auth params and register the access token with the
+      //    redactor in BOTH surface spellings — as held, and form-encoded exactly
+      //    as `URLSearchParams` puts it on the wire, in the query or in the body
+      //    below (CC-PROC-25). The redactor matches exact substrings, so a token
+      //    with a character the form encoder rewrites (`+`, `/`, `=`, a space) is
+      //    masked as held but printed whole in its encoded spelling, which is the
+      //    one a transport or proxy that names the request quotes. `login`/
+      //    `refresh` register the same two forms for the secrets THEY put on the
+      //    wire (CC-AUTH-76). Only `access_token` is registered: since CC-AUTH-15
+      //    `appsecret_proof` and `appsecret_time` change every second, so
+      //    registering them would grow the process-wide registry without bound,
+      //    and a registered 10-digit `appsecret_time` would mask that digit run
+      //    inside any Graph id or payload. The proof is 64-hex by construction,
+      //    which the token-shape backstop masks in either spelling (hex survives
+      //    form encoding unchanged); the time is not a secret. Registration is
+      //    idempotent (the registry is a `Set`), so doing it per attempt costs a
+      //    lookup.
+      const authParams = await auth.authParams(host);
+      const token = authParams['access_token'];
+      if (token !== undefined) {
+        for (const spelling of surfaceForms(token)) registerSecret(spelling);
       }
-      body = form.toString();
-    }
-    const url = buildUrl(host, opts.path, query);
+
+      const query: Record<string, string | number | boolean | undefined> = {
+        ...opts.params,
+        ...authParams,
+      };
+      let body: string | undefined;
+      if (form.size > 0) {
+        // A fresh copy per attempt: `form` holds the caller's fields only, so
+        // a retry never carries the previous attempt's proof or time.
+        const signed = new URLSearchParams(form);
+        for (const [key, value] of Object.entries(authParams)) {
+          signed.set(key, value);
+          query[key] = undefined;
+        }
+        body = signed.toString();
+      }
+      return { url: buildUrl(host, opts.path, query), body };
+    };
+
+    // The URL is validated once up front, without the credential: an unpinned
+    // path or a mangled host spelling fails here, before a slot is spent and
+    // before the auth provider (which on Path B computes an HMAC keyed with the
+    // app secret) runs for a request that can never be sent. Auth params are
+    // strings, so a URL that builds without them builds with them; a caller
+    // value the credential would have replaced is refused here rather than
+    // silently overwritten.
+    buildUrl(host, opts.path, opts.params);
 
     const idempotent = opts.idempotent ?? opts.method === 'GET';
 
@@ -594,6 +623,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     try {
       for (let attempt = 0; ; attempt++) {
         const lastAttempt = attempt >= MAX_ATTEMPTS - 1;
+        const { url, body } = await sign();
 
         // 4. Per-attempt timeout signal combined with the caller's signal.
         const timeout = AbortSignal.timeout(settings.timeoutMs);

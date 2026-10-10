@@ -76,18 +76,20 @@ const HTTPS_URL_MESSAGE = 'must be a well-formed https:// URL';
 /**
  * A well-formed `https://` URL. Structural only — reachability is unverifiable.
  *
- * A FACTORY, not a shared instance (CC-PUB-35): `zod-to-json-schema` renders the
- * second and later fields built from one instance as `{"$ref": …, "description": …}`,
- * and under the declared draft-07 dialect a strict client ignores every keyword
- * beside `$ref` — so each such field published its first twin's description, not
- * its own. Every URL field calls this once, so no twin exists to point at.
+ * A FACTORY, not a shared instance (CC-PUB-35): under SDK v1 / zod 3,
+ * `zod-to-json-schema` rendered the second and later fields built from one
+ * instance as `{"$ref": …, "description": …}`, and under the then-declared
+ * draft-07 dialect a strict client ignores every keyword beside `$ref` — so each
+ * such field published its first twin's description, not its own. zod 4's
+ * converter inlines a reused schema by default, but the factory keeps that true
+ * by construction: every URL field calls this once, so no twin exists to point at.
  *
  * The pattern and the verdict share one message, and the refine runs only when
  * the pattern passed, so a refused value carries exactly ONE issue whichever half
  * refused it (zod keeps running refinements after a failed string check, which
  * would otherwise repeat the same sentence twice).
  */
-export function httpsUrl(): z.ZodEffects<z.ZodString, string, string> {
+export function httpsUrl(): z.ZodString {
   return z
     .string()
     .regex(HTTPS_URL_PATTERN, { message: HTTPS_URL_MESSAGE })

@@ -25,9 +25,9 @@ import type { AddressInfo } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { constants as osConstants } from 'node:os';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { InstagramError } from '../core/types.js';
 import type { Logger } from '../core/types.js';
 import { isLoopbackHost } from '../core/settings.js';
@@ -144,14 +144,13 @@ export interface RunningHttpTransport {
  * {@link startHttp} takes a factory rather than a server instance because the
  * SDK forbids both halves of the alternative:
  *
- *   - a stateless `StreamableHTTPServerTransport` may serve exactly one request
- *     (`webStandardStreamableHttp.js`: `if (!this.sessionIdGenerator &&
- *     this._hasHandledRequest) throw new Error('Stateless transport cannot be
- *     reused across requests. Create a new transport per request.')`), and
- *   - one server cannot be re-`connect`ed to the replacement transport
- *     (`shared/protocol.js`: `if (this._transport) throw new Error('Already
- *     connected to a transport. … use a separate Protocol instance per
- *     connection.')`) — a `Protocol` owns its transport for its lifetime.
+ *   - a stateless `NodeStreamableHTTPServerTransport` may serve exactly one
+ *     request (the SDK throws 'Stateless transport cannot be reused across
+ *     requests. Create a new transport per request.'), and
+ *   - one server cannot be re-`connect`ed to the replacement transport (the SDK
+ *     throws `SdkErrorCode.AlreadyConnected`: 'Use a separate Server instance
+ *     per connection: this instance is already connected to a transport.') —
+ *     a server owns its transport for its lifetime.
  *
  * So a fresh transport implies a fresh server, and the factory is what makes
  * that possible without this module knowing how a server is built.
@@ -440,7 +439,7 @@ export async function startHttp(
   // Transports still attached to an in-flight exchange. Shutdown closes them
   // first: an open SSE stream is a live connection, and `httpServer.close()`
   // waits for connections to end, so a stream nothing terminated would hang it.
-  const inFlight = new Set<StreamableHTTPServerTransport>();
+  const inFlight = new Set<NodeStreamableHTTPServerTransport>();
 
   const httpServer: Server = createServer((req, res) => {
     void handle(req, res);
@@ -459,7 +458,7 @@ export async function startHttp(
   /** Release one exchange's server + transport. Both `close()`es are idempotent. */
   async function dispose(
     server: McpServer,
-    transport: StreamableHTTPServerTransport,
+    transport: NodeStreamableHTTPServerTransport,
   ): Promise<void> {
     inFlight.delete(transport);
     try {
@@ -485,7 +484,7 @@ export async function startHttp(
     try {
       const server = createMcpServer();
       const names = [opts.host, bound().address];
-      const transport = new StreamableHTTPServerTransport({
+      const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless JSON mode
         enableJsonResponse: true,
         enableDnsRebindingProtection: true,

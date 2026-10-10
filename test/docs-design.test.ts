@@ -75,9 +75,8 @@ const NON_GRAPH_VERSIONS: ReadonlyMap<string, string> = new Map([
   ['v22.23.2', 'the Node runtime a measurement was taken on (CC-PROC-34)'],
   ['v1.2', 'a path segment in an example CDN URL (CC-PUB-24)'],
   ['v1.0', "the workplan document's own version"],
-  ['v1', "this server's own first generation, and the MCP SDK major it builds on"],
-  ['v2', 'the MCP SDK major this project deliberately does not use (beta, API churn)'],
-  ['v3', 'the zod major the SDK pins'],
+  ['v1', "this server's own first generation, and the MCP SDK major it was first built on"],
+  ['v2', 'the MCP SDK major this project builds on since 2026-10-10'],
   ['v4', 'IPv4, in the phrases "v4-mapped form" and "the v4 address"'],
   [
     'v8',

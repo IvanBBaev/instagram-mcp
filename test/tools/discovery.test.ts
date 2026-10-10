@@ -28,9 +28,8 @@ import { fakeClock } from '../helpers/fake-clock.js';
 import { discoveryTools } from '../../src/tools/discovery.js';
 import { MEDIA_MORE_NOTE } from '../../src/api/discovery.js';
 import { testSettings } from '../helpers/settings.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 // The two paging notes `api/discovery` publishes, spelled out so a reworded
 // note fails here rather than passing through unread.
@@ -115,28 +114,28 @@ function tool(name: string): ToolSpec {
 }
 
 /** The declared structured-output shape of a tool, asserting it declares one. */
-function outputOf(name: string): z.ZodRawShape {
+function outputOf(name: string): Record<string, z.ZodType> {
   const out = tool(name).output;
   assert.ok(out, `${name} must declare a structured output schema`);
   return out;
 }
 
 /** The zod object shape behind a declared output field (`paging`, `budget`, …). */
-function shapeOf(field: z.ZodTypeAny | undefined): z.ZodRawShape {
+function shapeOf(field: z.ZodType | undefined): Record<string, z.ZodType> {
   assert.ok(field, 'the output field is declared');
-  return (field as z.ZodObject<z.ZodRawShape>).shape;
+  return (field as z.ZodObject<Record<string, z.ZodType>>).shape;
 }
 
 /** The element shape of an output field declared as an (optional) array of objects. */
-function elementShapeOf(field: z.ZodTypeAny | undefined): z.ZodRawShape {
+function elementShapeOf(field: z.ZodType | undefined): Record<string, z.ZodType> {
   assert.ok(field, 'the output field is declared');
   const list = field instanceof z.ZodOptional ? field.unwrap() : field;
-  return (list as z.ZodArray<z.ZodObject<z.ZodRawShape>>).element.shape;
+  return (list as z.ZodArray<z.ZodObject<Record<string, z.ZodType>>>).element.shape;
 }
 
 /** The slice of published JSON Schema these tests read. */
 interface JsonSchemaObject {
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | Record<string, never>;
   properties?: Record<string, JsonSchemaObject & { items?: JsonSchemaObject }>;
 }
 
@@ -155,7 +154,7 @@ function itemsOf(schema: JsonSchemaObject, key: string): JsonSchemaObject {
 }
 
 /** The `.describe()` text of one declared argument (the model-facing contract). */
-function describeOf(shape: z.ZodRawShape, key: string): string {
+function describeOf(shape: Record<string, z.ZodType>, key: string): string {
   return shape[key]?.description ?? '';
 }
 
@@ -165,17 +164,21 @@ function assertMentions(body: string, fragment: string): void {
 }
 
 /**
- * Assert that omitting `key` fails as a MISSING argument (`invalid_type`) rather
- * than as a malformed one. The distinction is not cosmetic: a mandatory field is
- * mandatory only while nothing supplies a value for it, and the issue code is the
- * observable proof of that.
+ * Assert that omitting `key` fails as a MISSING argument rather than as a
+ * malformed one (`too_small` and friends). The distinction is not cosmetic: a
+ * mandatory field is mandatory only while nothing supplies a value for it, and
+ * the issue code is the observable proof of that. zod 4 reports an absent value
+ * as `invalid_type` for a typed schema and as `invalid_value` for an enum (it
+ * matches none of the options) — both mean "no usable value was supplied".
  */
-function assertMissingArgument(schema: z.ZodTypeAny, payload: unknown, key: string): void {
+function assertMissingArgument(schema: z.ZodType, payload: unknown, key: string): void {
   const result = schema.safeParse(payload);
   assert.equal(result.success, false, `${key} must be mandatory`);
   const issues = result.success ? [] : result.error.issues;
   assert.ok(
-    issues.some((i) => i.code === 'invalid_type' && i.path.join('.') === key),
+    issues.some(
+      (i) => (i.code === 'invalid_type' || i.code === 'invalid_value') && i.path.join('.') === key,
+    ),
     `${key} must be reported as a missing required argument, not as a malformed one`,
   );
 }
@@ -201,7 +204,7 @@ const MEDIA_ITEM_KEYS = [
  * that is quietly optional is a key clients cannot rely on being there.
  */
 function assertRequiredKeys(
-  schema: z.ZodTypeAny,
+  schema: z.ZodType,
   payload: Record<string, unknown>,
   keys: string[],
 ): void {
@@ -1411,14 +1414,15 @@ test('the published output schemas are closed at the top level and open one leve
   // writing, because the answer is not "wherever additive Meta fields might
   // appear" — it depends on HOW the schema reaches the SDK.
   //
-  // A tool declares `output` as a `z.ZodRawShape`, and the registry hands that
-  // raw shape to `registerTool`. A shape is only a key -> schema map: the
-  // unknown-keys mode lives on the ZodObject wrapper and is discarded when
-  // `.shape` is taken. The SDK re-wraps it with a plain `z.object(...)`, i.e.
-  // `strip`, and publishes `additionalProperties: false` no matter what the
-  // top-level object in the source file declared. Nested schemas are different —
-  // they are embedded as schemas, not as shapes, so their `.passthrough()`
-  // survives verbatim and is published as `additionalProperties: true`.
+  // A tool declares `output` as a `Record<string, z.ZodType>`, and the registry
+  // wraps that raw shape in a plain `z.object(...)` before handing it to
+  // `registerTool`. A shape is only a key -> schema map: the unknown-keys mode
+  // lives on the ZodObject wrapper and is discarded when `.shape` is taken. The
+  // wrapper is `strip`, and the SDK publishes `additionalProperties: false` no
+  // matter what the top-level object in the source file declared. Nested schemas
+  // are different — they are embedded as schemas, not as shapes, so their
+  // `.passthrough()` survives verbatim and is published as the open schema
+  // `additionalProperties: {}` (zod 4's spelling of draft-07's `true`).
   //
   // The consequence for CC-DATA-7 is precise: an additive Meta field survives
   // inside `media` / `items` / `paging` and cannot survive at the top level of a
@@ -1435,7 +1439,7 @@ test('the published output schemas are closed at the top level and open one leve
     const published = (name: string): JsonSchemaObject => {
       const listed = tools.find((t) => t.name === name);
       assert.ok(listed?.outputSchema, `${name} publishes an output schema`);
-      return listed.outputSchema;
+      return listed.outputSchema as JsonSchemaObject;
     };
 
     const business = published('instagram_discover_business');
@@ -1444,9 +1448,9 @@ test('the published output schemas are closed at the top level and open one leve
       false,
       'the discovered profile is published closed — an additive Meta field cannot arrive here',
     );
-    assert.equal(
+    assert.deepEqual(
       itemsOf(business, 'media').additionalProperties,
-      true,
+      {},
       'the media items nested inside it stay open (CC-DATA-7)',
     );
 
@@ -1454,8 +1458,8 @@ test('the published output schemas are closed at the top level and open one leve
     // rather than as a property of one tool.
     const hashtagMedia = published('instagram_get_hashtag_media');
     assert.equal(hashtagMedia.additionalProperties, false);
-    assert.equal(itemsOf(hashtagMedia, 'items').additionalProperties, true);
-    assert.equal(propertyOf(hashtagMedia, 'paging').additionalProperties, true);
+    assert.deepEqual(itemsOf(hashtagMedia, 'items').additionalProperties, {});
+    assert.deepEqual(propertyOf(hashtagMedia, 'paging').additionalProperties, {});
   } finally {
     await live.close();
   }
@@ -1503,7 +1507,7 @@ const PUBLISHED_MEDIA_ITEM = {
     comments_count: { type: 'number' },
   },
   required: ['id'],
-  additionalProperties: true,
+  additionalProperties: {},
 };
 
 /**
@@ -1608,9 +1612,13 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             'overBudget',
             'note',
           ],
-          additionalProperties: true,
+          additionalProperties: {},
         },
-        omittedWithoutId: { type: 'integer' },
+        omittedWithoutId: {
+          type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
         note: { type: 'string' },
       },
       required: ['query', 'ids', 'budget'],
@@ -1681,9 +1689,13 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           type: 'object',
           properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
           required: ['truncated'],
-          additionalProperties: true,
+          additionalProperties: {},
         },
-        omittedWithoutId: { type: 'integer' },
+        omittedWithoutId: {
+          type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
         note: { type: 'string' },
       },
       required: ['items', 'paging'],
@@ -1757,14 +1769,22 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         follows_count: { type: 'number' },
         media_count: { type: 'number' },
         media: { type: 'array', items: PUBLISHED_MEDIA_ITEM },
-        mediaLimitApplied: { type: 'integer' },
+        mediaLimitApplied: {
+          type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
         mediaPaging: {
           type: 'object',
           properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
           required: ['truncated'],
           additionalProperties: false,
         },
-        omittedWithoutId: { type: 'integer' },
+        omittedWithoutId: {
+          type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
         note: { type: 'string' },
       },
       required: ['id'],

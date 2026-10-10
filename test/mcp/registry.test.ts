@@ -34,9 +34,8 @@ import { json } from '../../src/mcp/result.js';
 import { InstagramError, isInstagramError } from '../../src/core/types.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { allTools } from '../../src/tools/index.js';
 import { testSettings } from '../helpers/settings.js';
@@ -83,8 +82,8 @@ interface RegisterConfig {
    * closed `.strict()` object so the SDK's own pre-callback validation rejects
    * unknown arguments instead of stripping them (CC-CFG-6).
    */
-  inputSchema?: z.AnyZodObject;
-  outputSchema?: z.ZodRawShape;
+  inputSchema?: z.ZodObject;
+  outputSchema?: z.ZodObject;
   annotations?: ToolAnnotationSet;
 }
 type RegisterCb = (args: Record<string, unknown>, extra?: unknown) => Promise<ToolResult>;
@@ -776,7 +775,7 @@ test('account selector is injected and the registered schema is CLOSED, not a ra
   assert.equal(schema.safeParse({}).success, true);
   assert.equal(schema.safeParse({ bogus: 1 }).success, false, 'the schema itself is strict');
 
-  // The curated message rides on the schema's error map, so it survives being
+  // The curated message rides on the schema's `error` customisation, so it survives being
   // raised inside the SDK rather than inside our wrapper.
   const failure = schema.safeParse({ bogus: 1, alsoBogus: 2 });
   assert.equal(failure.success, false);
@@ -809,9 +808,8 @@ test('strict re-validation rejects an unknown argument at call time (CC-CFG-6)',
  * so the wrapper's `.strict()` re-parse always saw the unknown key. A real
  * `McpServer` does not. It validates `request.params.arguments` itself in
  * `validateToolInput()` and passes the *parsed* value to the callback — and
- * when it is handed a raw `ZodRawShape` it rebuilds it as a non-strict
- * `z.object(shape)` (`server/zod-compat.js` `normalizeObjectSchema` ->
- * `objectFromShape`), which silently strips unknown keys. The tests below are
+ * when it is handed a raw `ZodRawShape` (the deprecated v2 overload) it wraps
+ * it in a non-strict `z.object(shape)`, which silently strips unknown keys. The tests below are
  * the ones that can actually observe that, so they drive a real server through
  * a real `Client` over `InMemoryTransport`.
  */
@@ -921,7 +919,7 @@ test('real McpServer: tools/list publishes a closed schema with the account sele
     assert.equal(tools.length, 1);
     const listed = tools[0]!;
     assert.deepEqual(listed.inputSchema, {
-      $schema: 'http://json-schema.org/draft-07/schema#',
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
       type: 'object',
       properties: {
         mediaId: { type: 'string', description: 'The media id.' },
@@ -938,9 +936,10 @@ test('real McpServer: tools/list publishes a closed schema with the account sele
       // did not honour it. Now the schema and the behaviour agree.
       additionalProperties: false,
     });
-    // outputSchema still goes over as a raw shape and is unaffected.
+    // outputSchema is the raw shape wrapped in a plain `z.object()` and is
+    // unaffected by the strict input schema.
     assert.deepEqual(listed.outputSchema, {
-      $schema: 'http://json-schema.org/draft-07/schema#',
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
       type: 'object',
       properties: { id: { type: 'string' } },
       required: ['id'],
@@ -994,14 +993,17 @@ test('real McpServer: a type error on a declared field still reports the field p
     assert.equal(res.isError, true);
     const body = resultText(res);
     assert.ok(body.includes('mediaId'), `names the offending field: ${body}`);
-    assert.ok(body.includes('Expected string'), `keeps zod's own wording: ${body}`);
+    assert.ok(
+      body.includes('expected string, received number'),
+      `keeps zod's own wording: ${body}`,
+    );
   } finally {
     await live.close();
   }
 });
 
 test('real McpServer: omitting arguments entirely keeps zod default wording', async () => {
-  // The schema-bound error map only rewrites `unrecognized_keys`; every other
+  // The schema-bound `error` customisation only rewrites `unrecognized_keys`; every other
   // root-level issue falls through to zod's default text, so a client that
   // sends no `arguments` at all reads exactly what it did before the fix.
   const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
@@ -1010,7 +1012,10 @@ test('real McpServer: omitting arguments entirely keeps zod default wording', as
     const res = await live.client.callTool({ name: 'instagram_get_media' });
     assert.equal(res.isError, true);
     const body = resultText(res);
-    assert.ok(body.includes('Required'), `zod's default wording is preserved: ${body}`);
+    assert.ok(
+      body.includes('expected string, received undefined'),
+      `zod's default wording is preserved: ${body}`,
+    );
     assert.equal(body.includes('unknown argument'), false, 'not reported as an unknown key');
   } finally {
     await live.close();
@@ -1352,7 +1357,7 @@ test('logFields: the declared payload is emitted as one debug line per invocatio
   const t = spec({
     name: 'instagram_get_media',
     input: { mediaId: z.string(), caption: z.string().optional() },
-    logFields: (args) => ({ mediaId: args.mediaId as string }),
+    logFields: (args) => ({ mediaId: args.mediaId }),
   });
   const { log, records } = recordingLog();
   const { deps, calls } = makeDeps({ tools: [t], log });
@@ -1604,7 +1609,7 @@ test('logFields: the payload goes through the redactor by DEFAULT, with no dep i
   const t = spec({
     name: 'instagram_get_account',
     input: { note: z.string() },
-    logFields: (args) => ({ note: args.note as string, access_token: 'EAAtoken' }),
+    logFields: (args) => ({ note: args.note, access_token: 'EAAtoken' }),
   });
   const { log, records } = recordingLog();
   const { deps, calls } = makeDeps({ tools: [t], log });
@@ -1948,8 +1953,8 @@ test('the wrapper fallback renders every failed field with its dotted path', asy
   assert.equal(
     res.content[0]?.text,
     "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
-      'filter.since: Expected string, received number; ' +
-      'limit: Expected number, received string.',
+      'filter.since: Invalid input: expected string, received number; ' +
+      'limit: Invalid input: expected number, received string.',
   );
 });
 
@@ -1976,7 +1981,7 @@ test("the wrapper refuses account: '' by name instead of resolving a profile for
   assert.equal(
     res.content[0]?.text,
     "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
-      'account: String must contain at least 1 character(s).',
+      'account: Too small: expected string to have >=1 characters.',
   );
   assert.deepEqual(seen, [], 'no profile was resolved and no request factory was built');
 });
@@ -2002,7 +2007,7 @@ test('the wrapper refuses a whitespace-only account instead of routing it to "de
     assert.equal(
       res.content[0]?.text,
       "Instagram error (validation): Invalid arguments for tool 'instagram_get_media': " +
-        'account: String must contain at least 1 character(s).',
+        'account: Too small: expected string to have >=1 characters.',
       `account ${JSON.stringify(blank)} is refused by name, like ''`,
     );
   }

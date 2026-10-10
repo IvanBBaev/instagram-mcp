@@ -31,9 +31,8 @@ import { fakeClock } from '../helpers/fake-clock.js';
 import { commentsTools } from '../../src/tools/comments.js';
 import { testSettings } from '../helpers/settings.js';
 import { registerTools } from '../../src/mcp/registry.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 // Isolate the best-effort write journal to a temp dir for the whole file.
 const journalDir = mkdtempSync(join(tmpdir(), 'ig-comments-journal-'));
@@ -96,7 +95,7 @@ function tool(name: string): ToolSpec {
 }
 
 /** The `.describe()` text of one declared argument (the model-facing contract). */
-function describeOf(shape: z.ZodRawShape, key: string): string {
+function describeOf(shape: Record<string, z.ZodType>, key: string): string {
   return shape[key]?.description ?? '';
 }
 
@@ -1873,7 +1872,7 @@ async function liveCommentsServer(
 
 /**
  * Strip the two things `tools/comments.ts` does not own from a published schema:
- * the `$schema` dialect marker `zod-to-json-schema` emits, and the `account`
+ * the `$schema` dialect marker the SDK emits, and the `account`
  * argument `mcp/registry.ts` injects into every tool for multi-account
  * selection. Everything that remains is this module's own statement.
  */
@@ -1889,6 +1888,32 @@ function pinned(schema: unknown): Record<string, unknown> | undefined {
   }
   return out;
 }
+
+/**
+ * The recursive comment shape, which the SDK v2 (zod 4) publishes once under
+ * `$defs` and references from every place a comment appears, its own
+ * `replies` included.
+ */
+const COMMENT_DEFS = {
+  __schema0: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      text: { type: 'string' },
+      username: { type: 'string' },
+      timestamp: { type: 'string' },
+      like_count: { type: 'number' },
+      replies: { type: 'array', items: { $ref: '#/$defs/__schema0' } },
+      repliesTruncated: {
+        type: 'boolean',
+        description:
+          'True when Instagram has more replies than it returned inline; replies then lists only the first page and no tool here reads the rest.',
+      },
+    },
+    required: ['id'],
+    additionalProperties: {},
+  },
+};
 
 /**
  * The exact contract the nine comment tools publish. This is deliberately a
@@ -1955,42 +1980,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
     },
     outputSchema: {
       type: 'object',
+      $defs: COMMENT_DEFS,
       properties: {
         items: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-              },
-              text: {
-                type: 'string',
-              },
-              username: {
-                type: 'string',
-              },
-              timestamp: {
-                type: 'string',
-              },
-              like_count: {
-                type: 'number',
-              },
-              replies: {
-                type: 'array',
-                items: {
-                  $ref: '#/properties/items/items',
-                },
-              },
-              repliesTruncated: {
-                type: 'boolean',
-                description:
-                  'True when Instagram has more replies than it returned inline; replies then lists only the first page and no tool here reads the rest.',
-              },
-            },
-            required: ['id'],
-            additionalProperties: true,
-          },
+          items: { $ref: '#/$defs/__schema0' },
         },
         paging: {
           type: 'object',
@@ -2003,13 +1997,15 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             },
           },
           required: ['truncated'],
-          additionalProperties: true,
+          additionalProperties: {},
         },
         note: {
           type: 'string',
         },
         omittedWithoutId: {
           type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
       },
       required: ['items', 'paging'],
@@ -2041,6 +2037,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
     },
     outputSchema: {
       type: 'object',
+      $defs: COMMENT_DEFS,
       properties: {
         id: {
           type: 'string',
@@ -2077,43 +2074,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             },
           },
           required: ['id'],
-          additionalProperties: true,
+          additionalProperties: {},
         },
         replies: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: {
-                type: 'string',
-              },
-              text: {
-                type: 'string',
-              },
-              username: {
-                type: 'string',
-              },
-              timestamp: {
-                type: 'string',
-              },
-              like_count: {
-                type: 'number',
-              },
-              replies: {
-                type: 'array',
-                items: {
-                  $ref: '#/properties/replies/items',
-                },
-              },
-              repliesTruncated: {
-                type: 'boolean',
-                description:
-                  'True when Instagram has more replies than it returned inline; replies then lists only the first page and no tool here reads the rest.',
-              },
-            },
-            required: ['id'],
-            additionalProperties: true,
-          },
+          items: { $ref: '#/$defs/__schema0' },
         },
         repliesTruncated: {
           type: 'boolean',
@@ -2122,6 +2087,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         },
         omittedWithoutId: {
           type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
         note: {
           type: 'string',
@@ -2195,7 +2162,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
               },
             },
             required: ['id'],
-            additionalProperties: true,
+            additionalProperties: {},
           },
         },
         paging: {
@@ -2209,13 +2176,15 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             },
           },
           required: ['truncated'],
-          additionalProperties: true,
+          additionalProperties: {},
         },
         note: {
           type: 'string',
         },
         omittedWithoutId: {
           type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
         },
       },
       required: ['items', 'paging'],

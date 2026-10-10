@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Migrated to MCP TypeScript SDK v2 (`npx @modelcontextprotocol/codemod v1-to-v2`
+  plus hand fixes). Runtime dependencies: `@modelcontextprotocol/sdk` 1.x is
+  replaced by `@modelcontextprotocol/server` and `@modelcontextprotocol/node`
+  (the Node HTTP adapter for Streamable HTTP), and `zod` goes from 3 to 4. The
+  tool names, profiles, arguments and output fields are unchanged. **User-visible**
+  in the published `tools/list` schemas: `$schema` is now JSON Schema draft
+  2020-12 (was draft-07); integer fields with no declared bound advertise the
+  safe-integer range as `minimum`/`maximum`; open (passthrough) objects publish
+  `additionalProperties: {}` instead of `true`; record-shaped fields add
+  `propertyNames: {"type": "string"}`; the recursive comment shape is published
+  once under `$defs` and referenced by `$ref`; and the `userTags` item object no
+  longer advertises `additionalProperties: false` (unknown keys in a tag were,
+  and still are, dropped rather than rejected). Input-validation messages now use
+  zod 4's wording (e.g. `Invalid input: expected string, received number`).
 - A bare `IG_TOKEN_EXPIRES_AT` record (`<seconds>` with no token fingerprint) is
   still read, but `token_status` and `doctor` now report it as unverified in every
   dated state, `valid` and `never` included, instead of presenting it as a fact

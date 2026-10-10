@@ -323,6 +323,14 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   with build provenance. That unblocked **two** channels at once: `npx
   instagram-mcp-ai` directly, and the plugin, whose manifest launches the server
   through that same name — a pin that until then resolved to nothing.
+- **DONE 2026-10-10:** the SDK v2 migration, parked until v2 GA settled. `npx
+  @modelcontextprotocol/codemod v1-to-v2` moved the imports onto
+  `@modelcontextprotocol/server` / `@modelcontextprotocol/node` (and the test-only
+  `@modelcontextprotocol/client` / `@modelcontextprotocol/core`), and zod moved
+  from 3 to 4 with it; the rest (zod 4 types, raw output shapes wrapped in
+  `z.object()`, the re-baselined published-schema pins) was finished by hand. The
+  29-tool surface, profiles and output vocabularies are unchanged; the published
+  JSON Schema's dialect and a few keyword spellings are not (see `CHANGELOG.md`).
 - **NOT DONE:** the MCP-registry submission; the MCPB bundle attach (built and smoke-tested locally 2026-10-01, never installed in a client); the
   plugin-marketplace listing. All three are manual, outward acts.
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
@@ -375,8 +383,6 @@ and re-issuing the verdict there.
 - Operator-storage upload helper (S3 etc.) easing the public-URL constraint —
   would add `rupload.facebook.com`-class hosts to the allowlist only then.
 - Product tagging / shopping, collab posts, boosting — niche until requested.
-- SDK v2 migration via `npx @modelcontextprotocol/codemod v1-to-v2` once GA
-  settles.
 
 ## Open-question register (tracked; blocking their phase, not the project)
 

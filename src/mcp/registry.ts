@@ -40,7 +40,13 @@
  * as pure and dependency-free as `core/redact.ts`.
  */
 import { z } from 'zod';
-import type { ToolAnnotationSet, ToolInputArgs, ToolResult, ToolSpec } from './define.js';
+import type {
+  ToolAnnotationSet,
+  ToolInputArgs,
+  ToolResult,
+  ToolShape,
+  ToolSpec,
+} from './define.js';
 import { errorResult } from './result.js';
 import {
   CONFIRM_TIMEOUT_MS,
@@ -55,8 +61,7 @@ import { toInstagramError } from '../core/errors.js';
 import { createRedactor } from '../core/redact.js';
 import { escapeInvisible } from '../core/untrusted.js';
 import type { Clock } from '../core/clock.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import type { McpServer, Server } from '@modelcontextprotocol/server';
 
 // --- PACKAGES manifest ------------------------------------------------------
 
@@ -360,11 +365,13 @@ export function serverConfirmer(server: McpServer): WriteConfirmer {
  * result is our {@link ToolResult} (a subset of the SDK `CallToolResult`).
  * `deps.server` is reached through this shape so tests can pass a small stub.
  *
- * `inputSchema` is deliberately a built **`ZodObject`**, not a `z.ZodRawShape` —
- * see {@link strictInputSchema} for why that distinction is the whole of
- * CC-CFG-6. The SDK's own signature accepts either (`inputSchema?:
- * ZodRawShapeCompat | AnySchema`), and only the object form preserves
- * `.strict()`.
+ * `inputSchema` is deliberately a built strict **`ZodObject`**, never a raw
+ * `z.ZodRawShape` — see {@link strictInputSchema} for why that distinction is
+ * the whole of CC-CFG-6. SDK v2 still accepts a raw shape for `inputSchema`
+ * (a deprecated overload that wraps it in a plain, non-strict `z.object()`),
+ * and only the built object form preserves the strictness. `outputSchema` must
+ * be a Standard Schema object in v2, so the spec's raw output shape is wrapped
+ * with `z.object()` before registration.
  */
 interface ToolRegistrar {
   registerTool(
@@ -372,8 +379,8 @@ interface ToolRegistrar {
     config: {
       title?: string;
       description?: string;
-      inputSchema?: z.AnyZodObject;
-      outputSchema?: z.ZodRawShape;
+      inputSchema?: z.ZodObject;
+      outputSchema?: z.ZodObject;
       annotations?: ToolAnnotationSet;
     },
     cb: (args: Record<string, unknown>, extra?: unknown) => Promise<ToolResult>,
@@ -411,13 +418,13 @@ const accountField = z
  * before our callback ever runs, and what it validates against is whatever
  * `registerTool` was given:
  *
- *   - `server/mcp.js` `validateToolInput()` calls
- *     `normalizeObjectSchema(tool.inputSchema)` and parses with the result,
- *     handing our callback `parseResult.data`.
- *   - `server/zod-compat.js` `normalizeObjectSchema()` detects a **raw shape**
- *     (no `_def`/`_zod`) and wraps it with `objectFromShape()`, a plain
- *     `z.object(shape)` — *non-strict*, so zod **strips** unknown keys.
- *   - The same function returns an already-built `ZodObject` **unchanged**.
+ *   - `McpServer.validateToolInput()` (`@modelcontextprotocol/server`) runs the
+ *     registered schema's Standard Schema `~standard.validate()` and hands our
+ *     callback the parsed value.
+ *   - The deprecated raw-shape overload of `registerTool` wraps a **raw shape**
+ *     in a plain `z.object(shape)` — *non-strict*, so zod **strips** unknown
+ *     keys.
+ *   - An already-built `ZodObject` is used **unchanged**.
  *
  * So passing a raw shape means our callback can never see an unknown key: the
  * SDK has already deleted it, and any `.strict()` re-parse inside the callback
@@ -425,19 +432,20 @@ const accountField = z
  * enforce the closed schema, which is what the invariant actually promises.
  *
  * The cost is that the rejection is then raised by the SDK
- * (`McpError(InvalidParams, "Input validation error: Invalid arguments for tool
- * <name>: <zod message>")`) rather than by our wrapper, so the result no longer
- * carries our `errorResult()` envelope. The `errorMap` below buys the *message*
- * back: zod consults a schema-bound error map when it raises the
- * `unrecognized_keys` issue, and the SDK renders that message verbatim after
- * its own "for tool <name>" prefix. A client therefore still reads
+ * (`ProtocolError(InvalidParams, "Input validation error: Invalid arguments for
+ * tool <name>: <zod message>")`, which `tools/call` renders as an `isError`
+ * result) rather than by our wrapper, so the result no longer carries our
+ * `errorResult()` envelope. The schema-bound `error` customisation below buys
+ * the *message* back: zod consults it when it raises the `unrecognized_keys`
+ * issue, and the SDK renders a root-level issue's message verbatim after its
+ * own "for tool <name>" prefix. A client therefore still reads
  *
  *   Input validation error: Invalid arguments for tool instagram_get_media:
  *   unknown argument(s) [bogus]; valid arguments: mediaId, fields, account.
  *
- * i.e. it still names the offending keys *and* the valid ones. The map only
- * covers root-level object issues — nested field issues carry their own
- * schemas' (default) messages, which the SDK already renders with a path.
+ * i.e. it still names the offending keys *and* the valid ones. The customisation
+ * only covers the root object's own issues — nested field issues carry their
+ * own schemas' (default) messages, which the SDK already renders with a path.
  */
 /**
  * Render the "valid arguments" list carried by every rejection message.
@@ -464,22 +472,16 @@ function validArgList(validKeys: string[]): string {
   );
 }
 
-function strictInputSchema(shape: z.ZodRawShape): z.AnyZodObject {
+function strictInputSchema(shape: ToolShape): z.ZodObject {
   const validKeys = Object.keys(shape);
-  return z
-    .object(shape, {
-      errorMap: (issue, ctx) => {
-        if (issue.code === z.ZodIssueCode.unrecognized_keys) {
-          return {
-            message:
-              `unknown argument(s) [${issue.keys.join(', ')}]; ` +
-              `valid arguments: ${validArgList(validKeys)}.`,
-          };
-        }
-        return { message: ctx.defaultError };
-      },
-    })
-    .strict();
+  return z.strictObject(shape, {
+    // Returning `undefined` defers to zod's default message for every other issue.
+    error: (issue) =>
+      issue.code === 'unrecognized_keys'
+        ? `unknown argument(s) [${issue.keys.join(', ')}]; ` +
+          `valid arguments: ${validArgList(validKeys)}.`
+        : undefined,
+  });
 }
 
 /** Build the human message for a strict-schema rejection (CC-CFG-6). */
@@ -531,7 +533,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  */
 function logInvocation(
   spec: ToolSpec,
-  args: ToolInputArgs<z.ZodRawShape>,
+  args: ToolInputArgs<ToolShape>,
   log: Logger,
   redact: (value: unknown) => unknown,
 ): void {
@@ -719,15 +721,15 @@ function registerOne(
   confirm: WriteConfirmer,
   redact: (value: unknown) => unknown,
 ): void {
-  const shape: z.ZodRawShape = { ...spec.input, account: accountField };
+  const shape: ToolShape = { ...spec.input, account: accountField };
   const strictSchema = strictInputSchema(shape);
   const validKeys = Object.keys(shape);
 
   const config: {
     title?: string;
     description?: string;
-    inputSchema?: z.AnyZodObject;
-    outputSchema?: z.ZodRawShape;
+    inputSchema?: z.ZodObject;
+    outputSchema?: z.ZodObject;
     annotations?: ToolAnnotationSet;
   } = {
     title: spec.title,
@@ -736,10 +738,11 @@ function registerOne(
     inputSchema: strictSchema,
     annotations: spec.annotations,
   };
-  // `outputSchema` stays a raw shape: the SDK wraps it the same way for both
-  // the published JSON Schema and the structuredContent check, and a closed
-  // *output* schema would only make our own results harder to evolve.
-  if (spec.output !== undefined) config.outputSchema = spec.output;
+  // `outputSchema` is the spec's raw shape in a plain (non-strict) `z.object()`:
+  // the SDK uses the same object for both the published JSON Schema and the
+  // structuredContent check, and a closed *output* schema would only make our
+  // own results harder to evolve.
+  if (spec.output !== undefined) config.outputSchema = z.object(spec.output);
 
   const invoke = async (rawArgs: Record<string, unknown>): Promise<ToolResult> => {
     // 1. Strict parse. Against a real McpServer this is a second line of

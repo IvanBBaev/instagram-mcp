@@ -21,9 +21,8 @@ import { fence } from '../../src/mcp/result.js';
 import { accountTools } from '../../src/tools/account.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { testSettings } from '../helpers/settings.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 const DAY = 86_400_000;
 
@@ -1188,7 +1187,7 @@ async function liveAccountServer(
 }
 
 /**
- * The JSON Schema the registry hands to `zod-to-json-schema` also picks up two
+ * The JSON Schema the SDK renders from the registered zod schema also picks up two
  * things this module does not own: the `$schema` dialect marker and the
  * registry-injected `account` argument (multi-account selection, added to every
  * tool in `mcp/registry.ts`). Strip both so the pins below fail only when
@@ -1515,9 +1514,13 @@ test('real McpServer: the published contract of instagram_list_linked_accounts i
               type: 'object',
               properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
               required: ['truncated'],
-              additionalProperties: true,
+              additionalProperties: {},
             },
-            omittedWithoutId: { type: 'integer' },
+            omittedWithoutId: {
+              type: 'integer',
+              minimum: Number.MIN_SAFE_INTEGER,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
             note: { type: 'string' },
           },
           // The envelope itself is guaranteed: `items` is always present, empty

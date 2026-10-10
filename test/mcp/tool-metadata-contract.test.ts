@@ -87,7 +87,7 @@ import type {
   ResolvedProfile,
   Settings,
 } from '../../src/core/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { testSettings } from '../helpers/settings.js';
 
@@ -140,41 +140,43 @@ const STRING_CANDIDATES: readonly string[] = [
 ];
 const NUMBER_CANDIDATES: readonly number[] = [1, 0, 2];
 
-/** zod 3 keeps its discriminator on `_def.typeName`; tests may read internals. */
+/** zod 4 keeps its discriminator on `_zod.def.type`; tests may read internals. */
 function typeNameOf(schema: unknown): string {
-  return (schema as any)?._def?.typeName ?? '';
+  return (schema as any)?._zod?.def?.type ?? '';
 }
 
 /** Candidate values for a schema, cheapest and most likely first. */
-function candidatesFor(schema: z.ZodTypeAny): unknown[] {
-  const def = (schema as any)._def;
+function candidatesFor(schema: z.ZodType): unknown[] {
+  const def = (schema as any)._zod.def;
   switch (typeNameOf(schema)) {
-    case 'ZodOptional':
-    case 'ZodNullable':
-    case 'ZodDefault':
+    case 'optional':
+    case 'nullable':
+    case 'default':
+    case 'prefault':
       return candidatesFor(def.innerType);
-    case 'ZodEffects':
-      // A refinement/transform wrapper: propose what the inner type proposes and
-      // let the outer `safeParse` reject the ones the refinement rejects.
-      return candidatesFor(def.schema);
-    case 'ZodString':
+    case 'pipe':
+      // A transform wrapper: propose what the input side proposes and let the
+      // outer `safeParse` reject the ones the pipeline rejects. (zod 4 keeps a
+      // refinement as a check on the schema itself, so it needs no case here.)
+      return candidatesFor(def.in);
+    case 'string':
       return [...STRING_CANDIDATES];
-    case 'ZodNumber':
+    case 'number':
       return [...NUMBER_CANDIDATES];
-    case 'ZodBoolean':
+    case 'boolean':
       // `false` first: paging/`fetchAll`-style flags default to the cheap path.
       return [false, true];
-    case 'ZodEnum':
+    case 'enum':
+      return Object.values(def.entries as Record<string, unknown>);
+    case 'literal':
       return [...(def.values as unknown[])];
-    case 'ZodLiteral':
-      return [def.value];
-    case 'ZodArray': {
-      const item = sampleValue(def.type);
-      const min = Math.max(Number(def.minLength?.value ?? 1), 1);
-      return [Array.from({ length: min }, () => item)];
+    case 'array': {
+      // Shortest first; the outer `safeParse` rejects lengths under a `.min()`.
+      const item = sampleValue(def.element);
+      return Array.from({ length: 10 }, (_, i) => Array.from({ length: i + 1 }, () => item));
     }
-    case 'ZodObject': {
-      const shape = def.shape() as z.ZodRawShape;
+    case 'object': {
+      const shape = def.shape as Record<string, z.ZodType>;
       const out: Record<string, unknown> = {};
       for (const [key, field] of Object.entries(shape)) out[key] = sampleValue(field);
       return [out];
@@ -189,7 +191,7 @@ function candidatesFor(schema: z.ZodTypeAny): unknown[] {
  * which surfaces as a strict-parse failure in {@link synthesizeArgs} rather than
  * as a quietly degraded probe.
  */
-function sampleValue(schema: z.ZodTypeAny): unknown {
+function sampleValue(schema: z.ZodType): unknown {
   for (const candidate of candidatesFor(schema)) {
     if (schema.safeParse(candidate).success) return candidate;
   }

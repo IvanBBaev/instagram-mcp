@@ -11,8 +11,8 @@
 |---|---|---|
 | Language | TypeScript, **ESM**, `module: Node16` | House standard; `.js` import extensions |
 | Runtime | **Node ≥ 22**, `.nvmrc` = 22, `engine-strict` | Node 20 hit EOL 2026-04-30 — a ≥ 22 floor keeps the "no EOL Node" claim true |
-| MCP SDK | `@modelcontextprotocol/sdk` **v1 stable** (`registerTool` + zod v3) | v2 is beta with API churn; codemod path exists (`v1-to-v2`) |
-| Runtime deps | SDK + `zod` + `dotenv` — **exactly three** | Minimal supply-chain surface, mirrors reference |
+| MCP SDK | `@modelcontextprotocol/server` + `@modelcontextprotocol/node` **v2** (`registerTool` + zod 4) | Migrated from v1 (`@modelcontextprotocol/sdk` + zod 3) on 2026-10-10 via the `v1-to-v2` codemod, once v2 GA settled |
+| Runtime deps | SDK (`server` + `node`) + `zod` + `dotenv` — **exactly four** | Minimal supply-chain surface, mirrors reference; v2 split the v1 SDK, and `@modelcontextprotocol/node` is the Node HTTP adapter half the Streamable HTTP transport needs |
 | Tests | built-in `node:test` + `c8` coverage + `fast-check` | No test-runner dependency |
 | Lint/format | ESLint 10 flat + typescript-eslint 8 (type-checked), Prettier | Layer boundaries enforced by lint |
 | Spec target | MCP `2025-11-25` features (annotations, `outputSchema`/`structuredContent`) | Do **not** build on Sampling/Roots/Logging (deprecated in `2026-07-28`) |
@@ -68,16 +68,16 @@ export interface ToolSpec<S extends z.ZodRawShape> {
 - Registered as **built `.strict()` zod objects**, not raw shapes — unknown
   arguments are validation errors, never silently dropped (CC-CFG-6). The
   distinction is load-bearing: the MCP SDK validates arguments itself before the
-  tool callback runs, and a raw `ZodRawShape` is re-wrapped as a *non-strict*
-  `z.object(shape)` (`server/zod-compat.js` `normalizeObjectSchema` →
-  `objectFromShape`), which strips unknown keys instead of rejecting them. An
-  already-built `ZodObject` is passed through untouched, so `.strict()` survives
+  tool callback runs, and a raw shape is re-wrapped as a *non-strict*
+  `z.object(shape)` (SDK v2's deprecated raw-shape overload of `registerTool`),
+  which strips unknown keys instead of rejecting them. An already-built
+  `ZodObject` is a Standard Schema and is used untouched, so `.strict()` survives
   and the SDK enforces it. `registerOne` therefore hands the server the closed
   object and keeps its own `.strict()` re-parse only as a second line of defense
   for callers that drive the callback directly. Rejections are raised by the SDK
   as `Input validation error: Invalid arguments for tool <name>: …`; a
-  schema-bound zod `errorMap` supplies the tail of that message so it still names
-  the offending keys *and* the valid ones.
+  schema-bound zod `error` customisation supplies the tail of that message so it
+  still names the offending keys *and* the valid ones.
 - A central **PACKAGES manifest** in `mcp/registry.ts` is the single source of truth:
   `{ name, tools }` per package; an invariant loop asserts every spec's `package` tag
   matches. The manifest feeds registration, README generation, and a snapshot test,

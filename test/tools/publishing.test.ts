@@ -35,9 +35,8 @@ import {
   runPostStory,
 } from '../../src/tools/publishing.js';
 import { registerTools } from '../../src/mcp/registry.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 // Isolate the best-effort write journal to a temp dir for the whole file.
 const journalDir = mkdtempSync(join(tmpdir(), 'ig-pub-journal-'));
@@ -3759,7 +3758,7 @@ test('an empty status string is passed through rather than swallowed', async () 
 // alone from `src/tools/publishing.ts`.
 
 /** The `.describe()` text of one declared argument (the model-facing contract). */
-function describeOf(shape: z.ZodRawShape, key: string): string {
+function describeOf(shape: Record<string, z.ZodType>, key: string): string {
   return shape[key]?.description ?? '';
 }
 
@@ -4119,7 +4118,7 @@ async function livePublishingServer(
 
 /**
  * Strip the two things `tools/publishing.ts` does not own from a published
- * schema: the `$schema` dialect marker `zod-to-json-schema` emits, and the
+ * schema: the `$schema` dialect marker the SDK emits, and the
  * `account` argument `mcp/registry.ts` injects into every tool for
  * multi-account selection. Everything that remains is this module's own
  * statement.
@@ -4161,8 +4160,8 @@ function pinned(schema: unknown): Record<string, unknown> | undefined {
  *     tell the model an id or a list has a shape *before* it guesses one.
  *   - every media URL field publishes its own `{type, pattern, description}`.
  *     Each is built by its own `httpsUrl()` call (CC-PUB-35): fields built from
- *     one shared instance used to render as a `$ref` to their first twin, and
- *     under draft-07 a strict client ignores the description beside a `$ref`,
+ *     one shared instance used to render (SDK v1) as a `$ref` to their first
+ *     twin, and under draft-07 a strict client ignores the description beside a `$ref`,
  *     so three of them published another field's text. The `pattern` is the
  *     necessary half of the https verdict (CC-PUB-36) — before it the rule
  *     rendered to nothing, and a client-side validator accepted `ftp://x`.
@@ -4222,7 +4221,6 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
               y: { type: 'number', minimum: 0, maximum: 1 },
             },
             required: ['username'],
-            additionalProperties: false,
           },
           description:
             'User tags for a feed image: handles with optional 0–1 relative x/y coordinates.',
@@ -4243,6 +4241,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         thumbOffset: {
           type: 'integer',
           minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
           description: 'Reels/video cover frame offset, in milliseconds.',
         },
         shareToFeed: {
@@ -4398,7 +4397,6 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
               y: { type: 'number', minimum: 0, maximum: 1 },
             },
             required: ['username'],
-            additionalProperties: false,
           },
           description:
             'User tags for a single feed image (not carousels): handles with optional 0–1 x/y.',
@@ -4453,6 +4451,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         thumbOffset: {
           type: 'integer',
           minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
           description: 'Cover frame offset in milliseconds (used when no coverUrl is given).',
         },
         shareToFeed: {

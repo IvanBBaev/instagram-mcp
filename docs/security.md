@@ -330,8 +330,9 @@ rather than replacing it — the env flags remain the floor.
 
 ## 6. Supply chain & code integrity
 
-- **Three runtime dependencies** (MCP SDK, zod, dotenv); every addition needs a
-  documented justification. `npm audit` in CI and in the `check` script; Dependabot;
+- **Four runtime dependencies** (MCP SDK `server` + `node`, zod, dotenv); every
+  addition needs a documented justification. (SDK v2 split the v1 package; the
+  `node` half is the Node HTTP adapter the Streamable HTTP transport needs.) `npm audit` in CI and in the `check` script; Dependabot;
   CodeQL; provenance (`npm publish --provenance`) once public.
 - No telemetry, no phone-home, no analytics — the server talks to Meta and to its
   MCP client, nothing else.

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ToolResult, ToolSpec } from '../../src/mcp/define.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';

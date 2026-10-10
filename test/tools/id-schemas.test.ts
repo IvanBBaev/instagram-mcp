@@ -16,7 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { ToolResult } from '../../src/mcp/define.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import type { Logger, ResolvedProfile } from '../../src/core/types.js';
@@ -95,22 +95,23 @@ const ID_FIELDS: readonly (readonly [string, string])[] = [
  * fields are optional, so both wrappers are real cases rather than defensive
  * padding.
  */
-function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
+function unwrap(schema: z.ZodType): z.ZodType {
   let s = schema;
   for (;;) {
-    if (s instanceof z.ZodOptional) s = s.unwrap() as z.ZodTypeAny;
-    else if (s instanceof z.ZodArray) s = s.element as z.ZodTypeAny;
+    if (s instanceof z.ZodOptional) s = s.unwrap() as z.ZodType;
+    else if (s instanceof z.ZodArray) s = s.element as z.ZodType;
     else return s;
   }
 }
 
 /** True when this schema enforces {@link GRAPH_ID_PATTERN}. */
-function carriesIdRule(schema: z.ZodTypeAny): boolean {
+function carriesIdRule(schema: z.ZodType): boolean {
   const inner = unwrap(schema);
   if (!(inner instanceof z.ZodString)) return false;
-  return inner._def.checks.some(
-    (c) => c.kind === 'regex' && c.regex.source === GRAPH_ID_PATTERN.source,
-  );
+  return (inner.def.checks ?? []).some((c) => {
+    const def = c._zod.def as { format?: string; pattern?: RegExp };
+    return def.format === 'regex' && def.pattern?.source === GRAPH_ID_PATTERN.source;
+  });
 }
 
 const byName = new Map(allTools.map((t) => [t.name, t]));

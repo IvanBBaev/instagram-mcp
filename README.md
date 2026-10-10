@@ -349,7 +349,7 @@ client that supports MCP elicitation is asked to confirm each applied write.
 | GitHub repository | [`IvanBBaev/instagram-mcp`](https://github.com/IvanBBaev/instagram-mcp) |
 | MCP registry name | `io.github.IvanBBaev/instagram-mcp-ai` |
 | Language / runtime | TypeScript (ESM), Node.js ≥ 22 |
-| MCP SDK | `@modelcontextprotocol/sdk` v1 (`registerTool` + zod) |
+| MCP SDK | `@modelcontextprotocol/server` + `@modelcontextprotocol/node` v2 (`registerTool` + zod 4) |
 | Transports | stdio (default), Streamable HTTP (opt-in, loopback-bound) |
 | Env var prefix | `IG_` |
 | Graph API version | pinned `v25.0` in every URL |

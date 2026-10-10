@@ -25,8 +25,8 @@ import { Buffer } from 'node:buffer';
 import { connect } from 'node:net';
 import { PassThrough, Writable } from 'node:stream';
 import type { AddressInfo, Socket } from 'node:net';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 import {
@@ -111,7 +111,7 @@ function realServer(): McpServer {
   const server = new McpServer({ name: 'transport-test', version: '0.0.0' });
   server.registerTool(
     'echo',
-    { description: 'Echo the input back.', inputSchema: { value: z.string() } },
+    { description: 'Echo the input back.', inputSchema: z.object({ value: z.string() }) },
     ({ value }) => ({ content: [{ type: 'text' as const, text: value }] }),
   );
   return server;
@@ -718,7 +718,7 @@ test('startHttp serves many sequential requests over one running process', async
   // The defect this pins down: a stateless `StreamableHTTPServerTransport` may
   // handle exactly ONE request (SDK: "Stateless transport cannot be reused
   // across requests"), and an `McpServer` cannot be re-connected to a
-  // replacement ("Already connected to a transport"). So the transport must
+  // replacement ("this instance is already connected to a transport"). So the transport must
   // build a fresh pair per request — which is what the counters below assert,
   // and what an empty 500 on request #2 used to disprove.
   //
@@ -1047,10 +1047,10 @@ test('a finished exchange leaves the in-flight set instead of accumulating until
   const running = await startHttp(realServer, { host: '127.0.0.1', port }, recordingLogger([]));
 
   // eslint-disable-next-line @typescript-eslint/unbound-method
-  const originalClose = StreamableHTTPServerTransport.prototype.close;
+  const originalClose = NodeStreamableHTTPServerTransport.prototype.close;
   let closes = 0;
-  StreamableHTTPServerTransport.prototype.close = async function (
-    this: StreamableHTTPServerTransport,
+  NodeStreamableHTTPServerTransport.prototype.close = async function (
+    this: NodeStreamableHTTPServerTransport,
   ): Promise<void> {
     closes += 1;
     await originalClose.call(this);
@@ -1077,7 +1077,7 @@ test('a finished exchange leaves the in-flight set instead of accumulating until
       'shutdown re-closed a transport whose exchange had already ended',
     );
   } finally {
-    StreamableHTTPServerTransport.prototype.close = originalClose;
+    NodeStreamableHTTPServerTransport.prototype.close = originalClose;
     await shutdown();
   }
 });
@@ -2014,8 +2014,8 @@ test('a failure raised after the exchange answered does not write a second respo
   );
 
   // eslint-disable-next-line @typescript-eslint/unbound-method
-  const originalHandleRequest = StreamableHTTPServerTransport.prototype.handleRequest;
-  StreamableHTTPServerTransport.prototype.handleRequest = async (
+  const originalHandleRequest = NodeStreamableHTTPServerTransport.prototype.handleRequest;
+  NodeStreamableHTTPServerTransport.prototype.handleRequest = async (
     _req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> => {
@@ -2048,7 +2048,7 @@ test('a failure raised after the exchange answered does not write a second respo
     );
   } finally {
     process.off('unhandledRejection', onRejection);
-    StreamableHTTPServerTransport.prototype.handleRequest = originalHandleRequest;
+    NodeStreamableHTTPServerTransport.prototype.handleRequest = originalHandleRequest;
     await running.close();
   }
 });

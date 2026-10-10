@@ -876,9 +876,9 @@ async function loadEnvFiles(resolveConfigHome) {
  * probe that proves the destructive gate refuses it.
  */
 async function openSession({ env, confirm, timeoutMs, redact }) {
-  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-  const { ElicitRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const { Client } = await import('@modelcontextprotocol/client');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/client/stdio');
+  const { ElicitRequestSchema } = await import('@modelcontextprotocol/core');
 
   const transport = new StdioClientTransport({
     command: process.execPath,

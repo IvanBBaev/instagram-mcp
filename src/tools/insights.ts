@@ -50,8 +50,8 @@ const insightMetricOutput = z
     title: z.string().optional(),
     description: z.string().optional(),
     id: z.string().optional(),
-    values: z.array(z.record(z.unknown())).optional(),
-    total_value: z.record(z.unknown()).optional(),
+    values: z.array(z.record(z.string(), z.unknown())).optional(),
+    total_value: z.record(z.string(), z.unknown()).optional(),
     omittedValues: z
       .number()
       .int()
@@ -97,7 +97,7 @@ const insightMetricOutput = z
  * decision that leaves `core/errors.ts` and `core/redact.ts` with duplicate token
  * lists applies here (CC-PROC-19), and it is not mine to settle unilaterally.
  *
- * `z.record(z.unknown())` — what `values[]`, `total_value` and `paging` are
+ * `z.record(z.string(), z.unknown())` — what `values[]`, `total_value` and `paging` are
  * declared as — rejects `null` and an array for exactly the same reasons, so this
  * guard and that schema agree on every input by construction.
  */
@@ -345,7 +345,7 @@ const accountInsightsTool = defineTool({
       })
       .passthrough(),
     notes: z.array(z.string()),
-    paging: z.record(z.unknown()).optional(),
+    paging: z.record(z.string(), z.unknown()).optional(),
     missingMetrics: z.array(z.string()).optional(),
   },
   logFields: (args) => ({

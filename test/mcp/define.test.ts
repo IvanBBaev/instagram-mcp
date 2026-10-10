@@ -32,6 +32,7 @@ import type {
   ToolContext,
   ToolInputArgs,
   ToolResult,
+  ToolShape,
   ToolSpec,
   ToolTextContent,
 } from '../../src/mcp/define.js';
@@ -300,10 +301,11 @@ test('contract: ToolSpec.annotations is required and ToolSpec.output is an optio
   // `registerTools` reads `spec.annotations.readOnlyHint` unguarded for every
   // tool, so the member cannot become optional.
   const annotations: Expect<Equal<ToolSpec<Shape>['annotations'], ToolAnnotationSet>> = true;
-  // `output` stays a raw shape (not a built ZodObject): the SDK wraps it for both
-  // the published JSON Schema and the structuredContent check, and it is
+  // `output` stays a raw shape (not a built ZodObject): the registry wraps it in
+  // `z.object()` for both the published JSON Schema and the structuredContent
+  // check, and it is
   // deliberately independent of the input shape `S`.
-  const output: Expect<Equal<ToolSpec<Shape>['output'], z.ZodRawShape | undefined>> = true;
+  const output: Expect<Equal<ToolSpec<Shape>['output'], ToolShape | undefined>> = true;
   assert.equal(annotations, true);
   assert.equal(output, true);
 });
@@ -340,10 +342,10 @@ test('contract: ToolSpec.handler takes (args, ctx) and may be sync or async', ()
   assert.equal(exact, true);
 });
 
-test('contract: ToolSpec defaults its type parameter to z.ZodRawShape', () => {
+test('contract: ToolSpec defaults its type parameter to ToolShape', () => {
   // `mcp/registry.ts` stores heterogeneous tools as `ToolSpec[]`; without the
   // default that bare reference does not compile.
-  const defaulted: Expect<Equal<ToolSpec, ToolSpec<z.ZodRawShape>>> = true;
+  const defaulted: Expect<Equal<ToolSpec, ToolSpec<ToolShape>>> = true;
   assert.equal(defaulted, true);
 });
 

@@ -877,9 +877,10 @@ test('httpsUrl() refuses with exactly one issue, whichever half refused (CC-PUB-
 });
 
 test('httpsUrl() builds a fresh schema on every call (CC-PUB-35)', () => {
-  // A shared instance is what `zod-to-json-schema` de-duplicates into a `$ref`
-  // to the first twin, and under draft-07 a strict client then reads the twin's
-  // description instead of the field's own.
+  // A shared instance is what SDK v1's `zod-to-json-schema` de-duplicated into a
+  // `$ref` to the first twin, and under draft-07 a strict client then read the
+  // twin's description instead of the field's own. The factory keeps every field
+  // its own schema whatever the converter's reuse policy.
   assert.notEqual(httpsUrl(), httpsUrl());
 });
 
@@ -1232,7 +1233,7 @@ test('userTagSchema rejects NaN coordinates', () => {
 test('CONTAINER_MEDIA_TYPES is frozen, and the schema built from it cannot be widened', () => {
   // Measurable end to end inside this module: `containerMediaTypeSchema` is
   // `z.enum(CONTAINER_MEDIA_TYPES)`, built once when the module loads, and zod
-  // v3 keeps the ARRAY rather than a copy of it (CC-CFG-35). Before the freeze,
+  // v3 kept the ARRAY rather than a copy of it (CC-CFG-35). Before the freeze,
   // a push onto the exported vocabulary reached a schema that had already been
   // built — the schema behind `instagram_create_media_container`, which is what
   // decides whether Meta is asked to create a container of a `media_type` this
@@ -1253,20 +1254,13 @@ test('CONTAINER_MEDIA_TYPES is frozen, and the schema built from it cannot be wi
   assert.equal(containerMediaTypeSchema.safeParse('SMUGGLED').success, false);
   assert.equal(containerMediaTypeSchema.safeParse('IMAGE').success, false);
 
-  // Positive control for the sentence about zod holding the live array: the same
-  // schema over a mutable array does widen after it is built, so the freeze
-  // above is the whole difference between the two outcomes. The push has to land
-  // before the schema's first parse, which is where the reach of this mutation
-  // ends: zod 3.25.76 memoises the member set on first use, while `.options`
-  // — the list `zod-to-json-schema` renders for the client — stays a live read
-  // of the array either way. `test/api/insights.test.ts` measures both halves.
+  // Control for zod's own copy: zod 3 (3.25.76) held the live array, so the same
+  // schema over a mutable array widened after it was built (CC-CFG-35). zod 4
+  // copies it, so the freeze above is now defence in depth for the schema and
+  // the only guard for anything else that reads the exported list.
   const live: [string, ...string[]] = ['REELS', 'STORIES', 'CAROUSEL'];
   const loose = z.enum(live);
   live.push('SMUGGLED');
-  assert.equal(
-    loose.safeParse('SMUGGLED').success,
-    true,
-    'zod copied the array — this control measures nothing, and the freeze proves less',
-  );
-  assert.deepEqual(loose.options, ['REELS', 'STORIES', 'CAROUSEL', 'SMUGGLED']);
+  assert.equal(loose.safeParse('SMUGGLED').success, false, 'zod 4 kept the live array');
+  assert.deepEqual(loose.options, ['REELS', 'STORIES', 'CAROUSEL']);
 });

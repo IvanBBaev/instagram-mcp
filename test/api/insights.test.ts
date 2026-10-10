@@ -1225,10 +1225,12 @@ test('getOnlineFollowers throws validation without an account id', async () => {
 //
 // These are not decorative tables. Every one of them is the argument to a
 // `z.enum(…)` in `src/tools/insights.ts`, evaluated once when that module loads,
-// and zod v3 keeps the ARRAY itself rather than a copy of it (CC-CFG-35): a
-// member pushed onto one of these widens a schema that has already been built
-// and advertised to the MCP client. The measurement of exactly how far that
-// reaches is in `z.enum keeps the live array …` below.
+// and every one is also interpolated into a tool description
+// (`${ACCOUNT_METRICS.join(', ')}`), which is read live. zod 3 kept the ARRAY
+// itself inside the enum (CC-CFG-35); zod 4 copies it, so since the SDK v2
+// migration a push no longer reaches a built schema — but it would still reach
+// the description the model reads. The measurement is in `z.enum copies the
+// array …` below.
 
 /** Every flat vocabulary the module freezes, with the name to report. */
 const VOCABULARIES: readonly (readonly [string, readonly string[]])[] = [
@@ -1278,43 +1280,20 @@ test('every insights vocabulary refuses a runtime write, not just a compile-time
   }
 });
 
-test('z.enum keeps the live array, which is what makes these freezes load-bearing', () => {
-  // The positive control for the paragraph above, measured here rather than
-  // asserted elsewhere — and measured in both halves, because the reach of the
-  // mutation is not what the short version of this claim says (zod 3.25.76).
-  //
-  // Half one: building the schema does not seal it. A push before the schema's
-  // first parse widens VALIDATION, so a vocabulary edited any time between
-  // module load and the first tool call changes what the server accepts.
+test('z.enum copies the array under zod 4, so the freezes guard the descriptions', () => {
+  // The control for the paragraph above, measured rather than asserted. zod 3
+  // (3.25.76) held the array by reference: a push before the first parse
+  // widened validation and one after it widened `.options`, the list rendered
+  // into the advertised `inputSchema` (CC-CFG-35). zod 4 builds the member set
+  // from a copy, so neither half reaches a built schema any more.
   const live: [string, ...string[]] = ['views', 'reach'];
   const schema = z.enum(live);
   live.push('smuggled');
-  assert.equal(
-    schema.safeParse('smuggled').success,
-    true,
-    'zod copied the array — this control measures nothing, and the freezes below prove less',
-  );
+  assert.equal(schema.safeParse('smuggled').success, false, 'zod 4 kept the live array');
+  assert.deepEqual(schema.options, ['views', 'reach']);
 
-  // Half two: the first parse memoises the member set, so a LATER push no longer
-  // widens validation. It does not make the schema immutable, though — the
-  // option list stays a live read of the array, and that list is what
-  // `zod-to-json-schema` renders into the `inputSchema` the client is shown and
-  // what `${ACCOUNT_METRICS.join(', ')}` renders into the tool description. A
-  // push after the first parse therefore advertises a metric the server will
-  // then refuse: the two halves disagree, which is worse than either.
-  const sealed: [string, ...string[]] = ['views', 'reach'];
-  const sealedSchema = z.enum(sealed);
-  assert.equal(sealedSchema.safeParse('smuggled').success, false, 'guard: not a member yet');
-  sealed.push('smuggled');
-  assert.equal(
-    sealedSchema.safeParse('smuggled').success,
-    false,
-    'guard: the memoised member set is the point of this half',
-  );
-  assert.deepEqual(sealedSchema.options, ['views', 'reach', 'smuggled']);
-
-  // The real vocabularies refuse the step both halves depend on, so neither the
-  // enums nor the descriptions in `src/tools/insights.ts` can drift after load.
+  // The real vocabularies still refuse the push, so the descriptions in
+  // `src/tools/insights.ts` — a live `join` of these arrays — cannot drift after load.
   // The legacy names are why it matters: `impressions`, `profile_views` and
   // `video_views` were retired from the API in 2025 and are rejected on purpose.
   const metrics: readonly string[] = ACCOUNT_METRICS;

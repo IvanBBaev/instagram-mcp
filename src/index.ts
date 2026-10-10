@@ -19,8 +19,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-
+import { McpServer } from '@modelcontextprotocol/server';
 import { systemClock } from './core/clock.js';
 import { expiryLabel } from './core/time.js';
 import { SETTINGS_ENV_NAMES, loadSettings } from './core/settings.js';

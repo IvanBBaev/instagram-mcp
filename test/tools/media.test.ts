@@ -26,9 +26,8 @@ import { registerTools } from '../../src/mcp/registry.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { mediaTools } from '../../src/tools/media.js';
 import { testSettings } from '../helpers/settings.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 /**
  * Offline hard stop. Every test here drives the tools through an injected
@@ -489,7 +488,7 @@ test('instagram_get_media lets an InstagramError propagate for the registry to m
  * what actually enforces those declarations — it validates `arguments` against
  * the (strict) input schema *before* our callback runs and re-parses
  * `structuredContent` against the output schema *after* it returns
- * (`server/mcp.js` `validateToolInput` / `validateToolOutput`) — so the tests
+ * (`McpServer` `validateToolInput` / `validateToolOutput`) — so the tests
  * below register the real specs on a real `McpServer` and drive them through a
  * real `Client` over `InMemoryTransport`, the same way test/mcp/registry.test.ts
  * does for the registry itself. Nothing else observes the schemas as shipped.
@@ -832,7 +831,7 @@ test('real McpServer: an empty mediaId is rejected before any request is built',
 // --- the published contract, pinned byte for byte ---------------------------
 
 /**
- * The JSON Schema the registry hands to `zod-to-json-schema` also picks up two
+ * The JSON Schema the SDK renders from the registered zod schema also picks up two
  * things this module does not own: the `$schema` dialect marker and the
  * registry-injected `account` argument (multi-account selection, added to every
  * tool in `mcp/registry.ts`). Strip both so the pins below fail only when
@@ -950,17 +949,21 @@ test('real McpServer: the published contract of instagram_list_media is pinned e
                 type: 'object',
                 properties: MEDIA_FIELD_SCHEMAS,
                 required: ['id'],
-                additionalProperties: true,
+                additionalProperties: {},
               },
             },
             paging: {
               type: 'object',
               properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
               required: ['truncated'],
-              additionalProperties: true,
+              additionalProperties: {},
             },
             note: { type: 'string' },
-            omittedWithoutId: { type: 'integer' },
+            omittedWithoutId: {
+              type: 'integer',
+              minimum: Number.MIN_SAFE_INTEGER,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
           },
           required: ['items', 'paging'],
           additionalProperties: false,
@@ -1047,10 +1050,14 @@ test('real McpServer: the published contract of instagram_get_media is pinned ex
                   timestamp: { type: 'string' },
                 },
                 required: ['id'],
-                additionalProperties: true,
+                additionalProperties: {},
               },
             },
-            omittedWithoutId: { type: 'integer' },
+            omittedWithoutId: {
+              type: 'integer',
+              minimum: Number.MIN_SAFE_INTEGER,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
             note: { type: 'string' },
           },
           required: ['id'],
@@ -1774,17 +1781,21 @@ test('real McpServer: the published contract of instagram_list_stories is pinned
                 type: 'object',
                 properties: MEDIA_FIELD_SCHEMAS,
                 required: ['id'],
-                additionalProperties: true,
+                additionalProperties: {},
               },
             },
             paging: {
               type: 'object',
               properties: { after: { type: 'string' }, truncated: { type: 'boolean' } },
               required: ['truncated'],
-              additionalProperties: true,
+              additionalProperties: {},
             },
             note: { type: 'string' },
-            omittedWithoutId: { type: 'integer' },
+            omittedWithoutId: {
+              type: 'integer',
+              minimum: Number.MIN_SAFE_INTEGER,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
           },
           required: ['items', 'paging'],
           additionalProperties: false,

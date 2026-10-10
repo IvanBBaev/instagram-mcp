@@ -48,10 +48,17 @@ export interface ToolResult {
 }
 
 /**
+ * A tool's zod raw shape: field name to a *classic* zod schema. zod 4's own
+ * `z.ZodRawShape` is a readonly map of core `$ZodType`s, which hides the classic
+ * API (`.description`, `.safeParse`) from everything that reads a spec's fields.
+ */
+export type ToolShape = Record<string, z.ZodType>;
+
+/**
  * Parsed handler args: the tool's declared input plus the framework-injected
  * `account` selector (multi-profile). Write tools additionally see `apply`.
  */
-export type ToolInputArgs<S extends z.ZodRawShape> = z.infer<z.ZodObject<S>> & {
+export type ToolInputArgs<S extends ToolShape> = z.infer<z.ZodObject<S>> & {
   account?: string;
   apply?: boolean;
 };
@@ -69,7 +76,7 @@ export interface ToolContext {
   log: Logger;
 }
 
-export interface ToolSpec<S extends z.ZodRawShape = z.ZodRawShape> {
+export interface ToolSpec<S extends ToolShape = ToolShape> {
   /** `instagram_<verb>_<noun>`. */
   name: string;
   title: string;
@@ -86,7 +93,7 @@ export interface ToolSpec<S extends z.ZodRawShape = z.ZodRawShape> {
   /** zod raw shape; every field `.describe()`d. Registered with `.strict()`. */
   input: S;
   /** structuredContent schema where the shape is stable. */
-  output?: z.ZodRawShape;
+  output?: ToolShape;
   /** Fields safe to log — never secrets. */
   logFields?: (args: ToolInputArgs<S>) => Record<string, unknown>;
   handler: (args: ToolInputArgs<S>, ctx: ToolContext) => ToolResult | Promise<ToolResult>;
@@ -96,7 +103,7 @@ export interface ToolSpec<S extends z.ZodRawShape = z.ZodRawShape> {
  * Identity helper preserving the generic `S` at definition sites.
  *
  * Equivalent-mutant note: rewriting this declaration as an arrow constant
- * (`export const defineTool = <S extends z.ZodRawShape>(spec: ToolSpec<S>) => spec`) is
+ * (`export const defineTool = <S extends ToolShape>(spec: ToolSpec<S>) => spec`) is
  * unobservable from outside the module. Arity, `Function.prototype.name`, the returned
  * reference and the inferred type are all unchanged. What does change is hoisting, and
  * `.prototype`/constructability — an arrow has no `.prototype` and `new defineTool(…)`
@@ -106,6 +113,6 @@ export interface ToolSpec<S extends z.ZodRawShape = z.ZodRawShape> {
  * Equivalent-mutant note: `return spec as ToolSpec<S>` is equally unobservable. `spec` is
  * already declared `ToolSpec<S>`, so the assertion narrows nothing and erases at emit.
  */
-export function defineTool<S extends z.ZodRawShape>(spec: ToolSpec<S>): ToolSpec<S> {
+export function defineTool<S extends ToolShape>(spec: ToolSpec<S>): ToolSpec<S> {
   return spec;
 }

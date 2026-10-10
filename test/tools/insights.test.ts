@@ -23,9 +23,8 @@ import type {
 import { fakeClock } from '../helpers/fake-clock.js';
 import { testSettings } from '../helpers/settings.js';
 import { registerTools } from '../../src/mcp/registry.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 const NOW_MS = 1_700_000_000_000;
 
@@ -1004,7 +1003,7 @@ test('the online-followers output schema requires the metrics array under that n
 // (CC-PROC-74).
 
 /** The `.describe()` text of one declared argument (the model-facing contract). */
-function describeOf(shape: z.ZodRawShape, key: string): string {
+function describeOf(shape: Record<string, z.ZodType>, key: string): string {
   return shape[key]?.description ?? '';
 }
 
@@ -1273,10 +1272,15 @@ const PUBLISHED_METRIC_ROW = {
     title: { type: 'string' },
     description: { type: 'string' },
     id: { type: 'string' },
-    values: { type: 'array', items: { type: 'object', additionalProperties: {} } },
-    total_value: { type: 'object', additionalProperties: {} },
+    values: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: {}, propertyNames: { type: 'string' } },
+    },
+    total_value: { type: 'object', additionalProperties: {}, propertyNames: { type: 'string' } },
     omittedValues: {
       type: 'integer',
+      minimum: Number.MIN_SAFE_INTEGER,
+      maximum: Number.MAX_SAFE_INTEGER,
       description:
         'How many intervals Instagram sent in values that were unreadable and left out (a ' +
         'values that is not a list counts as one); values then covers less than the whole ' +
@@ -1284,6 +1288,8 @@ const PUBLISHED_METRIC_ROW = {
     },
     omittedTotalValues: {
       type: 'integer',
+      minimum: Number.MIN_SAFE_INTEGER,
+      maximum: Number.MAX_SAFE_INTEGER,
       description:
         'How many measurements Instagram sent in total_value (its value, a breakdown, or one ' +
         'breakdown result) that were unreadable and left out; the total or a sum over the ' +
@@ -1291,7 +1297,7 @@ const PUBLISHED_METRIC_ROW = {
     },
   },
   required: ['name'],
-  additionalProperties: true,
+  additionalProperties: {},
 };
 
 /**
@@ -1401,6 +1407,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         },
         since: {
           type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
           description:
             "Range start as a Unix timestamp in seconds. Omit for Meta's default 24h lookback. " +
             'Data older than the 90-day retention window is not available — a partially-old ' +
@@ -1408,6 +1416,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         },
         until: {
           type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
           description:
             'Range end as a Unix timestamp in seconds. Omit for the default 24h lookback. ' +
             'Must not be before since.',
@@ -1429,10 +1439,10 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             clamped: { type: 'boolean' },
           },
           required: ['clamped'],
-          additionalProperties: true,
+          additionalProperties: {},
         },
         notes: { type: 'array', items: { type: 'string' } },
-        paging: { type: 'object', additionalProperties: {} },
+        paging: { type: 'object', additionalProperties: {}, propertyNames: { type: 'string' } },
         missingMetrics: { type: 'array', items: { type: 'string' } },
       },
       required: ['metrics', 'window', 'notes'],
@@ -2143,12 +2153,14 @@ test('the other three insights tools repair rows the same way and never invent a
 });
 
 test('a typed Graph error reaches a real SDK client as a typed error, not a schema rejection (CC-DATA-61)', async () => {
-  // Measured with @modelcontextprotocol/sdk 1.30.0: `Client.callTool` validates
-  // `structuredContent` against the tool's outputSchema whenever it is present,
+  // Measured with @modelcontextprotocol/sdk 1.30.0: `Client.callTool` validated
+  // `structuredContent` against the tool's outputSchema whenever it was present,
   // `isError` or not. An error result that carried `{ error: {...} }` therefore
   // came back from every tool with an outputSchema as `MCP error -32602:
   // Structured content does not match the tool's output schema`, and the
   // follower-threshold refusal (code 100) the model needs to explain was lost.
+  // The v2 `@modelcontextprotocol/client` skips that check on `isError`, but
+  // other clients (and the v1 one) still apply it, so the pin stays.
   const refusal = new InstagramError('Not enough followers for this metric', {
     kind: 'validation',
     status: 400,

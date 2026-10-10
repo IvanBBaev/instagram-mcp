@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { graphObjectId } from './ids.js';
+import { boundedArray } from './arrays.js';
 import { defineTool } from '../mcp/define.js';
 import type { ToolSpec } from '../mcp/define.js';
 import { json } from '../mcp/result.js';
@@ -297,9 +298,7 @@ function publishable(out: Record<string, unknown>): Record<string, unknown> {
 // went out as `metric=` — a Graph call spent on a request that names nothing to
 // measure. Omit the argument to get the default set.
 const accountInsightsInput = {
-  metrics: z
-    .array(z.enum(ACCOUNT_METRICS))
-    .min(1)
+  metrics: boundedArray(z.enum(ACCOUNT_METRICS), 1)
     .optional()
     .describe(
       `Account metrics to fetch (post-2025 set). Defaults to all of: ${ACCOUNT_METRICS.join(', ')}; with metric_type "time_series" it defaults to ${TIME_SERIES_ACCOUNT_METRICS.join(', ')}. Legacy names (impressions, profile_views, video_views) no longer exist and are rejected.`,
@@ -386,9 +385,7 @@ const mediaInsightsInput = {
   // — a model that reads "defaults to <the feed set>" and then names a story has
   // been told that the call it is about to make is the one that used to come
   // back as a client-side refusal.
-  metrics: z
-    .array(z.enum(MEDIA_METRICS))
-    .min(1)
+  metrics: boundedArray(z.enum(MEDIA_METRICS), 1)
     .optional()
     .describe(
       'Media metrics to fetch. Defaults to the set valid for the media: views, reach, likes, comments, saved, shares, total_interactions for a feed post or a reel, and views, reach, replies, shares, total_interactions, navigation when media_product_type is STORY. An absent or unrecognized media_product_type gets the feed set. Validity depends on the media type: "navigation" and "replies" are story-only and are refused for feed posts and reels.',
@@ -433,9 +430,7 @@ const mediaInsightsTool = defineTool({
 // --- instagram_get_audience_demographics -----------------------------------
 
 const audienceDemographicsInput = {
-  metrics: z
-    .array(z.enum(DEMOGRAPHIC_METRICS))
-    .min(1)
+  metrics: boundedArray(z.enum(DEMOGRAPHIC_METRICS), 1)
     .optional()
     .describe(
       'Which demographic populations to fetch. Defaults to ["follower_demographics"]; "engaged_audience_demographics" describes the accounts that engaged.',

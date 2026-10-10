@@ -31,7 +31,8 @@ src/
   mcp/            # Layer 2: MCP glue — define.ts (ToolSpec), registry.ts, result.ts,
                   #          transport.ts, write-mode.ts
   tools/          # Layer 3: tool specs as data — one file per package, plus ids.ts
-                  #          (the shared object-id charset rule)
+                  #          (the shared object-id charset rule) and arrays.ts
+                  #          (item-count bounds checked only on a real array)
 ```
 
 Import rule `core ← api ← mcp ← tools`, enforced via ESLint `no-restricted-imports`:

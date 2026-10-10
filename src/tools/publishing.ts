@@ -43,6 +43,7 @@
 import { z } from 'zod';
 import { graphObjectId } from './ids.js';
 import { acknowledgedId } from './ack.js';
+import { boundedArray } from './arrays.js';
 import {
   defineTool,
   type ToolContext,
@@ -475,10 +476,7 @@ const createContainerInput = {
     .array(userTagSchema)
     .optional()
     .describe('User tags for a feed image: handles with optional 0–1 relative x/y coordinates.'),
-  children: z
-    .array(graphObjectId())
-    .min(CAROUSEL_MIN)
-    .max(CAROUSEL_MAX)
+  children: boundedArray(graphObjectId(), CAROUSEL_MIN, CAROUSEL_MAX)
     .optional()
     .describe('CAROUSEL album only: 2–10 previously-created child container ids to combine.'),
   coverUrl: httpsUrl().optional().describe('Reels cover image URL.'),
@@ -688,10 +686,7 @@ const getPublishingLimitTool = defineTool({
 // --- instagram_post_image (composite) --------------------------------------
 
 const postImageInput = {
-  imageUrls: z
-    .array(httpsUrl())
-    .min(1)
-    .max(CAROUSEL_MAX)
+  imageUrls: boundedArray(httpsUrl(), 1, CAROUSEL_MAX)
     .optional()
     .describe(
       'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–10 ' +

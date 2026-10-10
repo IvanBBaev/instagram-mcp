@@ -233,6 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relative one, now quote the path with every line break and invisible character
   escaped, so a file name can no longer split the refusal into a forged stderr line
   (CC-CFG-79).
+- A single string sent to a list argument (`post_image.imageUrls`,
+  `create_media_container.children`, or `metrics` on the three insights tools)
+  is again refused with the type error alone. Since the zod 4 upgrade, the refusal
+  also carried a misleading `Too big: expected string to have <=10 characters`
+  (or `>=1 characters`). Item-count limits on real lists and the published
+  `minItems` / `maxItems` are unchanged (CC-PUB-67).
 
 ### Removed
 

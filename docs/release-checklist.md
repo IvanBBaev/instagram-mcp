@@ -21,7 +21,8 @@ that pin as well.
 
 ## Reality check — one channel of four has shipped
 
-As of 2026-08-25:
+As of 2026-08-25 (re-checked 2026-10-10: `npm view instagram-mcp-ai versions` still
+lists only `0.7.0`, so the `0.8.0` in the tree is unreleased):
 
 - **npm — published.** `instagram-mcp-ai@0.7.0` is live with build provenance,
   published by `.github/workflows/release.yml` from the `v0.7.0` GitHub Release.
@@ -83,7 +84,10 @@ lane below has been exercised once, end to end; the other three have not.
    do not publish with an advisory outstanding when a fix is available. (The
    **moderate** path-traversal advisory in `@hono/node-server`, reached
    transitively through `@modelcontextprotocol/sdk`, was cleared before `0.7.0`
-   by refreshing `package-lock.json` onto `@modelcontextprotocol/sdk@1.30.0`.)
+   by refreshing `package-lock.json` onto `@modelcontextprotocol/sdk@1.30.0`. Since
+   the SDK v2 migration on 2026-10-10 the same package arrives through
+   `@modelcontextprotocol/node`; `npm audit --omit=dev` reported zero advisories on
+   that tree the same day.)
 3. **Live validation of the tool surface. [blocked — live]** The read path,
    publishing/moderation, and OAuth login have still never been exercised
    end-to-end against a real professional account (see the Lane E live protocols in

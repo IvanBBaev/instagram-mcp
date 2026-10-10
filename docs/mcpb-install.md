@@ -159,24 +159,36 @@ staging directory, never in your checkout), checks that the manifest version mat
 `package.json`, then runs `mcpb validate` and `mcpb pack` on the staging directory. The
 output path is ignored by git (`*.mcpb` in `.gitignore`).
 
-### Local build and smoke test (2026-10-01)
+### Local build and smoke test (2026-10-10, after the SDK v2 migration)
 
 The bundle has been built and smoke-tested **locally** (nothing was published or
-installed into Claude Desktop):
+installed into Claude Desktop). First done on 2026-10-01; repeated on 2026-10-10
+after the move to the MCP SDK v2 packages and dotenv 18, which is what the numbers
+below describe:
 
 - `scripts/build-mcpb.sh` with `@anthropic-ai/mcpb@2` → `manifest.json` passes
-  `mcpb validate`; `instagram-mcp-ai-0.8.0.mcpb` is **3.4 MB** packed, 10.6 MB / 2,211
-  files unpacked (the packer's default ignore list dropped another 1,282 files from
-  `node_modules`). It holds `dist/src`, `bin/`, `package.json`, `manifest.json`,
-  `server.json`, `README.md`, `LICENSE` and the production dependencies only.
+  `mcpb validate`; `instagram-mcp-ai-0.8.0.mcpb` is **2.9 MB** packed, 10.9 MB / 1,270
+  files unpacked (the packer's default ignore list dropped another 415 files from
+  `node_modules`). On 2026-10-01, on SDK v1, it was 3.4 MB / 2,211 files. It holds
+  `dist/src`, `bin/`, `package.json`, `manifest.json`, `server.json`, `README.md`,
+  `LICENSE` and the production dependencies only.
 - The unzipped bundle was launched exactly as `server.mcp_config` specifies
   (`node <bundle>/dist/src/index.js`, the seven `IG_*` variables, a dummy
-  `IG_ACCESS_TOKEN`) and driven over stdio with `initialize` + `tools/list`:
-  `serverInfo` is `instagram-mcp-ai` `0.8.0`; `tools/list` returns **26** tools for the
-  default `core` selection (29 for `all`, 16 for `reader`, 22 for `publisher`). Leaving
-  the optional fields as unresolved `${user_config.X}` placeholders gives the same
-  result.
-- With `globalThis.fetch` trapped, startup, `initialize` and `tools/list` made **no**
-  network request: the token is not validated at startup, only when a tool call uses it.
+  `IG_ACCESS_TOKEN`, an empty home directory) and driven over stdio with
+  `initialize` + `tools/list`: `serverInfo` is `instagram-mcp-ai` `0.8.0`, and stdout
+  carries nothing before `initialize`. With a token only (Path A) `tools/list`
+  returns **25** tools for the default `core` selection (25 for `all`, 12 for
+  `reader`, 21 for `publisher`) — the four `fb-login`-only tools are not registered.
+  Leaving the optional fields as unresolved `${user_config.X}` placeholders gives the
+  same result. With a Path B profile (`IG_AUTH_MODE=fb-login` plus `IG_APP_ID` /
+  `IG_APP_SECRET`) the counts are the full-surface ones: 26 for `core`, 29 for `all`,
+  16 for `reader`, 22 for `publisher` — and the `all` list is name-for-name the 29
+  tools `manifest.json` declares. (The 2026-10-01 note gave the Path B counts for the
+  token-only run.)
+- With the network trapped (`fetch`, socket connect, DNS lookup and TLS connect),
+  startup, `initialize` and `tools/list` made **no** network request: the token is
+  not validated at startup, only when a tool call uses it.
+- `IG_TRANSPORT=http` with an `IG_HTTP_TOKEN` also starts from the bundle: a request
+  without the bearer is refused, one with it lists the tools.
 
 A live install into Claude Desktop is the part still marked **`[verify — live]`** above.

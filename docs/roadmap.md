@@ -26,32 +26,47 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
 | M3 Moderation | **PARTIAL** | 9 comment tools (the comment toggle moved from `media` to `comments` on 2026-09-30, CC-PROC-9) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
-| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle, the plugin-marketplace listing, and clean-machine install testing of any channel. Those are outward, irreversible acts awaiting an explicit go-ahead. |
+| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle attach, the plugin-marketplace listing, and clean-machine install testing of any channel (the npm tarball and the MCPB bundle were install-tested locally on 2026-10-10, after the SDK v2 migration — see below — which is not the same thing). Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
 **Where the project stands (2026-10-10).** `instagram-mcp-ai` 0.7.0 has been on
 npm since 2026-08-25. The tree is versioned 0.8.0 (`CHANGELOG.md` dates that
 section 2026-09-24, and the work since sits under `[Unreleased]`), but 0.8.0 is
-**not published** — npm still serves 0.7.0 and the repository has no tag for
-it. Publishing it, like the MCP-registry submission (workplan T-R5) and the
-MCPB and marketplace channels (T-R6, T-R8), is an outward act that waits on the
-owner's go-ahead. Audit waves 18 and 19 have run since 0.7.0, and on
-2026-09-30 every recorded owner-decision recommendation was applied — the
-[corner-cases.md](corner-cases.md) §10 register plus the wave-18/19 rows (see
-item 6 of the open-question register below). The surface is now **29 tools**
+**not published** — `npm view instagram-mcp-ai versions` still lists only 0.7.0
+(re-checked 2026-10-10) and the repository has no tag for it. Publishing it, like
+the MCP-registry submission (workplan T-R5) and the MCPB and marketplace channels
+(T-R6, T-R8), is an outward act that waits on the owner's go-ahead. Audit waves 18
+and 19 have run since 0.7.0, and on 2026-09-30 every recorded owner-decision
+recommendation was applied — the [corner-cases.md](corner-cases.md) §10 register
+plus the wave-18/19 rows (see item 6 of the open-question register below). On
+2026-10-10 the server moved to the MCP TypeScript SDK v2
+(`@modelcontextprotocol/server` + `@modelcontextprotocol/node`, zod 4) and to
+dotenv 18; the tool surface did not change with either. The surface is **29 tools**
 (`instagram_list_stories` joined `media`, CC-DATA-119; the comment toggle moved to
 `comments`, CC-PROC-9): 26 under the default `core` profile, 16 under `reader`, 22
-under `publisher`. Since then (2026-10-10) the production dependency advisories were
-cleared, audit wave 20 fixed CC-AUTH-79 (Path-B calls are re-signed on every retry
-and slot wait), and the server moved to the MCP TypeScript SDK v2
-(`@modelcontextprotocol/server` 2.x, zod 4) — the tool surface is unchanged, but the
-published JSON Schemas changed shape (see `CHANGELOG.md` `[Unreleased]`). The suite
-is at 2556 tests with 100% coverage on every axis,
-and every module has been through mutation testing. Two of those tests fail, both
-the CC-CFG-69 canary tripping on a stray `./   /` directory in the working tree —
-an owner action (delete the directory), not a code defect. None of that changes a
-milestone status below: M1–M4 stay **PARTIAL** because each exit gate names a live
-account, and no live run has happened yet.
+under `publisher`. Those are the full-surface counts; a deployment with Path A
+credentials only drops the four `fb-login`-only tools, so it sees 25 / 12 / 21
+(and 25 under `all`). Since then (2026-10-10) the production dependency advisories
+were cleared, audit wave 20 fixed CC-AUTH-79 (Path-B calls are re-signed on every
+retry and slot wait), and the server moved to the MCP TypeScript SDK v2 — the tool
+surface is unchanged, but the published JSON Schemas changed shape (see
+`CHANGELOG.md` `[Unreleased]`). The suite is at 2556 tests, all passing on a clean
+checkout, with 100% coverage on every axis, and every module has been through
+mutation testing. The CC-CFG-69 canary still trips twice in the primary working
+tree, on the stray `./   /` directory that is still there — an owner action (delete
+the directory), not a code defect.
+
+After the SDK v2 and dotenv 18 bumps, both distributable artifacts were
+install-tested **locally** on 2026-10-10 (nothing published): the `npm pack`
+tarball installed with `--omit=dev` into an empty directory pulls only the four
+declared runtime dependencies and their own, and its `instagram-mcp-ai` bin, like
+the rebuilt MCPB bundle ([mcpb-install.md](mcpb-install.md)), answers
+`initialize` and `tools/list` over stdio with nothing on stdout before
+`initialize`, no network request at startup, the per-profile counts above, the
+usage exits (`--help` 0, an unknown subcommand or stray argument 2), and the HTTP
+transport's bearer check. No defect turned up. None of that changes a milestone
+status below: M1–M4 stay **PARTIAL** because each exit gate names a live account,
+and no live run has happened yet.
 
 **Cross-cutting blocker.** Lane E (live QA, `T-E1`–`T-E4`) is **harness done,
 execution blocked**: there are no live Meta credentials in this environment, so
@@ -336,7 +351,7 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   `z.object()`, the re-baselined published-schema pins) was finished by hand. The
   29-tool surface, profiles and output vocabularies are unchanged; the published
   JSON Schema's dialect and a few keyword spellings are not (see `CHANGELOG.md`).
-- **NOT DONE:** the MCP-registry submission; the MCPB bundle attach (built and smoke-tested locally 2026-10-01, never installed in a client); the
+- **NOT DONE:** the MCP-registry submission; the MCPB bundle attach (built and smoke-tested locally 2026-10-01, rebuilt and re-tested on SDK v2 2026-10-10, never installed in a client); the
   plugin-marketplace listing. All three are manual, outward acts.
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
   users, and the exit gate's install testing of all **four** channels — including

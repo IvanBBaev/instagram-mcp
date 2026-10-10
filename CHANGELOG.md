@@ -311,6 +311,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The redactor honours an inherited `toJSON` (CC-DATA-123) and masks keys named
   `access-token`, `app_secret`, `client_secret` and `authorization` in any
   separator spelling (CC-DATA-124).
+- `login` / `refresh` now rewrite an env-store assignment written with dotenv's
+  colon separator (`IG_ACCESS_TOKEN: …`) in place, instead of appending below it and
+  leaving the superseded token on disk in plaintext (CC-CFG-78).
 
 ## [0.8.0] — 2026-09-24
 

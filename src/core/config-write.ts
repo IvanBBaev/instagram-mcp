@@ -373,7 +373,13 @@ function formatValue(value: string): string | undefined {
 
 /**
  * The assignment on an env-file line — the `export`/indentation prefix and the
- * key (`KEY=...`, optional `export`) — else undefined.
+ * key (`KEY=...` or `KEY: ...`, optional `export`) — else undefined.
+ *
+ * Both separators are dotenv's: its parser reads `KEY: value` (a colon right
+ * after the key, then whitespace) as an assignment too. Recognising only `=`
+ * left such a line untouched, so `login` appended the fresh token below it and
+ * the superseded one stayed on disk in plaintext (CC-CFG-78). The colon form is
+ * rewritten as `KEY=value`, which is also the only one a shell can `source`.
  *
  * The prefix is returned rather than discarded because {@link mergeEnv} replaces
  * the VALUE on a line, not the line. Recognising a leading `export ` and then
@@ -397,7 +403,7 @@ function assignmentOn(line: string): { prefix: string; key: string } | undefined
   // from the file. With the narrower class that line was never recognised, so
   // every `login`/`refresh` appended a fresh assignment below it and left the
   // superseded token on disk in plaintext.
-  const match = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.-]*)\s*=/.exec(line);
+  const match = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.-]*)(?:\s*=|:(?=\s))/.exec(line);
   const prefix = match?.[1];
   const key = match?.[2];
   // Both groups are non-optional in the pattern above, so a match always fills
@@ -470,9 +476,9 @@ function buildUpdates(profileName: string, creds: Credentials): Map<string, stri
  * drop every assignment of a key in `removals`. A fresh file gets a short header.
  *
  * One byte-level normalisation is deliberate: {@link assignmentOn} accepts
- * `KEY = value`, and the rewrite emits `KEY=value`. A POSIX shell reads the spaced
- * form as a command invocation, so collapsing it is what makes a file this module
- * has touched a file `source` can still read.
+ * `KEY = value` and dotenv's `KEY: value`, and the rewrite emits `KEY=value`. A
+ * POSIX shell reads either form as a command invocation, so collapsing it is what
+ * makes a file this module has touched a file `source` can still read.
  */
 function mergeEnv(
   existing: string,

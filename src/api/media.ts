@@ -303,6 +303,15 @@ export const CAP_MID_PAGE_NOTE =
   'dropped here, so there is nothing to resume from; re-read with a smaller limit';
 
 /**
+ * Note for an edge that answered with a cursor it had already been sent: no
+ * forward progress (CC-DATA-50 on the walk, CC-DATA-134 on a single page).
+ * Exported for the same reason as {@link CAP_MID_PAGE_NOTE}: `api/discovery.ts`
+ * publishes it too.
+ */
+export const SAME_CURSOR_NOTE =
+  'the edge returned the same cursor twice (no forward progress) — resume from `after`';
+
+/**
  * Note for a page whose cursor is present but cannot be sent back (CC-DATA-11):
  * no proof the edge ended, so the listing may be incomplete. Exported for the
  * same reason as {@link CAP_MID_PAGE_NOTE}: `api/discovery.ts` publishes it too.
@@ -558,6 +567,16 @@ export async function fetchPagedEdge<TRaw, T>(
         truncated = true;
         note = UNUSABLE_CURSOR_NOTE;
       } else {
+        // CC-DATA-134. The one cursor a single page has sent is the caller's
+        // `after` (`followed` is seeded with it), so an edge that answers with
+        // that same cursor made no progress: publishing it as an ordinary next
+        // position invited the caller to re-read this page forever. Flag it
+        // exactly as the walk below does (CC-DATA-50) — same note, same resume
+        // point.
+        if (isUsableCursor(nextAfter) && followed.has(nextAfter)) {
+          truncated = true;
+          note = SAME_CURSOR_NOTE;
+        }
         resultAfter = nextAfter;
       }
       break;
@@ -660,7 +679,7 @@ export async function fetchPagedEdge<TRaw, T>(
 
     // Termination guards — each keeps what was gathered and hands back a cursor.
     if (followed.has(nextAfter)) {
-      note = 'the edge returned the same cursor twice (no forward progress) — resume from `after`';
+      note = SAME_CURSOR_NOTE;
     } else if (added === 0) {
       note =
         'a page returned no items while more remained (filtered or deleted) — resume from `after`';

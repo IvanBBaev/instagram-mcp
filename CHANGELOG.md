@@ -91,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A single-page listing (`list_media`, `list_stories`, `list_comments`,
+  `list_tagged_media`, `get_hashtag_media`) that Instagram answers with the same
+  cursor it was sent now reports `truncated: true` with the same-cursor note the
+  `fetchAll` walk uses, instead of offering that cursor as the next page and
+  inviting an endless re-read of one page (CC-DATA-134).
 - `instagram_get_account_insights` with `metric_type: "time_series"` now defaults to
   `reach`, the only account metric Instagram serves as a time series, and refuses
   any other metric with it before a call; a bare `time_series` used to request all

@@ -168,7 +168,10 @@ Instagram sends without `paging.next`: that page publishes no `after` even thoug
 Instagram still sends cursors on it, so a read that ends there is complete, and a
 page that has `paging.next` but no cursor resumes from the `after` inside that URL,
 or reports `truncated: true` with the unusable-cursor note when the URL has none
-or names `after` more than once (CC-DATA-115, CC-DATA-117).
+or names `after` more than once (CC-DATA-115, CC-DATA-117). A single page that
+Instagram answers with the very cursor it was sent made no progress, so it reports
+`truncated: true` with the same-cursor note the `fetchAll` walk uses rather than
+offering that cursor as the next page (CC-DATA-50, CC-DATA-134).
 
 Nothing the server leaves out is left out silently. An item Instagram returned
 without a usable id is counted in `omittedWithoutId` with a `note` (lists,

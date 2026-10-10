@@ -22,6 +22,7 @@ import type { GraphListResponse, IgRequestFn } from '../core/types.js';
 import {
   CAP_MID_PAGE_NOTE,
   nextPageCursor,
+  SAME_CURSOR_NOTE,
   UNREADABLE_PAGE_NOTE,
   UNUSABLE_CURSOR_NOTE,
 } from './media.js';
@@ -233,6 +234,13 @@ export async function getHashtagMedia(
     return result;
   }
   result.after = nextAfter;
+  // CC-DATA-134: the edge answered with the very cursor it was sent, so this
+  // page made no progress — flagged as `fetchPagedEdge` flags it, not offered
+  // as the next position.
+  if (nextAfter === params.after) {
+    result.truncated = true;
+    result.note = SAME_CURSOR_NOTE;
+  }
   return result;
 }
 

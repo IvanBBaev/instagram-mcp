@@ -15,6 +15,7 @@ import {
   getMediaChildren,
   listMedia,
   listStories,
+  SAME_CURSOR_NOTE,
   UNUSABLE_CURSOR_NOTE,
 } from '../../src/api/media.js';
 
@@ -1895,4 +1896,40 @@ test('listStories percent-encodes the account id into its path segment', async (
   const { req, calls } = fakeReq(() => ({ data: [], paging: {} }));
   await listStories(req, { igAccountId: 'a/b', maxItems: 5 });
   assert.equal(calls[0]?.path, '/a%2Fb/stories');
+});
+
+test('a single page that hands back the cursor it was sent is flagged, not offered as progress (CC-DATA-134)', async () => {
+  // The default (single-page) path published Graph's cursor verbatim. When the
+  // edge answers `after=X` with `cursors.after = X` again, the model was handed
+  // `after: X`, `truncated: false` and no note — an invitation to re-read the
+  // same page forever. The `fetchAll` walk already diagnoses this exact repeat
+  // (CC-DATA-50); the single page now reaches the same verdict.
+  const { req, calls } = fakeReq(() => ({
+    data: [{ id: '1' }],
+    paging: { cursors: { after: 'X' }, next: 'https://graph.facebook.com/next' },
+  }));
+
+  const res = await listMedia(req, { igAccountId: '999', maxItems: 100, after: 'X' });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    res.items.map((i) => i.id),
+    ['1'],
+  );
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'X');
+  assert.equal(res.note, SAME_CURSOR_NOTE);
+});
+
+test('a single page that advances past the cursor it was sent is left alone (CC-DATA-134)', async () => {
+  const { req } = fakeReq(() => ({
+    data: [{ id: '1' }],
+    paging: { cursors: { after: 'Y' }, next: 'https://graph.facebook.com/next' },
+  }));
+
+  const res = await listMedia(req, { igAccountId: '999', maxItems: 100, after: 'X' });
+
+  assert.equal(res.truncated, false);
+  assert.equal(res.after, 'Y');
+  assert.equal(res.note, undefined);
 });

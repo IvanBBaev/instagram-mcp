@@ -19,7 +19,7 @@ import {
   getHashtagMedia,
   searchHashtag,
 } from '../../src/api/discovery.js';
-import { CAP_MID_PAGE_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
+import { CAP_MID_PAGE_NOTE, SAME_CURSOR_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
 
 // Every Graph call in this layer goes through the injected IgRequestFn seam, so
 // nothing here may open a socket. Poisoning `fetch` for the whole file makes that
@@ -1071,4 +1071,30 @@ test('getHashtagMedia reports a `next` with no resumable cursor as truncated, no
   });
 
   assert.deepEqual(res, { items: [{ id: '1' }], truncated: true, note: UNUSABLE_CURSOR_NOTE });
+});
+
+test('getHashtagMedia flags a page that hands back the cursor it was sent (CC-DATA-134)', async () => {
+  // The same repeat the shared walk now flags on its single page: echoing the
+  // caller's own `after` back as the next one is the unbounded loop the test
+  // above guards against, only produced by the edge instead of by this layer.
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'm5' }],
+    paging: { cursors: { after: 'CURSOR_FOR_PAGE_2' }, next: 'https://graph.facebook.com/next' },
+  }));
+
+  const res = await getHashtagMedia(req, {
+    hashtagId: 'H1',
+    igId: '999',
+    edge: 'recent',
+    maxItems: 200,
+    after: 'CURSOR_FOR_PAGE_2',
+  });
+
+  assert.deepEqual(
+    res.items.map((i) => i.id),
+    ['m5'],
+  );
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'CURSOR_FOR_PAGE_2');
+  assert.equal(res.note, SAME_CURSOR_NOTE);
 });

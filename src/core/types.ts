@@ -153,7 +153,10 @@ export interface AuthProvider {
   readonly defaultHost: GraphHost;
   /**
    * Params this provider contributes for a call to `host`: always
-   * `access_token`; `appsecret_proof` only on graph.facebook.com.
+   * `access_token`; `appsecret_time` + `appsecret_proof` only on
+   * graph.facebook.com (CC-AUTH-15). The client calls this once per attempt,
+   * right before sending (CC-AUTH-79), so implementations must mint fresh
+   * values on every call and never cache the result.
    */
   authParams(host: GraphHost): Promise<Record<string, string>>;
 }

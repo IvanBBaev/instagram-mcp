@@ -48,7 +48,7 @@ credentials only drops the four `fb-login`-only tools, so it sees 25 / 12 / 21
 were cleared, audit wave 20 fixed CC-AUTH-79 (Path-B calls are re-signed on every
 retry and slot wait), and the server moved to the MCP TypeScript SDK v2 — the tool
 surface is unchanged, but the published JSON Schemas changed shape (see
-`CHANGELOG.md` `[Unreleased]`). The suite is at 2556 tests, all passing on a clean
+`CHANGELOG.md` `[Unreleased]`). The suite is at 2567 tests, all passing on a clean
 checkout, with 100% coverage on every axis, and every module has been through
 mutation testing. The CC-CFG-69 canary still trips twice in the primary working
 tree, on the stray `./   /` directory that is still there — an owner action (delete

@@ -23,7 +23,7 @@
 > dotenv 18; the 29-tool surface, the profiles and every task row's status are
 > unchanged by it. The npm tarball and the MCPB bundle were rebuilt and
 > install-tested locally on the new packages (T-R6 below) with no defect found.
-> The suite is at 2556 tests, all passing on a clean checkout, coverage 100% on
+> The suite is at 2567 tests, all passing on a clean checkout, coverage 100% on
 > every axis. 0.8.0 was published to npm on 2026-10-13.
 >
 > **What changed on 2026-09-30.** Every recorded owner-decision recommendation
@@ -350,7 +350,7 @@ numbers accepted on purpose, and a `null`-prototype value throwing a raw `TypeEr
 the live probe, and CC-AUTH-18, CC-PROC-16 and CC-PROC-21 are kept by decision.
 Each row records its own outcome.)
 Suite at the time of this entry: 1373 tests, all passing, coverage 100/100/100/100,
-`npm audit` clean. (It has grown since: 2556 tests at 2026-10-10, coverage still
+`npm audit` clean. (It has grown since: 2567 tests at 2026-10-13, coverage still
 100% on every axis.)
 
 **A trap for anyone measuring coverage from a private build directory.** Parallel
@@ -370,7 +370,7 @@ This is not hypothetical. On 2026-09-22 a task agent reported the gate as failin
 as a blocker. The numbers came from a `--outDir` run of exactly the shape above. Re-run
 centrally against a freshly built `dist/`, the same tree gives **1847 tests, 1847 pass,
 0 fail**, coverage **100/100/100/100** and `npm audit` clean (the suite has since grown
-to 2556 tests); the full `npm run check`
+to 2567 tests); the full `npm run check`
 (lint → format:check → build → coverage → audit) is green end to end. Read a private-build
 coverage table for the *files you touched*, never as a verdict on the gate — and when the
 two disagree, the central run is the one that counts, because it is the only one whose

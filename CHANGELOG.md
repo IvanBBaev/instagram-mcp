@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-13
+
 ### Added
 
+- `--help`/`-h` print usage and exit 0; an unknown subcommand or flag exits 2
+  instead of starting the stdio server (0.7.0 treated every argument as a start).
+- `scripts/build-mcpb.sh` builds a lean MCPB bundle (~3 MB) from the npm tarball
+  contents plus production dependencies.
+- `scripts/live-qa.mjs` and `docs/live-qa.md`: one-command live verification of
+  T-E1–T-E4 and the open `[verify]` probes, read-only unless `--write` is confirmed.
+- `server.json` declares `IG_AUTH_MODE`, `IG_WRITE_MODE` and `IG_TOOL_PACKAGES`.
+- List, media, comment and insights results report what was left out
+  (`omittedWithoutId`, `omittedValues`, `repliesTruncated`, `paging.truncated`)
+  instead of dropping it silently.
 - `discover_business`: new `mediaAfter` input and `mediaPaging` output. The
   nested media edge now reports `truncated: true` with an `after` cursor when
   Instagram returned one; pass it back as `mediaAfter` (sent as
@@ -38,6 +50,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking for clients that parsed it:** an error result no longer carries
+  `structuredContent.error`. SDK clients validated that envelope against the
+  tool's output schema and turned every typed error into `-32602`; the typed
+  error is now the text line `Instagram error (<kind>): <message> (code N,
+  subcode M)`.
+- An unresolved MCPB placeholder (`${user_config.X}`) in an `IG_*` variable is
+  treated as unset.
+- The MCPB manifest pins `IG_AUTH_MODE` (default `ig-login`), so filling both app
+  fields no longer switches a Path-A token to `fb-login`.
+- The recorded token expiry is bound to a fingerprint of the token it was written
+  for; a record for a different token is ignored.
+- The Claude Code plugin moved to `plugins/instagram-mcp-ai/` and the marketplace
+  entry now reads `"source": "./plugins/instagram-mcp-ai"`. With `"source": "./"`
+  Claude Code copied the whole repo into its plugin cache and ran `npm ci` on the
+  root `package.json`, about 88 MB of dev dependencies per install. The plugin
+  directory holds no `package.json`, so the cached copy is a few kilobytes.
+  `/plugin marketplace add IvanBBaev/instagram-mcp` is unchanged.
 - Migrated to MCP TypeScript SDK v2 (`npx @modelcontextprotocol/codemod v1-to-v2`
   plus hand fixes). Runtime dependencies: `@modelcontextprotocol/sdk` 1.x is
   replaced by `@modelcontextprotocol/server` and `@modelcontextprotocol/node`
@@ -89,8 +118,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `mediaAfter` description states that a cursor taken from a different
   username is not detected (CC-DATA-133).
 
+### Removed
+
+- The unused `text()` result builder in `src/mcp/result.ts`; every tool result is
+  JSON (CC-DATA-114).
+- The unused `needsRefresh` helper in `core/refresh.ts`; refresh stays
+  operator-driven (CC-AUTH-67).
+
 ### Fixed
 
+- Redaction of the `login` failure line, stray expiry records, and missing
+  `quota_usage` no longer read as 0 — see `docs/corner-cases.md` audit waves 5–7.
 - A single-page listing (`list_media`, `list_stories`, `list_comments`,
   `list_tagged_media`, `get_hashtag_media`) that Instagram answers with the same
   cursor it was sent now reports `truncated: true` with the same-cursor note the
@@ -249,13 +287,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to listen on 8723, so the redirect never arrived and the login waited until
   the five-minute timeout (CC-CFG-82).
 
-### Removed
-
-- The unused `text()` result builder in `src/mcp/result.ts`; every tool result is
-  JSON (CC-DATA-114).
-- The unused `needsRefresh` helper in `core/refresh.ts`; refresh stays
-  operator-driven (CC-AUTH-67).
-
 ### Security
 
 - The production dependency tree is clear of audit advisories again.
@@ -345,46 +376,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal. A token pasted as a positional (`login --path ig EAA…`) or after a
   single-dash slip (`-access-token=EAA…`) is now named `[REDACTED]`, as the entry's
   own refusals already do (CC-CFG-83).
-
-## [0.8.0] — 2026-09-24
-
-### Added
-
-- `--help`/`-h` print usage and exit 0; an unknown subcommand or flag exits 2
-  instead of starting the stdio server (0.7.0 treated every argument as a start).
-- `scripts/build-mcpb.sh` builds a lean MCPB bundle (~3 MB) from the npm tarball
-  contents plus production dependencies.
-- `scripts/live-qa.mjs` and `docs/live-qa.md`: one-command live verification of
-  T-E1–T-E4 and the open `[verify]` probes, read-only unless `--write` is confirmed.
-- `server.json` declares `IG_AUTH_MODE`, `IG_WRITE_MODE` and `IG_TOOL_PACKAGES`.
-- List, media, comment and insights results report what was left out
-  (`omittedWithoutId`, `omittedValues`, `repliesTruncated`, `paging.truncated`)
-  instead of dropping it silently.
-
-### Changed
-
-- **Breaking for clients that parsed it:** an error result no longer carries
-  `structuredContent.error`. SDK clients validated that envelope against the
-  tool's output schema and turned every typed error into `-32602`; the typed
-  error is now the text line `Instagram error (<kind>): <message> (code N,
-  subcode M)`.
-- An unresolved MCPB placeholder (`${user_config.X}`) in an `IG_*` variable is
-  treated as unset.
-- The MCPB manifest pins `IG_AUTH_MODE` (default `ig-login`), so filling both app
-  fields no longer switches a Path-A token to `fb-login`.
-- The recorded token expiry is bound to a fingerprint of the token it was written
-  for; a record for a different token is ignored.
-- The Claude Code plugin moved to `plugins/instagram-mcp-ai/` and the marketplace
-  entry now reads `"source": "./plugins/instagram-mcp-ai"`. With `"source": "./"`
-  Claude Code copied the whole repo into its plugin cache and ran `npm ci` on the
-  root `package.json`, about 88 MB of dev dependencies per install. The plugin
-  directory holds no `package.json`, so the cached copy is a few kilobytes.
-  `/plugin marketplace add IvanBBaev/instagram-mcp` is unchanged.
-
-### Fixed
-
-- Redaction of the `login` failure line, stray expiry records, and missing
-  `quota_usage` no longer read as 0 — see `docs/corner-cases.md` audit waves 5–7.
 
 ## [0.7.0] — 2026-08-25
 

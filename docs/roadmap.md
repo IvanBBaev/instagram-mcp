@@ -26,16 +26,14 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
 | M3 Moderation | **PARTIAL** | 9 comment tools (the comment toggle moved from `media` to `comments` on 2026-09-30, CC-PROC-9) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
-| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, published by the release workflow from the `v0.7.0` GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle attach, the plugin-marketplace listing, and clean-machine install testing of any channel (the npm tarball and the MCPB bundle were install-tested locally on 2026-10-10, after the SDK v2 migration — see below — which is not the same thing). Those are outward, irreversible acts awaiting an explicit go-ahead. |
+| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, and `0.8.0` followed on 2026-10-13, each published by the release workflow from its GitHub Release. **Not done:** the MCP-registry submission, the MCPB bundle attach, the plugin-marketplace listing, and clean-machine install testing of any channel (the npm tarball and the MCPB bundle were install-tested locally on 2026-10-10, after the SDK v2 migration — see below — which is not the same thing). Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
-**Where the project stands (2026-10-10).** `instagram-mcp-ai` 0.7.0 has been on
-npm since 2026-08-25. The tree is versioned 0.8.0 (`CHANGELOG.md` dates that
-section 2026-09-24, and the work since sits under `[Unreleased]`), but 0.8.0 is
-**not published** — `npm view instagram-mcp-ai versions` still lists only 0.7.0
-(re-checked 2026-10-10) and the repository has no tag for it. Publishing it, like
-the MCP-registry submission (workplan T-R5) and the MCPB and marketplace channels
-(T-R6, T-R8), is an outward act that waits on the owner's go-ahead. Audit waves 18
+**Where the project stands (2026-10-13).** `instagram-mcp-ai` 0.8.0 is on npm as
+`latest` since 2026-10-13 (tag `v0.8.0`, published with provenance by the release
+workflow); 0.7.0 was the first publish, on 2026-08-25. The MCP-registry submission
+(workplan T-R5) and the MCPB and marketplace channels (T-R6, T-R8) remain outward
+acts that wait on the owner's go-ahead. Audit waves 18
 and 19 have run since 0.7.0, and on 2026-09-30 every recorded owner-decision
 recommendation was applied — the [corner-cases.md](corner-cases.md) §10 register
 plus the wave-18/19 rows (see item 6 of the open-question register below). On

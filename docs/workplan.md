@@ -7,11 +7,11 @@
 > (G1–G5 below). Sizes reuse the roadmap classes: S < half a day, M ≈ 1–2 days,
 > L ≈ 3+ days — per task, for one agent.
 >
-> **Status (updated 2026-10-10).** Every table below carries a `Status` column:
+> **Status (updated 2026-10-13).** Every table below carries a `Status` column:
 > **DONE** · **PARTIAL** · **BLOCKED** · **NOT STARTED**, with a one-line note on
 > what is left for anything that is not DONE. The headline: Lanes A–D are
 > essentially complete as *code*, Lane R has produced its artifacts but shipped
-> one of them (npm, 0.7.0 on 2026-08-25), and **Lane E has never run against
+> one of them (npm: 0.7.0 on 2026-08-25, 0.8.0 on 2026-10-13), and **Lane E has never run against
 > Meta** — both of its harnesses are built, but there are no live Meta
 > credentials in this environment, so every gate whose exit criterion is "live"
 > is unmet. See [roadmap.md](roadmap.md) §"Current state" for the milestone view.
@@ -24,16 +24,16 @@
 > unchanged by it. The npm tarball and the MCPB bundle were rebuilt and
 > install-tested locally on the new packages (T-R6 below) with no defect found.
 > The suite is at 2556 tests, all passing on a clean checkout, coverage 100% on
-> every axis. 0.8.0 is still unpublished — npm serves only 0.7.0.
+> every axis. 0.8.0 was published to npm on 2026-10-13.
 >
 > **What changed on 2026-09-30.** Every recorded owner-decision recommendation
 > ([corner-cases.md](corner-cases.md) §10 and the wave-18/19 rows) was applied;
 > `CHANGELOG.md` `[Unreleased]` lists what landed. Two changes move task rows
 > here: `instagram_list_stories` joined `media` (CC-DATA-119) and
 > `instagram_set_comments_enabled` moved from `media` to `comments` (CC-PROC-9),
-> so the surface is 29 tools. 0.8.0 is prepared but not published — npm still
-> serves 0.7.0 — and, with the MCP-registry submission and the MCPB and
-> marketplace channels, waits on the owner's go-ahead.
+> so the surface is 29 tools. (0.8.0, which carries these, was published on
+> 2026-10-13; the MCP-registry submission and the MCPB and marketplace channels
+> still wait on the owner's go-ahead.)
 >
 > **What changed on 2026-08-07.** Lane E's status split in two, and the
 > distinction is worth keeping: the *protocol* is now built and testable
@@ -221,7 +221,7 @@ graph LR
 | **G2** | Real reads on both auth paths | A1–A5, B1/B2/B4, C1/C2/C5, D1/D2, E1/E2/E3 | M1 exit | **CODE-INTEGRATED, NOT PASSED** — the read path is wired end-to-end, but "real reads" has never happened (E1/E2/E3 blocked) |
 | **G3** | Real publish via preview → apply; duplicate-post chain provably broken | B3, C3/C4, D3a/D3b, E4 (publishing) | M2 exit | **CODE-INTEGRATED, NOT PASSED** — nothing has been published; the duplicate-post chain is proven by unit tests only |
 | **G4** | Moderation + insights (+ discovery if E3 = GO) live | D4, D5, D6, E4 (moderation) | M3+M4 exit | **CODE-INTEGRATED, NOT PASSED** — and D6 was integrated *without* the "if E3 = GO" condition being evaluated |
-| **G5** | Four-channel distribution install-tested | R1–R7 | M5 exit | **NOT PASSED** — one of four channels has published (`instagram-mcp-ai@0.7.0` to npm, 2026-08-25, with build provenance); the MCP-registry submission, the MCPB bundle and the marketplace listing have not, and **no channel has been install-tested from a clean machine** |
+| **G5** | Four-channel distribution install-tested | R1–R7 | M5 exit | **NOT PASSED** — one of four channels has published (npm, with build provenance: `0.7.0` on 2026-08-25, `0.8.0` on 2026-10-13); the MCP-registry submission, the MCPB bundle and the marketplace listing have not, and **no channel has been install-tested from a clean machine** |
 
 A gate is only "passed" when its stated exit criterion is true, not when the
 code that would satisfy it exists. Commit history shows G2/G3/G5 declared as

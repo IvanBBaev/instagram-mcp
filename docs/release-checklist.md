@@ -21,12 +21,11 @@ that pin as well.
 
 ## Reality check — one channel of four has shipped
 
-As of 2026-08-25 (re-checked 2026-10-10: `npm view instagram-mcp-ai versions` still
-lists only `0.7.0`, so the `0.8.0` in the tree is unreleased):
+As of 2026-10-13:
 
-- **npm — published.** `instagram-mcp-ai@0.7.0` is live with build provenance,
-  published by `.github/workflows/release.yml` from the `v0.7.0` GitHub Release.
-  The name is claimed. Note that the roadmap's M0 item "reserve the npm name by
+- **npm — published.** `instagram-mcp-ai@0.8.0` is `latest`, with build provenance,
+  published by `.github/workflows/release.yml` from the `v0.8.0` GitHub Release
+  (run `38320610715`). `0.7.0` (2026-08-25) was the first publish and claimed the name. Note that the roadmap's M0 item "reserve the npm name by
   publishing a `0.0.1` stub" was never carried out and is now moot: the first
   thing published was the real package, not a stub.
 - **MCP registry —** no `server.json` has been submitted.
@@ -35,8 +34,8 @@ lists only `0.7.0`, so the `0.8.0` in the tree is unreleased):
   resolves against a real package, but the repo is not listed in any plugin
   marketplace.
 
-Tag `v0.7.0` is cut and `CHANGELOG.md` has its first released section. The npm
-lane below has been exercised once, end to end; the other three have not.
+Tags `v0.7.0` and `v0.8.0` are cut, each with a dated `CHANGELOG.md` section. The
+npm lane below has been exercised twice, end to end; the other three have not.
 
 ## Legend
 
@@ -156,7 +155,7 @@ lane below has been exercised once, end to end; the other three have not.
       marketplace file was why.
     - **The `npx` pin needs step 8 to have landed.**
       `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` launches `npx -y instagram-mcp-ai@<version>`,
-      so the matching npm version must exist first. For `0.7.0` it does; what
+      so the matching npm version must exist first. For `0.8.0` it does; what
       remains is the listing itself and an install by a real Claude Code client.
 
     See [plugin-install.md](plugin-install.md) for the operator-facing page,
@@ -183,6 +182,6 @@ lane below has been exercised once, end to end; the other three have not.
   irreversible outward actions, never automated unattended.
 - **Most urgent:** the three unshipped channels (see the reality check above) —
   the MCP-registry submission, the MCPB bundle, and the plugin-marketplace
-  listing. The npm name is claimed as of `0.7.0`, so the `npx` pin the plugin
+  listing. The npm name is claimed (`0.7.0`) and `0.8.0` is published, so the `npx` pin the plugin
   manifest carries now resolves against a real package; nothing but the manual
   submissions is in the way.

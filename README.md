@@ -23,13 +23,13 @@ no scraping, no `instagram-private-api`-style clients, no cookie/session reuse. 
 ingests media **by public HTTPS URL only**. Credentials live in a local env file
 and can be obtained/refreshed with a built-in CLI.
 
-> **Status: published to npm as `instagram-mcp-ai@0.7.0` (2026-08-25).** The read
+> **Status: published to npm as `instagram-mcp-ai@0.8.0` (2026-10-13).** The read
 > path (account, media, insights), the write path (content publishing, comment
 > moderation) and discovery are all implemented, unit-tested and CI-green across
 > Linux/macOS/Windows on Node 22 and 24. **No tool has been exercised against a
 > live Instagram account by CI** — the suite is offline by construction, so what
 > is proven is behaviour against recorded Graph shapes, not against Meta's live
-> responses. That, not missing functionality, is what separates `0.7.0` from
+> responses. That, not missing functionality, is what separates `0.8.0` from
 > `1.0.0`. The MCP-registry entry, the MCPB bundle and the plugin-marketplace
 > listing are separate submissions and are not live yet. The documents under
 > [`docs/`](docs/) are the source of truth for the design.

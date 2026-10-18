@@ -13,6 +13,51 @@
 > (task IDs `T-*`, integration gates G1–G5 mapped to the M-phases below). The
 > roadmap stays the milestone view; the workplan is the execution view.
 
+<!-- release-progress:begin -->
+## Release progress (Opus 5.5 hours)
+
+> Maintained by the `%-relase-opus-5-5-persentage` skill. Unit: wall-clock hours
+> of one autonomous Opus 5.5 session at this project's gate standard.
+> Numbers are computed by the skill's script from the table below.
+
+| | |
+|---|---|
+| Release target | `1.0.0` — field-validated release per [release-checklist.md](release-checklist.md) §3 and the M1–M5 exit gates (current version `0.8.0`) |
+| Progress | **80.4 %** — 205 h of 255 h earned |
+| Remaining | **50 h** Opus 5.5 (2 h workable now, 48 h blocked) |
+| Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); owner go-ahead for the registry, MCPB and marketplace channels; owner sign-off on T-04; owner decisions on the wave-21/23 candidates |
+| Calibration | WORKLOG 2026-09-26 and 2026-10-10: three to four audit waves (4–8 fixes each, full gate) per day → ~3 h per wave; SDK v2 migration plus wave 21 fit in one session day (~10 h) |
+| Updated | 2026-10-18 at `aad777a` |
+
+| ID | Item | Source | Status | Est h |
+|---|---|---|---|---|
+| M0 | Scaffold, gate, npm name owned | roadmap.md §M0 | `done` | 16 |
+| M1-code | Core read path: providers, media/account/insights reads, pagination, unit tests | roadmap.md §M1 | `done` | 30 |
+| M2-code | Publishing containers, composites, journal, login/refresh CLIs, D3 elicitation | roadmap.md §M2 | `done` | 30 |
+| M3-code | 9 comment tools + `IG_ALLOW_DESTRUCTIVE` double gate | roadmap.md §M3 | `done` | 12 |
+| M4-code | Insights + `discovery` package | roadmap.md §M4 | `done` | 14 |
+| M5-artifacts | README autogen, SECURITY/CHANGELOG/stability docs, setup guide, `server.json`, MCPB manifest, plugin + marketplace manifests, release workflow | roadmap.md §M5; workplan.md T-R1–T-R8 | `done` | 20 |
+| SDK2 | MCP SDK v2 / zod 4 / dotenv 18 migration | WORKLOG 2026-10-10 | `done` | 10 |
+| AUDIT | Corner-case audit waves 1–23 + owner-recommendation application (2026-09-30) | corner-cases.md; WORKLOG | `done` | 70 |
+| NPM | npm channel: 0.7.0 and 0.8.0 published with provenance | roadmap.md §M5 | `done` | 3 |
+| E2 | M1 live probe run (`scripts/live-probe.mjs` read lanes) + §9 `[verify]` register | workplan.md T-E2 | `blocked-external` | 6 |
+| E3 | Discovery / PCA hashtag probe | workplan.md T-E3 | `blocked-external` | 3 |
+| E4 | Publishing + moderation live protocol (stories-first) | workplan.md T-E4 | `blocked-external` | 6 |
+| AUTH-LIVE | OAuth login, refresh and token-store live verification | workplan.md T-C3, T-C4, T-C5 | `blocked-external` | 4 |
+| INS-LIVE | Insights verified against real metrics | roadmap.md §M4 | `blocked-external` | 2 |
+| LIVE-FIX | Fixes and doc corrections surfaced by the live runs (buffer) | release-checklist.md §3 | `blocked-external` | 10 |
+| INSTALL | Clean-machine install tests of each channel (npm, MCPB, plugin) | roadmap.md §M5 | `blocked-external` | 3 |
+| T04 | Owner sign-off on Gate D (D1–D3) | workplan.md T-04 | `blocked-owner` | 1 |
+| R5 | MCP-registry submission | workplan.md T-R5 | `blocked-owner` | 1 |
+| R6 | MCPB bundle attach to the GitHub Release | workplan.md T-R6 | `blocked-owner` | 2 |
+| R8 | Plugin-marketplace listing | workplan.md T-R8 | `blocked-owner` | 2 |
+| OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `blocked-owner` | 8 |
+| CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `open` | 2 |
+
+### History
+- 2026-10-18 `aad777a` — 80.4 %, 50 h left (first run; baseline)
+<!-- release-progress:end -->
+
 ## Current state (updated 2026-10-10)
 
 Status vocabulary used throughout this file and [workplan.md](workplan.md):

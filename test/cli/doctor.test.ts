@@ -869,65 +869,77 @@ test('a relative journal path is walked from the process cwd, not from the cwd-r
   );
 });
 
-test('a journal path whose `..` crosses a symlink is diagnosed from its parent, not itself', async () => {
-  // `nearestExistingDir` starts its walk at `dirname(resolve(path))`, and the
-  // `dirname` used to be justified as saving one syscall: `probeJournal` only
-  // calls the walk after `statSync(path)` came back `undefined`, so stating the
-  // path itself would stat something already known to be absent.
-  //
-  // That holds only while the two spellings name the same file, and they come
-  // apart here. `resolve` collapses `..` LEXICALLY; the kernel expands symlinks
-  // FIRST. With `<d>/a/link -> <d>/real`, the kernel reads
-  // `<d>/a/link/../writes.jsonl` as `<d>/writes.jsonl` — absent, so the probe
-  // falls through to the walk — while `resolve` reads it as
-  // `<d>/a/writes.jsonl`, which exists here as a regular file. Drop the
-  // `dirname` and the walk's first iteration stats that file and answers
-  // `notDir`, so a journal that will be created without trouble is reported as
-  // `WARN … NOT writable`.
-  //
-  // What is asserted is the STATUS, never the ancestor. Both spellings diagnose
-  // an ancestor the append would not use — the real parent is `<d>` — and that
-  // limitation is documented at the walk and as CC-CFG-29 rather than pinned,
-  // because pinning `<d>/a` would bless a wrong answer. The status has no such
-  // problem: `<d>/writes.jsonl` can indeed be created on the first applied
-  // write, `absent` is the correct verdict, and the `absent` branch prints no
-  // path at all.
-  const dir = mkdtempSync(join(journalRoot, 'symlinked-dotdot-'));
-  mkdirSync(join(dir, 'real'));
-  mkdirSync(join(dir, 'a'));
-  symlinkSync(join(dir, 'real'), join(dir, 'a', 'link'), 'dir');
-  writeFileSync(join(dir, 'a', 'writes.jsonl'), 'a regular file at the LEXICAL parent\n');
-  // Built by concatenation, not `join`: `join` would collapse the `..` itself
-  // and the two spellings would never separate.
-  const writeJournal = `${join(dir, 'a', 'link')}/../writes.jsonl`;
+/**
+ * Windows parts from POSIX on three things the journal probes below rely on: a
+ * directory symlink needs a privilege the CI account lacks, an over-long segment
+ * stats as ENOENT rather than throwing ENAMETOOLONG, and a control character is
+ * not a legal file-name character, so the fixture cannot be built at all.
+ */
+const onWindows = process.platform === 'win32';
 
-  assert.ok(
-    !existsSync(writeJournal),
-    'the kernel resolves the journal path to something absent, which is what sends ' +
-      'probeJournal into the ancestor walk in the first place',
-  );
+test(
+  'a journal path whose `..` crosses a symlink is diagnosed from its parent, not itself',
+  { skip: onWindows },
+  async () => {
+    // `nearestExistingDir` starts its walk at `dirname(resolve(path))`, and the
+    // `dirname` used to be justified as saving one syscall: `probeJournal` only
+    // calls the walk after `statSync(path)` came back `undefined`, so stating the
+    // path itself would stat something already known to be absent.
+    //
+    // That holds only while the two spellings name the same file, and they come
+    // apart here. `resolve` collapses `..` LEXICALLY; the kernel expands symlinks
+    // FIRST. With `<d>/a/link -> <d>/real`, the kernel reads
+    // `<d>/a/link/../writes.jsonl` as `<d>/writes.jsonl` — absent, so the probe
+    // falls through to the walk — while `resolve` reads it as
+    // `<d>/a/writes.jsonl`, which exists here as a regular file. Drop the
+    // `dirname` and the walk's first iteration stats that file and answers
+    // `notDir`, so a journal that will be created without trouble is reported as
+    // `WARN … NOT writable`.
+    //
+    // What is asserted is the STATUS, never the ancestor. Both spellings diagnose
+    // an ancestor the append would not use — the real parent is `<d>` — and that
+    // limitation is documented at the walk and as CC-CFG-29 rather than pinned,
+    // because pinning `<d>/a` would bless a wrong answer. The status has no such
+    // problem: `<d>/writes.jsonl` can indeed be created on the first applied
+    // write, `absent` is the correct verdict, and the `absent` branch prints no
+    // path at all.
+    const dir = mkdtempSync(join(journalRoot, 'symlinked-dotdot-'));
+    mkdirSync(join(dir, 'real'));
+    mkdirSync(join(dir, 'a'));
+    symlinkSync(join(dir, 'real'), join(dir, 'a', 'link'), 'dir');
+    writeFileSync(join(dir, 'a', 'writes.jsonl'), 'a regular file at the LEXICAL parent\n');
+    // Built by concatenation, not `join`: `join` would collapse the `..` itself
+    // and the two spellings would never separate.
+    const writeJournal = `${join(dir, 'a', 'link')}/../writes.jsonl`;
 
-  const res = await runDoctor({
-    req: healthyReq(),
-    profile: fbProfile(),
-    settings: testSettings({ writeMode: 'apply', writeJournal }),
-    nowMs: NOW,
-  });
+    assert.ok(
+      !existsSync(writeJournal),
+      'the kernel resolves the journal path to something absent, which is what sends ' +
+        'probeJournal into the ancestor walk in the first place',
+    );
 
-  const line = journalLine(res.report);
-  assert.ok(
-    line.includes('not created yet — it appears on the first applied write'),
-    `a creatable journal is reported as creatable: ${line}`,
-  );
-  assert.ok(
-    !line.includes('NOT writable'),
-    `no spurious unwritable warning from the lexical spelling: ${line}`,
-  );
-  assert.ok(
-    !res.report.includes(`WARN  Write journal:`),
-    'the line keeps INFO status, so doctor raises no warning about a healthy sink',
-  );
-});
+    const res = await runDoctor({
+      req: healthyReq(),
+      profile: fbProfile(),
+      settings: testSettings({ writeMode: 'apply', writeJournal }),
+      nowMs: NOW,
+    });
+
+    const line = journalLine(res.report);
+    assert.ok(
+      line.includes('not created yet — it appears on the first applied write'),
+      `a creatable journal is reported as creatable: ${line}`,
+    );
+    assert.ok(
+      !line.includes('NOT writable'),
+      `no spurious unwritable warning from the lexical spelling: ${line}`,
+    );
+    assert.ok(
+      !res.report.includes(`WARN  Write journal:`),
+      'the line keeps INFO status, so doctor raises no warning about a healthy sink',
+    );
+  },
+);
 
 test('in preview mode an unwritable journal is still warned about (a latent problem)', async () => {
   const dir = mkdtempSync(join(journalRoot, 'blocked-preview-'));
@@ -972,31 +984,36 @@ test('runDoctor tolerates an omitted nowMs (defaults to the wall clock)', async 
 
 // --- a journal state that cannot be determined ------------------------------
 
-test('a journal path the filesystem refuses to stat is "could not be determined", not a warning', async () => {
-  // A 5000-character path segment: `statSync` throws ENAMETOOLONG and, unlike
-  // ENOENT and ENOTDIR, `throwIfNoEntry: false` does NOT suppress it — so the
-  // probe's outer catch is the only thing standing between an exotic path and a
-  // crashed health check. Deterministic on every platform and every uid.
-  const writeJournal = join(journalRoot, 'z'.repeat(5000), 'writes.jsonl');
+test(
+  'a journal path the filesystem refuses to stat is "could not be determined", not a warning',
+  { skip: onWindows },
+  async () => {
+    // A 5000-character path segment: `statSync` throws ENAMETOOLONG and, unlike
+    // ENOENT and ENOTDIR, `throwIfNoEntry: false` does NOT suppress it — so the
+    // probe's outer catch is the only thing standing between an exotic path and a
+    // crashed health check. Deterministic on every POSIX platform and every uid;
+    // Windows reports the segment as absent instead (see `onWindows`).
+    const writeJournal = join(journalRoot, 'z'.repeat(5000), 'writes.jsonl');
 
-  const res = await runDoctor({
-    req: healthyReq(),
-    profile: fbProfile(),
-    settings: testSettings({ writeMode: 'apply', writeJournal }),
-    nowMs: NOW,
-  });
+    const res = await runDoctor({
+      req: healthyReq(),
+      profile: fbProfile(),
+      settings: testSettings({ writeMode: 'apply', writeJournal }),
+      nowMs: NOW,
+    });
 
-  const line = journalLine(res.report);
-  assert.ok(
-    line.includes('state could not be determined'),
-    'the honest answer is "I could not tell"',
-  );
-  assert.ok(line.includes('ENAMETOOLONG'), 'the underlying reason is carried through');
-  // "I proved you cannot append here" earns a WARN; "I could not tell" does not
-  // — collapsing the two would cry wolf on every exotic filesystem.
-  assert.ok(!line.includes('WARN'), 'an undetermined state is not asserted as broken');
-  assert.equal(res.exitCode, 0, 'and it never fails the health check');
-});
+    const line = journalLine(res.report);
+    assert.ok(
+      line.includes('state could not be determined'),
+      'the honest answer is "I could not tell"',
+    );
+    assert.ok(line.includes('ENAMETOOLONG'), 'the underlying reason is carried through');
+    // "I proved you cannot append here" earns a WARN; "I could not tell" does not
+    // — collapsing the two would cry wolf on every exotic filesystem.
+    assert.ok(!line.includes('WARN'), 'an undetermined state is not asserted as broken');
+    assert.equal(res.exitCode, 0, 'and it never fails the health check');
+  },
+);
 
 test('every journal detail clause is pinned whole, mode clause included', async () => {
   // The `Write journal:` line is assembled from two independent halves — the
@@ -1078,6 +1095,7 @@ test('every journal detail clause is pinned whole, mode clause included', async 
   // reason is pinned instead: the parenthesis opens where the injected text
   // begins and closes at the end of the line, which is what an assertion on the
   // reason alone cannot tell from a line that lost its mode clause.
+  if (onWindows) return;
   const undetermined = await line({
     writeMode: 'apply',
     writeJournal: join(journalRoot, 'z'.repeat(5000), 'writes.jsonl'),
@@ -1129,7 +1147,8 @@ test(
 
 test(
   'a journal whose nearest existing directory is not writable is reported as unwritable',
-  { skip: asRoot },
+  // NTFS ignores the POSIX write bits chmod sets, so the directory stays writable.
+  { skip: asRoot || onWindows },
   async () => {
     const dir = mkdtempSync(join(journalRoot, 'ro-dir-'));
     chmodSync(dir, 0o500);
@@ -3449,41 +3468,55 @@ test('the package selection and the journal path are echoed with their controls 
   );
 });
 
-test('a journal blocked by a file whose name carries a control is reported escaped (CC-DATA-94)', async () => {
-  const esc = String.fromCharCode(27);
-  const dir = mkdtempSync(join(journalRoot, 'esc-blocked-'));
-  writeFileSync(join(dir, `f${esc}`), 'a file where a directory has to go\n');
-  const res = await runDoctor({
-    req: fakeReq(routing({ account: () => ({ id: '178414' }) })).req,
-    profile: igProfile(),
-    settings: testSettings({ writeJournal: join(dir, `f${esc}`, 'writes.jsonl') }),
-    nowMs: NOW,
-  });
-  assert.ok(!res.report.includes(esc));
-  assert.ok(
-    journalLine(res.report).includes(`NOT writable (${join(dir, 'f\\u{1b}')} is not a directory)`),
-    journalLine(res.report),
-  );
-});
+test(
+  'a journal blocked by a file whose name carries a control is reported escaped (CC-DATA-94)',
+  { skip: onWindows },
+  async () => {
+    const esc = String.fromCharCode(27);
+    const dir = mkdtempSync(join(journalRoot, 'esc-blocked-'));
+    writeFileSync(join(dir, `f${esc}`), 'a file where a directory has to go\n');
+    const res = await runDoctor({
+      req: fakeReq(routing({ account: () => ({ id: '178414' }) })).req,
+      profile: igProfile(),
+      settings: testSettings({ writeJournal: join(dir, `f${esc}`, 'writes.jsonl') }),
+      nowMs: NOW,
+    });
+    assert.ok(!res.report.includes(esc));
+    assert.ok(
+      journalLine(res.report).includes(
+        `NOT writable (${join(dir, 'f\\u{1b}')} is not a directory)`,
+      ),
+      journalLine(res.report),
+    );
+  },
+);
 
-test('an undetermined journal state quotes the reason, which carries the path (CC-DATA-94)', async () => {
-  // ENAMETOOLONG's message names the path it refused, so a control character in
-  // the configured path reaches the reason as well as the path clause.
-  const esc = String.fromCharCode(27);
-  const res = await runDoctor({
-    req: fakeReq(routing({ account: () => ({ id: '178414' }) })).req,
-    profile: igProfile(),
-    settings: testSettings({
-      writeJournal: join(journalRoot, `${'z'.repeat(5000)}${esc}`, 'writes.jsonl'),
-    }),
-    nowMs: NOW,
-  });
-  const line = journalLine(res.report);
-  assert.ok(line.includes('state could not be determined ('), line.slice(0, 200));
-  assert.ok(line.includes('ENAMETOOLONG'));
-  assert.ok(!res.report.includes(esc), 'no raw ESC in the path or in the reason');
-  assert.equal(line.split('\\u{1b}').length - 1, 2, 'escaped once in the path, once in the reason');
-});
+test(
+  'an undetermined journal state quotes the reason, which carries the path (CC-DATA-94)',
+  { skip: onWindows },
+  async () => {
+    // ENAMETOOLONG's message names the path it refused, so a control character in
+    // the configured path reaches the reason as well as the path clause.
+    const esc = String.fromCharCode(27);
+    const res = await runDoctor({
+      req: fakeReq(routing({ account: () => ({ id: '178414' }) })).req,
+      profile: igProfile(),
+      settings: testSettings({
+        writeJournal: join(journalRoot, `${'z'.repeat(5000)}${esc}`, 'writes.jsonl'),
+      }),
+      nowMs: NOW,
+    });
+    const line = journalLine(res.report);
+    assert.ok(line.includes('state could not be determined ('), line.slice(0, 200));
+    assert.ok(line.includes('ENAMETOOLONG'));
+    assert.ok(!res.report.includes(esc), 'no raw ESC in the path or in the reason');
+    assert.equal(
+      line.split('\\u{1b}').length - 1,
+      2,
+      'escaped once in the path, once in the reason',
+    );
+  },
+);
 
 test('Path B: doctor reports the data-access window, which expires independently (CC-AUTH-77)', async () => {
   const run = async (dataAccess: unknown) => {

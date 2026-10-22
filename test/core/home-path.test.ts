@@ -101,7 +101,14 @@ test('a home directory that is not absolute is refused, naming the variable (CC-
   // values included, so a `~` spelled out against it — or a default under it —
   // would be a RELATIVE path that follows the cwd: `HOME="   "` turned a `~`
   // config dir into `<cwd>/   /instagram-mcp-ai/.env`.
-  for (const home of ['   ', '', 'rel/home', './home']) {
+  //
+  // Except an EMPTY `%USERPROFILE%`: libuv treats it as unset on Windows and asks
+  // the OS for the profile directory instead (the CI account has none, ENOENT),
+  // so the premise holds there only for the non-empty spellings.
+  const homes = ['   ', '', 'rel/home', './home'].filter(
+    (home) => home !== '' || process.platform !== 'win32',
+  );
+  for (const home of homes) {
     withHome(home, () => {
       assert.equal(homedir(), home, 'premise: the home directory follows the environment');
       for (const [platform, variable] of [

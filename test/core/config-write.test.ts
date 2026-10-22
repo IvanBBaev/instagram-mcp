@@ -1181,7 +1181,10 @@ test('a read failure other than ENOENT is wrapped, naming the store, the code an
       },
     ],
   ];
-  for (const [code, stage] of cases) {
+  // Windows reads through a file standing in for a directory as ENOENT, and the
+  // self-link needs a privilege the CI account lacks, so only EISDIR stages there.
+  const staged = process.platform === 'win32' ? cases.slice(0, 1) : cases;
+  for (const [code, stage] of staged) {
     const configDir = await tempConfigDir();
     await stage(configDir);
     const err = await storeFailureFor(configDir);
@@ -1706,42 +1709,50 @@ test('the temp sibling is named with enough entropy that two writes cannot colli
   }
 });
 
-test('the temp file is brought to 0600 whatever the ambient umask', async () => {
+test('the temp file is brought to 0600 whatever the ambient umask', async (t) => {
   // The create mode is a REQUEST the umask masks; the chmod is not masked. Under a
   // umask that strips owner bits the two come apart on the temp file exactly as
   // they do on the finished one: without the chmod the temp sits at 0200 for its
   // whole life, so the write depends on the operator's shell settings for a mode
   // it claims to guarantee. This is the same argument as the umask test above,
   // aimed at the one file that is gone before any `stat` can reach it.
+  //
+  // The mode is read inside `rename`, the last moment the temp exists under its
+  // own name. A loop-turn sampler (sampleStoreDuring) used to stand here, but the
+  // 0600 window is the single turn between the chmod and the rename, and a fast
+  // runner settles both before a `setImmediate` lands (macOS CI saw only 0200).
   if (process.platform === 'win32') return;
   const configDir = await tempConfigDir();
   const storeDir = path.join(configDir, SERVER_DIR);
   await mkdir(storeDir, { recursive: true, mode: 0o700 });
 
+  const renamed = new Map<string, number>();
+  const realRename = fsPromises.rename;
+  t.mock.method(fsPromises, 'rename', async (from: string, to: string): Promise<void> => {
+    renamed.set(path.basename(String(from)), statSync(from).mode & 0o777);
+    return realRename(from, to);
+  });
+  syncBuiltinESMExports();
   const previousMask = process.umask(0o400);
-  let observed: Map<string, Set<number>>;
   try {
-    observed = await sampleStoreDuring(storeDir, async () => {
-      await writeCredentials(
-        'default',
-        { accessToken: PADDED_TOKEN, authPath: 'ig-login' },
-        { configDir },
-      );
-    });
+    await writeCredentials(
+      'default',
+      { accessToken: LONG_TOKEN, authPath: 'ig-login' },
+      { configDir },
+    );
   } finally {
     process.umask(previousMask);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
   }
 
-  const temps = [...observed.keys()].filter(isTempSibling);
-  assert.ok(
-    temps.length > 0,
-    `the sampler never caught a temp file: ${[...observed.keys()].join(', ')}`,
-  );
+  const temps = [...renamed.keys()].filter(isTempSibling);
+  assert.ok(temps.length > 0, `no temp sibling was renamed: ${[...renamed.keys()].join(', ')}`);
   for (const name of temps) {
-    const modes = [...(observed.get(name) ?? [])];
-    assert.ok(
-      modes.includes(0o600),
-      `${name} was never observed at 0600 (saw ${modes.map((m) => m.toString(8)).join(', ')})`,
+    assert.equal(
+      renamed.get(name),
+      0o600,
+      `${name} reached its rename at ${renamed.get(name)?.toString(8)}`,
     );
   }
 });

@@ -119,7 +119,10 @@ function citingFiles(): readonly string[] {
   };
   for (const dir of SCANNED_DIRS) if (existsSync(dir)) walk(dir);
   out.push('README.md');
-  return out.filter((path) => path !== CATALOG).sort();
+  // `join` spells the walked paths with the platform separator, so the catalogue is
+  // excluded in that spelling too; comparing against the literal `/` form kept it in
+  // on Windows and counted its own rows as citation sites.
+  return out.filter((path) => path !== join(CATALOG)).sort();
 }
 
 /**

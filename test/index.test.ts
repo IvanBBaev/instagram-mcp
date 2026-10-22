@@ -3048,55 +3048,61 @@ test('IG_TRANSPORT=http serves MCP over loopback and enforces IG_HTTP_TOKEN', as
   }
 });
 
-test('SIGTERM stops an HTTP server through its graceful close and exits 0', async () => {
-  // CC-PROC-204. `startHttp` returns a teardown that closes in-flight
-  // exchanges and every socket before the listener stops; the entry used to
-  // discard it, so a real stop died at the signal and that teardown ran only in
-  // tests. The preload's own SIGTERM fallback stands aside for an entry that has
-  // a handler, so the exit measured here is the entry's — and the log lines
-  // below are the proof that the close ran rather than the process merely ending.
-  const sandbox = await makeSandbox();
-  const port = await freePort();
-  const running = startEntry(sandbox, [], {
-    env: {
-      IG_ACCESS_TOKEN: TOKEN,
-      IG_TRANSPORT: 'http',
-      IG_HTTP_HOST: '127.0.0.1',
-      IG_PORT: String(port),
-      IG_HTTP_TOKEN: 'entry-test-bearer-token',
-      IG_LOG_LEVEL: 'info',
-    },
-  });
-  let stdout = '';
-  running.child.stdout.setEncoding('utf8');
-  running.child.stdout.on('data', (chunk: string) => (stdout += chunk));
-  try {
-    await running.waitForStderr(/mcp server ready/);
-    // A client holding a keep-alive socket open: the close must still finish,
-    // because `closeAllConnections()` is part of the teardown being reached.
-    const idle: Socket = await new Promise((resolve, reject) => {
-      const socket = connect(port, '127.0.0.1', () => resolve(socket));
-      socket.once('error', reject);
+test(
+  'SIGTERM stops an HTTP server through its graceful close and exits 0',
+  // Windows has no catchable SIGTERM: `kill('SIGTERM')` is TerminateProcess, so
+  // the child dies at the signal and no handler of the entry's ever runs.
+  { skip: process.platform === 'win32' },
+  async () => {
+    // CC-PROC-204. `startHttp` returns a teardown that closes in-flight
+    // exchanges and every socket before the listener stops; the entry used to
+    // discard it, so a real stop died at the signal and that teardown ran only in
+    // tests. The preload's own SIGTERM fallback stands aside for an entry that has
+    // a handler, so the exit measured here is the entry's — and the log lines
+    // below are the proof that the close ran rather than the process merely ending.
+    const sandbox = await makeSandbox();
+    const port = await freePort();
+    const running = startEntry(sandbox, [], {
+      env: {
+        IG_ACCESS_TOKEN: TOKEN,
+        IG_TRANSPORT: 'http',
+        IG_HTTP_HOST: '127.0.0.1',
+        IG_PORT: String(port),
+        IG_HTTP_TOKEN: 'entry-test-bearer-token',
+        IG_LOG_LEVEL: 'info',
+      },
     });
-    const socketClosed = new Promise<void>((resolve) => idle.once('close', () => resolve()));
-    idle.on('error', () => undefined);
+    let stdout = '';
+    running.child.stdout.setEncoding('utf8');
+    running.child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    try {
+      await running.waitForStderr(/mcp server ready/);
+      // A client holding a keep-alive socket open: the close must still finish,
+      // because `closeAllConnections()` is part of the teardown being reached.
+      const idle: Socket = await new Promise((resolve, reject) => {
+        const socket = connect(port, '127.0.0.1', () => resolve(socket));
+        socket.once('error', reject);
+      });
+      const socketClosed = new Promise<void>((resolve) => idle.once('close', () => resolve()));
+      idle.on('error', () => undefined);
 
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
-      running.child.once('exit', (code, signal) => resolve({ code, signal })),
-    );
-    running.child.kill('SIGTERM');
-    const result = await exited;
-    await socketClosed;
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => running.child.once('exit', (code, signal) => resolve({ code, signal })),
+      );
+      running.child.kill('SIGTERM');
+      const result = await exited;
+      await socketClosed;
 
-    assert.deepEqual(result, { code: 0, signal: null }, running.stderr());
-    assert.equal(stdout, '', 'shutdown writes nothing to stdout');
-    assert.match(
-      running.stderr(),
-      /"msg":"shutdown signal received; closing the http transport"[^\n]*"signal":"SIGTERM"/,
-    );
-    assert.match(running.stderr(), /"msg":"http transport closed; exiting"/);
-  } finally {
-    await running.stop();
-    await sandbox.cleanup();
-  }
-});
+      assert.deepEqual(result, { code: 0, signal: null }, running.stderr());
+      assert.equal(stdout, '', 'shutdown writes nothing to stdout');
+      assert.match(
+        running.stderr(),
+        /"msg":"shutdown signal received; closing the http transport"[^\n]*"signal":"SIGTERM"/,
+      );
+      assert.match(running.stderr(), /"msg":"http transport closed; exiting"/);
+    } finally {
+      await running.stop();
+      await sandbox.cleanup();
+    }
+  },
+);

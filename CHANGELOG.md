@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A throttle whose `Retry-After` is past the 60 s cap now fails fast with an
+  estimate ("retry in ~N min", or "~N h" past two hours) instead of waiting
+  only the capped 60 s and failing again (CC-RATE-3).
+- Throttle codes 4, 17, 32 and 613 are no longer retried automatically; a BUC
+  throttle (80002) and a plain 429 still are.
+- A call queued behind `IG_MAX_CONCURRENT` for longer than
+  `max(IG_TIMEOUT_MS, 30 s)` fails with "server busy" and is never sent
+  (CC-RATE-6).
+- Comment writes (`instagram_reply_to_comment`, `instagram_create_comment`) show the text they will
+  post as `details.message` (flattened excerpt plus length) in the preview and
+  the confirm prompt.
+- Insights tools request a metric named twice in `metrics` only once (CC-INS-30).
+- `userTags` takes at most 20 tags, and each username must be a plain Instagram
+  handle (CC-PUB-61).
+- An empty `NO_COLOR=` no longer turns off `doctor` colours; only a non-empty
+  value does, per no-color.org (CC-PROC-215).
+
+### Fixed
+
+- `login` no longer echoes an app secret in its unknown-argument refusal: a
+  single-dash `-x=` token is named only up to `=`, and a bare hex secret is
+  masked (CC-CFG-83).
+- A blank `IG_*` value (`IG_ACCESS_TOKEN=""`) in the client environment or an
+  env file no longer shadows a real value in a later env file (CC-CFG-81).
+- `login` refuses a `--redirect-uri` that is not `http:` before the authorize
+  URL is printed.
+- Usage refusals escape control characters in the echoed argument, so an ANSI
+  sequence or a newline cannot repaint the terminal or forge a line
+  (CC-PROC-214).
+- `discover_business` withholds a media cursor equal to the `mediaAfter` it was
+  sent, so a client cannot loop on the same page (CC-DATA-134).
+- The untrusted-text fence also defangs fullwidth and small-form forgeries of
+  its delimiters, found through an NFKC fold (CC-DATA-125).
+
 ## [0.8.0] — 2026-10-13
 
 ### Added

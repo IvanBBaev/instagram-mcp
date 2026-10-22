@@ -95,11 +95,18 @@ credentials only drops the four `fb-login`-only tools, so it sees 25 / 12 / 21
 were cleared, audit wave 20 fixed CC-AUTH-79 (Path-B calls are re-signed on every
 retry and slot wait), and the server moved to the MCP TypeScript SDK v2 — the tool
 surface is unchanged, but the published JSON Schemas changed shape (see
-`CHANGELOG.md` `[Unreleased]`). The suite is at 2567 tests, all passing on a clean
+`CHANGELOG.md` `[Unreleased]`). The suite is at 2603 tests (2026-10-22), all passing on a clean
 checkout, with 100% coverage on every axis, and every module has been through
 mutation testing. The CC-CFG-69 canary still trips twice in the primary working
 tree, on the stray `./   /` directory that is still there — an owner action (delete
 the directory), not a code defect.
+
+**1.0.0 readiness (pass of 2026-10-22).** The offline prep for the cut is done:
+[stability.md](stability.md) §4 reviews what the 1.0.0 promise binds, and
+[release-checklist.md](release-checklist.md) §"1.0.0 cut readiness" walks every
+step. The verdict is **not cuttable**: CI on the last pushed `main` commit is red
+on Windows (and one macOS/Node 22 test) although the local gate is green, no live
+run has happened, T-04 is unsigned, and the outward steps wait on the owner.
 
 After the SDK v2 and dotenv 18 bumps, both distributable artifacts were
 install-tested **locally** on 2026-10-10 (nothing published): the `npm pack`

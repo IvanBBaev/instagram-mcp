@@ -23,8 +23,8 @@
 > dotenv 18; the 29-tool surface, the profiles and every task row's status are
 > unchanged by it. The npm tarball and the MCPB bundle were rebuilt and
 > install-tested locally on the new packages (T-R6 below) with no defect found.
-> The suite is at 2567 tests, all passing on a clean checkout, coverage 100% on
-> every axis. 0.8.0 was published to npm on 2026-10-13.
+> The suite is at 2603 tests (2026-10-22), all passing on a clean checkout,
+> coverage 100% on every axis. 0.8.0 was published to npm on 2026-10-13.
 >
 > **What changed on 2026-09-30.** Every recorded owner-decision recommendation
 > ([corner-cases.md](corner-cases.md) §10 and the wave-18/19 rows) was applied;

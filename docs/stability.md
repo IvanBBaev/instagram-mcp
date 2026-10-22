@@ -143,3 +143,49 @@ recorded (`IG_TOKEN_EXPIRES_AT`), or **unknown** without a record, and its warni
 hand (no token fingerprint) is reported with an "unverified" warning even while
 valid; on Path B
 `debug_token` supplies the expiry.
+
+## 4. Scope of the 1.0.0 promise — review of 2026-10-22
+
+Under semver, a `0.x` release promises nothing; the §1 table has been applied as
+practice since `0.7.0`, but `1.0.0` is the first release that **binds** it. This
+review records what the promise covers on the current tree (`0.8.0` plus
+`[Unreleased]`), what it does not, and what still blocks the cut. It does not cut
+the release: see [release-checklist.md](release-checklist.md) §"1.0.0 cut
+readiness".
+
+**Covered by §1 today, and ready to bind.** The tool names (29 tools in the
+PACKAGES manifest, snapshot-tested), their `.strict()` input schemas, the
+structured output of each tool, and the error line with its `kind`. No tool is
+in a dual-registration window, so `1.0.0` carries no deprecated name.
+
+**`[Unreleased]` classified against §1.** One entry is breaking by the table and
+the rest are not:
+
+| Entry | §1 class | Note |
+|---|---|---|
+| `userTags`: at most 20 tags, each a plain handle (CC-PUB-61) | **major** (narrows an input) | Lands in `1.0.0` as a breaking change; it must not ride a later `1.x` minor. The release notes name it. |
+| Comment-write preview shows `details.message` | minor (output field added) | Additive. |
+| Insights request a repeated metric once (CC-INS-30) | patch | No surface change. |
+| Throttle fail-fast, no retry of codes 4/17/32/613, queue-wait "server busy" (CC-RATE-3, CC-RATE-6) | patch | Behaviour only; the error `kind` values are unchanged. |
+| The `Fixed` entries (login, config, CLI echo, discovery cursor, fence) | patch | No surface change. |
+
+**Not covered by §1 — the owner decides before the cut whether `1.0.0` binds
+them.** Each is an interface an operator scripts against, and none is versioned
+today:
+
+1. **Environment variables** — the `IG_*` names, their defaults and the blank-as-unset
+   rule (CC-CFG-81).
+2. **CLI surface** — the `login`, `refresh` and `doctor` subcommands, their flags,
+   and the exit codes (0 success, 2 usage).
+3. **Package and profile membership** — which tools a profile or package holds.
+   Moving the comment toggle from `media` to `comments` (CC-PROC-9) changed what a
+   `reader`-profile client sees without renaming any tool.
+4. **Graph version moves** — §1 treats a pin move as a reviewed PR but gives it no
+   bump class; a move that changes a tool's output would fall under the
+   output-meaning row.
+
+**What still blocks `1.0.0`.** The cut is defined as field-validated
+([roadmap.md](roadmap.md), release target), and nothing in §1–§3 has met the live
+platform: §3 is still **[verify — live]**, and every M1–M4 exit gate names a real
+account. The promise above is ready to bind; the claim that the bound surface
+works against Meta is not yet earned.

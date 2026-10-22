@@ -37,6 +37,31 @@ As of 2026-10-13:
 Tags `v0.7.0` and `v0.8.0` are cut, each with a dated `CHANGELOG.md` section. The
 npm lane below has been exercised twice, end to end; the other three have not.
 
+## 1.0.0 cut readiness — pass of 2026-10-22
+
+A local, offline pass over every step below for the `1.0.0` cut, at `46e6eb5`
+(`0.8.0` plus `[Unreleased]`). Nothing was bumped, tagged, pushed or published.
+`1.0.0` is the field-validated release ([roadmap.md](roadmap.md), release
+target), so a step that needs the live platform is a blocker, not a formality.
+
+| Step | State | Evidence or blocker |
+|---|---|---|
+| 1 Quality gate | **local green, CI red** | `npm run check` passes locally: 2603/2603 tests, 100% on all four coverage axes, 0 runtime advisories. The CI run on the last pushed `main` commit (`3088d8e`, run `38321727348`) **failed**: `check` on windows-latest (Node 22 and 24) fails the journal-diagnosis, token-store read, CC-CFG-69 home, catalogue-preamble and HTTP SIGTERM tests, and macos-latest/Node 22 fails "the temp file is brought to 0600 whatever the ambient umask". `main` has been red on CI since at least `ad39305` (2026-10-10). The 18 local commits since `3088d8e` have not been through CI. |
+| 2 Advisories | green | `npm audit --omit=dev`: 0 vulnerabilities. |
+| 3 Live validation | **blocked — live** | No probe has ever run against Meta (E2, E3, E4, AUTH-LIVE, INS-LIVE). M1–M4 stay PARTIAL. |
+| 4–5 Version bump | ready, not done | Only after the blockers clear; the drift test covers all six copies. |
+| 6 Changelog | ready | `[Unreleased]` holds every user-facing change since `0.8.0`; one entry (`userTags`, CC-PUB-61) is breaking under [stability.md](stability.md) §1 and must ship in `1.0.0` itself. |
+| 7–8 Tag, npm | **[human]** | Not started. `0.8.0` is `latest` on npm. |
+| 9–11 Registry, MCPB, plugin listing | **[human]** | Not started (R5, R6, R8 wait on the owner's go-ahead). |
+| 12 Install tests | **blocked — live/human** | No clean-machine install of any channel (INSTALL). |
+| Stability promise | reviewed | [stability.md](stability.md) §4: the tool surface is ready to bind; whether `1.0.0` also binds the `IG_*` variables, the CLI surface, profile membership and Graph-version moves is an owner decision. |
+| Gate D sign-off | **blocked — owner** | T-04 (D1–D3) not signed off. |
+
+**Verdict: not cuttable.** What stands between this tree and `1.0.0`: a green CI
+matrix on the release commit, the live runs and the fixes they surface, the
+owner's T-04 sign-off and stability-scope decision, and the owner's go-ahead for
+the outward steps 7–11.
+
 ## Legend
 
 - **[human]** — an irreversible outward action that a person must take

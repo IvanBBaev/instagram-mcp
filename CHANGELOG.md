@@ -21,8 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post as `details.message` (flattened excerpt plus length) in the preview and
   the confirm prompt.
 - Insights tools request a metric named twice in `metrics` only once (CC-INS-30).
-- `userTags` takes at most 20 tags, and each username must be a plain Instagram
-  handle (CC-PUB-61).
+- **Breaking:** `userTags` takes at most 20 tags, and each username must be a
+  plain Instagram handle (CC-PUB-61). A call that passed more tags, or a name
+  that is not a handle, is now refused before any request; this narrows an
+  input, which [docs/stability.md](docs/stability.md) §1 classes as major.
 - An empty `NO_COLOR=` no longer turns off `doctor` colours; only a non-empty
   value does, per no-color.org (CC-PROC-215).
 

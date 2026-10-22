@@ -1225,6 +1225,131 @@ test('a retryable 5xx with a Retry-After past the cap fails fast and stays upstr
   assert.deepEqual(clock.sleeps, []);
 });
 
+// --- http.ts: call-count throttles are not retried (owner decision 2026-10-22) -
+
+test('a GET throttled with code 4, 17, 32 or 613 is NOT retried — one call, no wait', async () => {
+  // These are call-count limits over a window of minutes to an hour: a replay a
+  // few seconds later meets the same exhausted counter and is charged to it.
+  for (const code of [4, 17, 32, 613]) {
+    const clock = recordingClock();
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 429,
+      body: { error: { code, message: 'Application request limit reached' } },
+    }));
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/me' }),
+      (e: unknown) =>
+        isInstagramError(e) &&
+        e.kind === 'rate_limit' &&
+        e.code === code &&
+        e.message === 'Application request limit reached',
+      `code ${code}`,
+    );
+    assert.equal(calls.length, 1, `code ${code} must not be replayed`);
+    assert.deepEqual(clock.sleeps, [], `code ${code} must not wait`);
+  }
+});
+
+test('an unretried throttle code is decided by the code, not the HTTP status', async () => {
+  // Meta sends code 4 at HTTP 400 as often as at 429; both are the same limit.
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 400,
+    body: { error: { code: 17, message: 'User request limit reached' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'rate_limit' && e.code === 17,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('an unretried throttle code with a short Retry-After is still not retried', async () => {
+  // The header bounds a wait; it does not turn the retry back on.
+  const clock = recordingClock();
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    headers: { 'retry-after': '5' },
+    body: { error: { code: 4, message: 'throttled' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => isInstagramError(e) && e.message === 'throttled',
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('an unretried throttle code with a Retry-After past the cap carries the CC-RATE-3 estimate', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    headers: { 'retry-after': '1800' },
+    body: { error: { code: 613, message: 'Calls to this api have exceeded the rate limit.' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'rate_limit' &&
+      e.code === 613 &&
+      e.message ===
+        'Calls to this api have exceeded the rate limit.' + estimateTail(1800, '~30 min'),
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('a BUC throttle (80002) and a plain 429 are still retried on a GET', async () => {
+  const cases: Array<[string, { error?: { code?: number; message: string } }]> = [
+    ['80002', { error: { code: 80002, message: 'throttled' } }],
+    ['plain 429, no envelope code', { error: { message: 'Too Many Requests' } }],
+    ['plain 429, no envelope', {}],
+  ];
+  for (const [label, body] of cases) {
+    const clock = recordingClock();
+    const { fetchImpl, calls } = mockFetch((n) =>
+      n === 0 ? { status: 429, body } : { body: { ok: true } },
+    );
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    const out = await req<{ ok: boolean }>({ method: 'GET', path: '/me' });
+    assert.equal(out.ok, true, label);
+    assert.equal(calls.length, 2, label);
+    assert.equal(clock.sleeps.length, 1, label);
+  }
+});
+
 test('a non-retryable, non-throttle error ignores Retry-After and surfaces unchanged', async () => {
   const { fetchImpl, calls } = mockFetch(() => ({
     status: 400,
@@ -1291,7 +1416,7 @@ function signedPair(call: FetchCall): { time: string | null; proof: string | nul
 const THROTTLED: MockResponseSpec = {
   status: 429,
   headers: { 'retry-after': '60' },
-  body: { error: { code: 4, message: 'throttled' } },
+  body: { error: { code: 80002, message: 'throttled' } },
 };
 
 test('a retried GET is re-signed at the time of the retry, not of the first attempt (CC-AUTH-79)', async () => {
@@ -1787,7 +1912,7 @@ test('a rate limit that never clears exhausts the attempt budget instead of loop
   };
   const { fetchImpl, calls } = mockFetch(() => ({
     status: 429,
-    body: { error: { code: 4, message: 'throttled' } },
+    body: { error: { code: 80002, message: 'throttled' } },
   }));
   const req = createIgRequest({
     auth: igAuth,
@@ -1813,7 +1938,7 @@ test('Retry-After in the HTTP-date form is honored relative to the clock', async
       ? {
           status: 429,
           headers: { 'retry-after': 'Thu, 01 Jan 1970 00:00:30 GMT' },
-          body: { error: { code: 4, message: 'throttled' } },
+          body: { error: { code: 80002, message: 'throttled' } },
         }
       : { body: { ok: true } },
   );
@@ -1841,7 +1966,7 @@ test('an HTTP-date Retry-After is measured from the injected clock, not from a f
       ? {
           status: 429,
           headers: { 'retry-after': new Date(anchor + 30_000).toUTCString() },
-          body: { error: { code: 4, message: 'throttled' } },
+          body: { error: { code: 80002, message: 'throttled' } },
         }
       : { body: { ok: true } },
   );
@@ -1863,7 +1988,7 @@ test('an HTTP-date Retry-After already in the past clamps to zero, never negativ
       ? {
           status: 429,
           headers: { 'retry-after': 'Wed, 31 Dec 1969 23:59:30 GMT' }, // 30s before `now`
-          body: { error: { code: 4, message: 'throttled' } },
+          body: { error: { code: 80002, message: 'throttled' } },
         }
       : { body: { ok: true } },
   );
@@ -1889,7 +2014,7 @@ test('an unparseable or blank Retry-After falls back to exponential backoff', as
         ? {
             status: 429,
             headers: { 'retry-after': header },
-            body: { error: { code: 4, message: 'throttled' } },
+            body: { error: { code: 80002, message: 'throttled' } },
           }
         : { body: { ok: true } },
     );
@@ -1948,7 +2073,7 @@ test('a Retry-After that is not delta-seconds or an IMF-fixdate falls back to ba
         ? {
             status: 429,
             headers: { 'retry-after': header },
-            body: { error: { code: 4, message: 'throttled' } },
+            body: { error: { code: 80002, message: 'throttled' } },
           }
         : { body: { ok: true } },
     );
@@ -1982,7 +2107,7 @@ test('a FUTURE-dated RFC 850 or asctime Retry-After still takes backoff, not its
         ? {
             status: 429,
             headers: { 'retry-after': header },
-            body: { error: { code: 4, message: 'throttled' } },
+            body: { error: { code: 80002, message: 'throttled' } },
           }
         : { body: { ok: true } },
     );
@@ -2018,7 +2143,7 @@ test('an IMF-fixdate Retry-After on every weekday and month is still honored (CC
         ? {
             status: 429,
             headers: { 'retry-after': header },
-            body: { error: { code: 4, message: 'throttled' } },
+            body: { error: { code: 80002, message: 'throttled' } },
           }
         : { body: { ok: true } },
     );
@@ -2048,7 +2173,7 @@ test('a padded delta-seconds Retry-After is trimmed when the transport does not 
   const fetchImpl: typeof fetch = () => {
     const first = n++ === 0;
     const res = new Response(
-      JSON.stringify(first ? { error: { code: 4, message: 'throttled' } } : { ok: true }),
+      JSON.stringify(first ? { error: { code: 80002, message: 'throttled' } } : { ok: true }),
       { status: first ? 429 : 200, headers: { 'content-type': 'application/json' } },
     );
     const verbatim = {
@@ -2080,7 +2205,7 @@ test('idempotent:false on a GET switches retries OFF — the override is a value
       (): MockResponseSpec => ({
         status: 429,
         headers: { 'retry-after': '1' },
-        body: { error: { code: 4, message: 'throttled' } },
+        body: { error: { code: 80002, message: 'throttled' } },
       }),
     ],
     [
@@ -2293,7 +2418,7 @@ test('an abort raised while waiting out a backoff surfaces as an InstagramError'
   };
   const { fetchImpl, calls } = mockFetch(() => ({
     status: 429,
-    body: { error: { code: 4, message: 'throttled' } },
+    body: { error: { code: 80002, message: 'throttled' } },
   }));
   const req = createIgRequest({
     auth: igAuth,

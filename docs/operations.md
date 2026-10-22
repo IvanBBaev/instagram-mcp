@@ -16,8 +16,10 @@
 
 Error codes signaling throttling: **4** (app-level), **17** (user-level), **32**
 (page/user call count), **613** (custom-object/other), **80002** (Instagram BUC),
-plus HTTP 429. All map to `kind: rate_limit`, retryable, with the reset hint when
-derivable. **Not a throttle:** subcode `2207051` is a spam/integrity restriction
+plus HTTP 429. All map to `kind: rate_limit`, with the reset hint when derivable.
+Only **80002** and a 429 without one of the other codes are retried (on reads):
+4, 17, 32 and 613 are call-count limits over a window of minutes to an hour, so a
+replay seconds later meets the same exhausted counter and is charged to it. **Not a throttle:** subcode `2207051` is a spam/integrity restriction
 ("restricting certain activity") — surfaced verbatim and **never auto-retried**
 *[verified 2026-07-21]*.
 
@@ -25,7 +27,8 @@ derivable. **Not a throttle:** subcode `2207051` is a spam/integrity restriction
 
 | Condition | GET | POST/DELETE |
 |---|---|---|
-| 429 / rate-limit codes (4, 17, 32, 613, 80002) | retry | **no retry** (a throttled write may already have landed upstream) |
+| 429 / rate-limit code 80002 (Instagram BUC) | retry | **no retry** (a throttled write may already have landed upstream) |
+| rate-limit codes 4, 17, 32, 613 (any HTTP status) | **no retry** (call-count limit; a replay is charged to the same exhausted counter) | **no retry** |
 | 5xx / network error / timeout | retry | **no retry** (non-idempotent; a publish may have landed) |
 | 190 (invalid/expired token) | no retry → actionable error ("run `login`/`refresh`") | same |
 | 10 / 200-series (permission) | no retry → names the missing scope | same |
@@ -53,7 +56,7 @@ hierarchy; handlers and the model branch on `kind`.
 |---|---|---|
 | 190 | Token expired/invalid/revoked | `kind: auth` + remediation text (which CLI command fixes it) |
 | 10, 200–299 | Permission/scope missing | `kind: permission`, names the scope and auth-path caveat |
-| 4 / 17 / 32 / 613 / 80002 / 429 | Throttled | `kind: rate_limit`, retryable, reset hint |
+| 4 / 17 / 32 / 613 / 80002 / 429 | Throttled | `kind: rate_limit`, reset hint; only 80002 and a plain 429 are retried (§2) |
 | 100 | Invalid parameter (incl. bad media URL, unsupported aspect ratio) | `kind: validation`; container errors enriched from `status_code=ERROR` detail |
 | 24 / subcode 2207008 | Container expired — not published within 24 h *[verified 2026-07-21]* | Actionable: re-create container |
 | 9007 / subcode 2207027 | Media not ready for publish yet | Keep polling container status — do **not** re-create |

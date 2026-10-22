@@ -130,11 +130,13 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   on `graph.facebook.com` only — the time-bound `appsecret_proof` with its
   `appsecret_time` (CC-AUTH-15). Providers: `ig-login` (token for
   `graph.instagram.com`) and `fb-login` (page/system-user token for `graph.facebook.com`).
-- **Retry matrix**: `429`/rate-limit, `5xx` and transport errors are retried with
+- **Retry matrix**: `429`, BUC throttle `80002`, `5xx` and transport errors are retried with
   exponential backoff `min(500·2^n, 8000) + jitter` (max 3 retries) only on an
   idempotent call — `GET` by default. A `POST`/`DELETE` is never replayed, not even
   on `429`: Meta can throttle a request after accepting it (see
-  [operations.md](operations.md) §2). `Retry-After` (delta-seconds or an
+  [operations.md](operations.md) §2). Throttle codes 4, 17, 32 and 613 are never
+  retried, not even on a `GET`: they are call-count limits a replay seconds later
+  would only be charged to. `Retry-After` (delta-seconds or an
   IMF-fixdate) is honored up to 60 s; a longer one fails fast with a "retry in ~N min"
   estimate instead of holding the MCP call (CC-RATE-3). Per-host concurrency semaphore (`IG_MAX_CONCURRENT`, default 4).
 - **Rate-limit budget**: parse `X-App-Usage` / `X-Business-Use-Case-Usage` response

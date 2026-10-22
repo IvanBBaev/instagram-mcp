@@ -21,7 +21,7 @@ a preview that "does nothing" is usually working as designed (see the last rows)
 | "uses fb-login but is missing `IG_APP_ID` / `IG_APP_SECRET`" | (startup) | Path B selected (explicitly or inferred) without app credentials | Set both, or select Path A with `IG_AUTH_MODE=ig-login`. |
 | Error names a missing scope | `permission` · **10 / 200–299** | Token minted before the scope was granted (scope drift), or insufficient permission | Re-run `login` to re-consent with the scope from [setup-guide.md](setup-guide.md) §5. |
 | "restricting activity" / spam block | `upstream` · subcode **2207051** | Integrity / spam restriction | **Not retried.** Surface Meta's `error_user_msg` verbatim; slow down; wait it out. |
-| Throttled / HTTP 429 | `rate_limit` · **4 / 17 / 32 / 613 / 80002** | App-, user-, or Instagram-BUC rate limit hit | **Reads** are auto-retried with backoff (`Retry-After` up to 60 s; a longer one fails fast with a "retry in ~N min" estimate); **writes are never replayed**. After the last retry the error is returned — wait before retrying. |
+| Throttled / HTTP 429 | `rate_limit` · **4 / 17 / 32 / 613 / 80002** | App-, user-, or Instagram-BUC rate limit hit | **Reads** on 80002 or a plain 429 are auto-retried with backoff (`Retry-After` up to 60 s; a longer one fails fast with a "retry in ~N min" estimate); **writes are never replayed**, and 4 / 17 / 32 / 613 are returned at once. After the last retry the error is returned — wait before retrying. |
 | Publish refused: quota exhausted | `rate_limit` · **9 / 2207042** | 24 h publishing quota spent | Check usage with `instagram_get_publishing_limit` and wait for the rolling window to free a slot; do not retry. |
 | Container goes `ERROR`, publish never happens | `validation` · **100** at creation, or `upstream` from the status poll | Media URL unreachable by Meta / bad format | Host the media at a **public** URL; re-create the container. |
 | "container expired — re-create" | `validation` · **24 / 2207008** | Container not published within 24 h | Re-create the container and publish promptly. |
@@ -226,11 +226,14 @@ scopes (Path B) so you can compare against [setup-guide.md](setup-guide.md) §5.
 Instagram enforces app-, user-, and **Business-Use-Case** limits (BUC uses a
 rolling 24 h window). The server parses `X-App-Usage` / `X-Business-Use-Case-Usage`
 on every response and proactively slows past 90 %; it does not refuse calls at
-100 %. Throttle errors are **retryable on reads** with exponential backoff
+100 %. A BUC throttle (80002) or a 429 without a call-count code is **retried on
+reads** with exponential backoff
 `min(500·2^n, 8000) ms + jitter` (max 3), honoring a `Retry-After` of up to 60 s. A
 longer `Retry-After` (a BUC reset hours away) is not waited on: the call fails
 at once with the wait in the message — "retry in ~N min" (or "~N h" past two
-hours). After the last retry the error is returned — just wait. **No write is auto-retried**,
+hours). The call-count codes 4, 17, 32 and 613 are **never retried**, not
+even on reads: their window runs minutes to an hour, so a replay seconds later
+would only spend another call against it. After the last retry the error is returned — just wait. **No write is auto-retried**,
 even on 429: Meta can throttle a request after accepting it, so replaying a
 `POST`/`DELETE` risks a duplicate post or comment. The usage snapshot is not exposed
 through any tool yet (`instagram_token_status` reports `rateLimitBudget.available:

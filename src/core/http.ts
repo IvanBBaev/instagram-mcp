@@ -269,16 +269,28 @@ function parseUsage(headers: Headers): UsageSnapshot {
 // --- Retry helpers ----------------------------------------------------------
 
 /**
+ * Throttle codes that are never auto-retried, not even on a GET (owner decision
+ * 2026-10-22): 4 (app), 17 (user), 32 (page/user call count) and 613 (custom
+ * rate limit) are call-count limits over a window of minutes to an hour, so a
+ * replay within the few seconds the backoff spends lands against the same
+ * exhausted counter — and every such replay is one more call charged to it.
+ * 80002 (Instagram BUC) and a 429 without one of these codes keep retrying.
+ */
+const UNRETRIED_THROTTLE_CODES: ReadonlySet<number | undefined> = new Set([4, 17, 32, 613]);
+
+/**
  * A throttle or a transient upstream failure is retryable — but only on an
  * idempotent call. A non-idempotent write is never replayed: Meta may have
  * accepted it before the 429/5xx reached us, so retrying `media_publish` costs
  * publishing quota and leaves a duplicate, publicly visible post, and retrying
  * a comment write duplicates the comment (`api/publishing.ts`, docs/operations.md
- * §2). `validation`/`auth`/`permission` are never retried at all. GET is
- * idempotent by default, so read-path throttle retries are unaffected.
+ * §2). `validation`/`auth`/`permission` are never retried at all, and neither
+ * is a throttle carrying one of `UNRETRIED_THROTTLE_CODES`. GET is idempotent
+ * by default, so a read retries a BUC (80002) throttle, a plain 429 and a 5xx.
  */
-function isRetryableKind(kind: string, idempotent: boolean): boolean {
-  if (kind === 'rate_limit' || kind === 'upstream') return idempotent;
+function isRetryableKind(kind: string, idempotent: boolean, code: number | undefined): boolean {
+  if (kind === 'rate_limit') return idempotent && !UNRETRIED_THROTTLE_CODES.has(code);
+  if (kind === 'upstream') return idempotent;
   return false;
 }
 
@@ -712,7 +724,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
             payload,
             isNonBlank(traceId) ? traceId : undefined,
           );
-          const retryable = !lastAttempt && isRetryableKind(mapped.kind, idempotent);
+          const retryable = !lastAttempt && isRetryableKind(mapped.kind, idempotent, mapped.code);
           // `Retry-After` is read whenever the answer would be retried, and on
           // every throttle even when it will not be (a write, the last attempt):
           // a reset past the cap is news the caller needs either way (CC-RATE-3).

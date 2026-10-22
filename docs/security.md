@@ -393,5 +393,15 @@ wrapper, the one route a result takes to a client (`mcp/registry.ts`
 applies to every text block, error results included. `test/tools/untrusted-output.test.ts`
 drives every tool with a hostile fixture on both surfaces.
 
+Inside a fenced field, a string that reads like a fence delimiter is defanged: its
+square brackets become `⟦…⟧` and the rest stays byte-exact (CC-DATA-125). The match
+is case-insensitive, tolerates whitespace and format characters inside the brackets,
+and is made against the NFKC fold of the text, so the fullwidth and small-form
+brackets, slash and letters (`［／ＵＮＴＲＵＳＴＥＤ］`) are caught too. The fold is used
+for detection only and is never published. **Accepted residual:** Cyrillic and Greek
+look-alike letters (a Cyrillic `Ѕ` or a Greek `Τ` inside `UNTRUSTED`) do not fold onto
+Latin under NFKC and pass as written; a full confusables skeleton was judged not worth
+its cost for an advisory fence.
+
 The fence and the escaping are mitigations, not a prompt-injection control: visible
 text in a caption can still say anything, and the model must treat it as data.

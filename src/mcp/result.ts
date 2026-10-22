@@ -181,10 +181,32 @@ export function errorResult(err: unknown): ToolResult {
  * the price of matching what a model reads, and it edits two characters.
  */
 export function fence(untrusted: string): string {
-  const neutralized = untrusted.replace(
-    FORGED_DELIMITER,
-    (_forgery, inner: string, close: string | undefined) =>
-      `⟦${inner}${close === undefined ? '' : '⟧'}`,
-  );
+  // CC-DATA-125, applied 2026-10-22: the forgery is LOOKED FOR in the NFKC fold
+  // of the text, so the fullwidth and small-form brackets and slash (`［／ＵＮ…］`,
+  // `﹇…﹈`) and the fullwidth letters read as the tag they look like. The fold
+  // is per code point, and each folded UTF-16 unit remembers the code point it
+  // came from, so the edit lands on the ORIGINAL text: only the code point that
+  // folded to the forgery's `[` (and its `]`, when there is one) is swapped, and
+  // everything else — the fullwidth letters included — stays byte-exact. Every
+  // code point whose NFKC fold holds a `[` or `]` folds to exactly that one
+  // character (U+FE47, U+FE48, U+FF3B, U+FF3D), so swapping the whole point
+  // drops nothing. Cyrillic and Greek look-alikes (`UNTRUЅTED` with a Cyrillic
+  // DZE) do not fold onto Latin and are an accepted residual (docs/security.md).
+  const points = [...untrusted];
+  const owner: number[] = [];
+  let folded = '';
+  points.forEach((point, index) => {
+    const fold = point.normalize('NFKC');
+    folded += fold;
+    for (let unit = 0; unit < fold.length; unit += 1) owner.push(index);
+  });
+  const swaps = new Map<number, string>();
+  for (const forgery of folded.matchAll(FORGED_DELIMITER)) {
+    swaps.set(owner[forgery.index] as number, '⟦');
+    if (forgery[2] !== undefined) {
+      swaps.set(owner[forgery.index + forgery[0].length - 1] as number, '⟧');
+    }
+  }
+  const neutralized = points.map((point, index) => swaps.get(index) ?? point).join('');
   return `${FENCE_OPEN}\n${neutralized}\n${FENCE_CLOSE}`;
 }

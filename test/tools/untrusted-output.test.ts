@@ -331,25 +331,27 @@ test('the text block parses back to exactly the structuredContent it renders (CC
 });
 
 /**
- * `structuredContent` without the composite preview's caption excerpt, and the
- * excerpt itself. The excerpt is not a wire string: it is a display summary the
- * server derives from the caller's own caption for the confirm prompt
- * (CC-PUB-60), flattened and cut on purpose, and the full caption is never in
- * `structuredContent`. It is measured separately below rather than skipped.
+ * `structuredContent` without the write previews' excerpt, and the excerpt
+ * itself: `details.caption.excerpt` on a composite publish (CC-PUB-60) and
+ * `details.message.excerpt` on a comment write. The excerpt is not a wire
+ * string: it is a display summary the server derives from the caller's own text
+ * for the confirm prompt, flattened and cut on purpose, and the full text is
+ * never in `structuredContent`. It is measured separately below rather than
+ * skipped.
  */
 function splitExcerpt(structured: unknown): { rest: unknown; excerpt: unknown } {
   if (structured === null || typeof structured !== 'object') {
     return { rest: structured, excerpt: undefined };
   }
   const copy = JSON.parse(JSON.stringify(structured)) as Record<string, unknown>;
-  const caption = (copy.details as Record<string, unknown> | undefined)?.caption as
-    Record<string, unknown> | undefined;
-  const excerpt = caption?.excerpt;
-  if (caption !== undefined) delete caption.excerpt;
+  const details = copy.details as Record<string, unknown> | undefined;
+  const summary = (details?.caption ?? details?.message) as Record<string, unknown> | undefined;
+  const excerpt = summary?.excerpt;
+  if (summary !== undefined) delete summary.excerpt;
   return { rest: copy, excerpt };
 }
 
-test('the caption excerpt is the only derived caption text, and it is flat and bounded (CC-PUB-60)', async () => {
+test('the preview excerpt is the only derived caller text, and it is flat and bounded (CC-PUB-60)', async () => {
   const seen = new Set<string>();
   for (const o of await observeAll()) {
     const { excerpt } = splitExcerpt(o.structured);
@@ -357,11 +359,16 @@ test('the caption excerpt is the only derived caption text, and it is flat and b
     seen.add(o.label.replace(/ \(.*$/, ''));
     assert.equal(typeof excerpt, 'string', o.label);
     const s = excerpt as string;
-    assert.ok(s.startsWith(MARKER), `${o.label}: the excerpt does not open with the caption`);
+    assert.ok(s.startsWith(MARKER), `${o.label}: the excerpt does not open with the caller text`);
     assert.equal(INVISIBLE.exec(s), null, `${o.label}: a raw invisible character in the excerpt`);
     assert.ok([...s].length <= 201, `${o.label}: the excerpt is not bounded`);
   }
-  assert.deepEqual([...seen].sort(), ['instagram_post_image', 'instagram_post_reel']);
+  assert.deepEqual([...seen].sort(), [
+    'instagram_create_comment',
+    'instagram_post_image',
+    'instagram_post_reel',
+    'instagram_reply_to_comment',
+  ]);
 });
 
 test('structuredContent carries hostile wire text as received, never escaped or cut (CC-DATA-103)', async () => {

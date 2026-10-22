@@ -19,7 +19,7 @@ import { defineTool, type ToolSpec } from '../mcp/define.js';
 import { fence, json } from '../mcp/result.js';
 import { withWriteGate } from '../mcp/write-mode.js';
 import { InstagramError } from '../core/types.js';
-import { visibleText } from '../core/untrusted.js';
+import { previewExcerpt, visibleText } from '../core/untrusted.js';
 import {
   createComment,
   deleteComment,
@@ -316,6 +316,17 @@ function messageField(what: string): z.ZodType<string> {
     .describe(`The ${what} text to post.`);
 }
 
+/**
+ * The text a comment write is about to post, as its preview and confirm prompt
+ * show it: the flattened, bounded excerpt the publishing previews give a
+ * caption (CC-PUB-60), then its full length in code points. Without it the
+ * human approving a PUBLIC reply or comment saw only ids and approved text they
+ * never read. The excerpt comes first so it is what the reader meets first.
+ */
+function messageSummary(message: string): { excerpt: string; characters: number } {
+  return { excerpt: previewExcerpt(message), characters: [...message].length };
+}
+
 /** The `apply` flag every write tool declares (the registry does not inject it). */
 const applyField = z
   .boolean()
@@ -571,7 +582,7 @@ const replyToCommentTool = defineTool({
       {
         action: 'reply_to_comment',
         summary: `Reply to comment ${args.commentId}`,
-        details: { commentId: args.commentId },
+        details: { commentId: args.commentId, message: messageSummary(args.message) },
       },
       args,
       ctx,
@@ -611,7 +622,7 @@ const createCommentTool = defineTool({
       {
         action: 'create_comment',
         summary: `Comment on media ${args.mediaId}`,
-        details: { mediaId: args.mediaId },
+        details: { mediaId: args.mediaId, message: messageSummary(args.message) },
       },
       args,
       ctx,

@@ -55,6 +55,7 @@ import { json } from '../mcp/result.js';
 import { withWriteGate, type WriteIntent } from '../mcp/write-mode.js';
 import { InstagramError, isInstagramError } from '../core/types.js';
 import { quoteGraphId } from '../core/errors.js';
+import { PREVIEW_EXCERPT_MAX, previewExcerpt } from '../core/untrusted.js';
 import {
   createCarouselContainer,
   createMediaContainer,
@@ -169,28 +170,10 @@ function igIdOf(ctx: ToolContext): string {
 }
 
 /**
- * Longest caption excerpt a preview shows, in code points (CC-PUB-60). The
- * confirm prompt caps the whole details blob at 800 characters, and the excerpt
- * shares that with the counts, the hosts and every warning; 200 leaves room for
- * them while still showing the opening of the caption, which is also what a
- * reader of the feed sees first.
+ * Longest caption excerpt a preview shows, in code points (CC-PUB-60): the
+ * shared {@link PREVIEW_EXCERPT_MAX}, which the comment-write previews use too.
  */
-export const CAPTION_EXCERPT_MAX = 200;
-
-/**
- * The caption as a preview shows it: control and format characters (a newline,
- * a bidi override that could reorder what the approver reads) become spaces,
- * whitespace runs collapse, and anything past {@link CAPTION_EXCERPT_MAX} code
- * points is cut with a trailing `…`. Counted in code points, like the caption
- * limit itself, so an emoji is never split into a lone surrogate.
- */
-function captionExcerpt(caption: string): string {
-  const flat = caption.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim();
-  const points = [...flat];
-  return points.length > CAPTION_EXCERPT_MAX
-    ? `${points.slice(0, CAPTION_EXCERPT_MAX).join('')}…`
-    : flat;
-}
+export const CAPTION_EXCERPT_MAX = PREVIEW_EXCERPT_MAX;
 
 /**
  * Caption summary for a preview payload: the excerpt the operator reads before
@@ -200,7 +183,7 @@ function captionExcerpt(caption: string): string {
  */
 function captionSummary(caption: string, stats: CaptionStats): Record<string, unknown> {
   return {
-    excerpt: captionExcerpt(caption),
+    excerpt: previewExcerpt(caption),
     characters: stats.codePoints,
     hashtags: stats.hashtags,
     mentions: stats.mentions,

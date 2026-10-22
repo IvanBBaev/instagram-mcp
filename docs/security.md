@@ -372,7 +372,11 @@ two surfaces. They follow one rule (CC-DATA-102, CC-DATA-103):
   caption for the confirm prompt (CC-PUB-60): control and format characters become
   spaces, whitespace collapses, and it is cut after 200 code points with `…`. It is
   flattened and cut on purpose; the caption itself is sent to Graph byte for byte
-  and is not echoed in `structuredContent`.
+  and is not echoed in `structuredContent`. The comment writes
+  (`instagram_reply_to_comment`, `instagram_create_comment`) show their `message`
+  the same way, as `details.message.excerpt` plus its full length in code points
+  (`details.message.characters`), so the human approving a public reply or comment
+  reads the text before approving it (`core/untrusted.ts` `previewExcerpt`).
 - **Prose the server writes around a wire value** — a note, a warning, an error
   message — quotes it with visible `\u{…}` escapes and a length cap
   (`core/untrusted.ts` `quoteUntrusted`, `core/errors.ts` `quoteGraphText`).

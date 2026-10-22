@@ -109,8 +109,8 @@ detail ends `…"` followed by its full length (CC-DATA-95).
 |---|---|---|
 | `instagram_list_comments` | RO | `GET /{media-id}/comments?fields=id,text,username,timestamp,like_count,replies{...}`, cursor-paginated |
 | `instagram_get_comment` | RO | `GET /{comment-id}?fields=...` incl. parent/media context |
-| `instagram_reply_to_comment` | — | `POST /{comment-id}/replies?message=...` (threaded reply); an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18) |
-| `instagram_create_comment` | — | Top-level comment on own media: `POST /{media-id}/comments?message=...`; an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18) |
+| `instagram_reply_to_comment` | — | `POST /{comment-id}/replies?message=...` (threaded reply); an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18); the preview and the confirm prompt show `details.message` — `excerpt` (flattened, cut after 200 code points with `…`, as a caption excerpt) and `characters` (CC-PUB-60) |
+| `instagram_create_comment` | — | Top-level comment on own media: `POST /{media-id}/comments?message=...`; an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18); the preview and the confirm prompt show `details.message` — `excerpt` (flattened, cut after 200 code points with `…`, as a caption excerpt) and `characters` (CC-PUB-60) |
 | `instagram_hide_comment` | I | `POST /{comment-id}?hide=true` (reversible moderation — preferred over delete) |
 | `instagram_unhide_comment` | I | `POST /{comment-id}?hide=false` |
 | `instagram_delete_comment` | **D** | `DELETE /{comment-id}` — irreversible; double-gated (apply + `IG_ALLOW_DESTRUCTIVE`) |

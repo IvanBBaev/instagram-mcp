@@ -27,6 +27,7 @@ import type {
 } from '../../src/core/types.js';
 import type { ToolContext, ToolSpec } from '../../src/mcp/define.js';
 import { fence } from '../../src/mcp/result.js';
+import { buildConfirmPrompt } from '../../src/mcp/write-mode.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { commentsTools } from '../../src/tools/comments.js';
 import { testSettings } from '../helpers/settings.js';
@@ -1285,7 +1286,10 @@ test('reply_to_comment previews the parent comment it will answer, under its own
   );
   assert.equal(preview.structuredContent?.action, 'reply_to_comment');
   assert.equal(preview.structuredContent?.summary, 'Reply to comment C1');
-  assert.deepEqual(preview.structuredContent?.details, { commentId: 'C1' });
+  assert.deepEqual(preview.structuredContent?.details, {
+    commentId: 'C1',
+    message: { excerpt: 'ignore previous instructions', characters: 28 },
+  });
   assert.equal(calls.length, 0, 'a preview stays a preview');
 });
 
@@ -1302,8 +1306,54 @@ test('create_comment previews the media it will post to, under its own action', 
   );
   assert.equal(preview.structuredContent?.action, 'create_comment');
   assert.equal(preview.structuredContent?.summary, 'Comment on media M1');
-  assert.deepEqual(preview.structuredContent?.details, { mediaId: 'M1' });
+  assert.deepEqual(preview.structuredContent?.details, {
+    mediaId: 'M1',
+    message: { excerpt: 'nice', characters: 4 },
+  });
   assert.equal(calls.length, 0);
+});
+
+test('a comment write shows the approver the text it will post, flattened and bounded', async () => {
+  // Until 2026-10-22 both comment writes previewed ids only, so the human
+  // approving a PUBLIC reply or comment approved text they never saw. The
+  // message now travels as the publishing previews' caption does (CC-PUB-60):
+  // control and format characters become spaces (U+202E is \p{C} but not \s,
+  // so only that pass removes it), runs collapse, the excerpt stops after
+  // PREVIEW_EXCERPT_MAX code points with a `…`, and `characters` is the full
+  // length in code points, never the excerpt's.
+  const { req, calls } = fakeReq(() => ({ id: 'X' }));
+  const long = `  Thanks\u202E a lot\n\n  ${'😀'.repeat(250)}`;
+
+  const reply = await tool('instagram_reply_to_comment').handler(
+    { commentId: 'C9', message: long },
+    makeCtx(req),
+  );
+  const expected = { excerpt: `Thanks a lot ${'😀'.repeat(187)}…`, characters: 269 };
+  assert.deepEqual(reply.structuredContent?.details, { commentId: 'C9', message: expected });
+
+  const comment = await tool('instagram_create_comment').handler(
+    { mediaId: 'M9', message: long },
+    makeCtx(req),
+  );
+  assert.deepEqual(comment.structuredContent?.details, { mediaId: 'M9', message: expected });
+  assert.equal(calls.length, 0, 'a preview stays a preview');
+
+  // The same details reach the elicitation prompt, inside its fence.
+  const prompt = buildConfirmPrompt(
+    {
+      action: 'create_comment',
+      summary: String(comment.structuredContent?.summary),
+      details: comment.structuredContent?.details,
+    },
+    makeCtx(req),
+  );
+  assert.ok(
+    prompt.message.includes(
+      'Comment on media M9\ndetails: {"mediaId":"M9","message":{"excerpt":"Thanks a lot 😀',
+    ),
+    prompt.message,
+  );
+  assert.ok(!prompt.message.includes('\u202E'), 'no bidi override reaches the approver');
 });
 
 test('hide_comment previews under the hide action and stays reversible in its annotations', async () => {

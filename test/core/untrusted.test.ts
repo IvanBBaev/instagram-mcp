@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   escapeControls,
   escapeInvisible,
+  PREVIEW_EXCERPT_MAX,
+  previewExcerpt,
   quoteUntrusted,
   quoteUntrustedString,
   visibleText,
@@ -268,4 +270,17 @@ test('escapeControls leaves printable text, non-ASCII and format characters alon
   assert.equal(escapeControls('--flag é \u00a0 \u{1F600} ~'), '--flag é \u00a0 \u{1F600} ~');
   assert.equal(escapeControls('a\u200bb'), 'a\u200bb');
   assert.equal(escapeControls(''), '');
+});
+
+test('previewExcerpt flattens control and format characters, collapses runs and trims', () => {
+  // U+202E is \p{C} but not \s: only the control-character pass removes it.
+  assert.equal(previewExcerpt('  Sun\u202Eset\n\n   on  the\tpier  '), 'Sun set on the pier');
+});
+
+test('previewExcerpt cuts after PREVIEW_EXCERPT_MAX code points, and only then', () => {
+  assert.equal(PREVIEW_EXCERPT_MAX, 200, 'the budget shares an 800-character confirm prompt');
+  assert.equal(previewExcerpt('x'.repeat(200)), 'x'.repeat(200));
+  assert.equal(previewExcerpt('x'.repeat(201)), `${'x'.repeat(200)}…`);
+  assert.equal(previewExcerpt('😀'.repeat(200)), '😀'.repeat(200));
+  assert.equal(previewExcerpt('😀'.repeat(201)), `${'😀'.repeat(200)}…`);
 });

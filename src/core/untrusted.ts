@@ -231,3 +231,33 @@ const CONTROL = /\p{Cc}/gu;
 export function escapeControls(text: string): string {
   return text.replace(CONTROL, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
+
+/**
+ * Longest excerpt a write preview shows of the caller's own text, in code
+ * points (CC-PUB-60). The confirm prompt caps the whole details blob at 800
+ * characters (`CONFIRM_DETAILS_MAX` in `mcp/write-mode.ts`), and the excerpt
+ * shares that with the ids, the counts and every warning; 200 leaves room for
+ * them while still showing the opening of the text, which is also what a reader
+ * of the feed sees first.
+ */
+export const PREVIEW_EXCERPT_MAX = 200;
+
+/**
+ * Text the caller is about to make public, as a write preview shows it: control
+ * and format characters (a newline, a bidi override that could reorder what the
+ * approver reads) become spaces, whitespace runs collapse, and anything past
+ * {@link PREVIEW_EXCERPT_MAX} code points is cut with a trailing `…`. Counted in
+ * code points, like Instagram's own text limits, so an emoji is never split
+ * into a lone surrogate.
+ *
+ * Shared by the publishing previews (`details.caption.excerpt`, CC-PUB-60) and
+ * the comment-write previews (`details.message.excerpt`), so the human
+ * approving a public caption and a public comment reads the same rendering.
+ */
+export function previewExcerpt(text: string): string {
+  const flat = text.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim();
+  const points = [...flat];
+  return points.length > PREVIEW_EXCERPT_MAX
+    ? `${points.slice(0, PREVIEW_EXCERPT_MAX).join('')}…`
+    : flat;
+}

@@ -973,11 +973,32 @@ function unknownArgumentLine({ unknownArgument, hint, after }: UnknownArgument):
     );
   }
   const suffix = hint === undefined ? '' : ` (${hint})`;
-  // The token-shape redactor, as on the entry's own refusals (CC-PROC-208): a
-  // token pasted as a positional, or behind a single-dash slip that is never
-  // split at `=` (`-access-token=EAA…`), would otherwise be echoed whole.
-  const named = String(createRedactor()(unknownArgument));
-  return `login: unknown argument '${named}'${suffix}.`;
+  return `login: unknown argument '${echoedArgument(unknownArgument)}'${suffix}.`;
+}
+
+/**
+ * A bare run of 32 or more hex digits: the shape of a Meta app secret. Local
+ * to this refusal on purpose — the shared redactor matches token SHAPES only,
+ * and a 32-hex run is too common in ordinary text (ids, hashes) to mask
+ * everywhere, but an argv token `login` does not know is exactly where a
+ * secret pasted as a positional lands (CC-CFG-83).
+ */
+const BARE_HEX_SECRET = /(?<![0-9A-Za-z])[0-9A-Fa-f]{32,}(?![0-9A-Za-z])/g;
+
+/**
+ * The spelling of a refused argv token that is safe to print. A single-dash
+ * token is never split at `=` by the parser, so its value would otherwise be
+ * echoed with it: `-app-secret=<secret>` is a slip of the long flag carrying
+ * the secret. It is named only up to and including the `=` (`-app-secret=`,
+ * `-p=`), which still shows the spelling that failed. What remains goes
+ * through the token-shape redactor, as on the entry's own refusals
+ * (CC-PROC-208), and then through {@link BARE_HEX_SECRET}, so a token or an
+ * app secret pasted as a positional reads `[REDACTED]`.
+ */
+function echoedArgument(token: string): string {
+  const eq = token.indexOf('=');
+  const cut = token.startsWith('-') && eq !== -1 ? token.slice(0, eq + 1) : token;
+  return String(createRedactor()(cut)).replace(BARE_HEX_SECRET, '[REDACTED]');
 }
 
 /**
@@ -1071,7 +1092,10 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions | Unkno
         // What is echoed is `flag`, not `arg`: for a long flag with an inline
         // value that is the name before the `=`, because the value is exactly
         // what would have followed `--app-secret` — `--app-secrett=…` is a typo
-        // carrying the secret. Every other token is echoed whole; it is an
+        // carrying the secret. A single-dash token is never split, so the
+        // refusal cuts it after its `=` for the same reason (`-app-secret=…`
+        // is named `-app-secret=`; see `echoedArgument`). Every other token is
+        // echoed whole, token shapes and bare hex secrets masked; it is an
         // argv token the operator typed, never a value the parser consumed.
         //
         // The one exception is a token right after a value-taking flag spelling.

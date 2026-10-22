@@ -2872,15 +2872,16 @@ test('the inline =value form belongs to the long flags: -p=ig is refused as an u
   // usage error naming the token that was not understood, instead of guessing
   // a path and logging in against the wrong Meta product. Until 2026-09-19 the
   // token was dropped instead and the refusal blamed a missing `--path`, which
-  // sent the operator looking for a flag they had typed. The whole token is
-  // echoed, `=` included: a single-dash token is never split, so `-p=ig` is
-  // the spelling that failed, not `-p` (which the help lists as valid).
+  // sent the operator looking for a flag they had typed. The token is echoed
+  // up to and including the `=`: `-p=` is the spelling that failed, not `-p`
+  // (which the help lists as valid), and the value after the `=` is never
+  // echoed, because the same slip on `-app-secret=` carries the secret.
   const help = await helpText();
   const { deps, out, steps } = mustStopAtParsing();
   const code = await runLogin(['-p=ig', '--app-id=55500', `--app-secret=${APP_SECRET}`], deps);
 
   assert.equal(code, 2, '-p=ig must not be read as a path');
-  assert.equal(out(), `login: unknown argument '-p=ig'.\n\n${help}`);
+  assert.equal(out(), `login: unknown argument '-p='.\n\n${help}`);
   assert.deepEqual(steps, []);
 });
 
@@ -2894,7 +2895,7 @@ test('a refused token that is token-shaped is named [REDACTED], never echoed', a
   const help = await helpText();
   for (const [token, named] of [
     [LONG_TOKEN, '[REDACTED]'],
-    [`-access-token=${LONG_TOKEN}`, '-access-token=[REDACTED]'],
+    [`-access-token=${LONG_TOKEN}`, '-access-token='],
   ] as const) {
     const { deps, out, steps } = mustStopAtParsing();
     const code = await runLogin(['--path', 'ig', token], deps);
@@ -2902,6 +2903,37 @@ test('a refused token that is token-shaped is named [REDACTED], never echoed', a
     assert.equal(out(), `login: unknown argument '${named}'.\n\n${help}`);
     assert.ok(!out().includes(LONG_TOKEN), 'the token must not reach stderr');
     assert.deepEqual(steps, []);
+  }
+});
+
+test('a refused single-dash token is named up to its =, and a bare hex app secret is masked', async () => {
+  // CC-CFG-83 residual (owner decision 2026-10-22). A single-dash token is never
+  // split at `=`, so `-app-secret=<32 hex>` — a slip of the long flag — echoed
+  // the app secret whole: it is not token-shaped, and the shared redactor knows
+  // token shapes only. The token is now named up to and including the `=`, and
+  // a bare run of 32+ hex digits (a secret pasted as a positional) is masked
+  // in this refusal only. A shorter hex run, or one glued into a longer
+  // alphanumeric word, is not a secret's shape and is echoed as typed.
+  const help = await helpText();
+  const hex32 = '0123456789abcdef'.repeat(2);
+  for (const [token, named] of [
+    [`-app-secret=${hex32}`, '-app-secret='],
+    ['-x=', '-x='],
+    ['-=y', '-='],
+    [hex32, '[REDACTED]'],
+    [hex32.toUpperCase(), '[REDACTED]'],
+    [`${hex32}ab`, '[REDACTED]'],
+    [`a=${hex32}`, 'a=[REDACTED]'],
+    [`-${hex32}`, '-[REDACTED]'],
+    [hex32.slice(1), hex32.slice(1)],
+    [`g${hex32}`, `g${hex32}`],
+    [`${hex32}g`, `${hex32}g`],
+  ] as const) {
+    const { deps, out, steps } = mustStopAtParsing();
+    const code = await runLogin(['--path', 'ig', token], deps);
+    assert.equal(code, 2, token);
+    assert.equal(out(), `login: unknown argument '${named}'.\n\n${help}`, token);
+    assert.deepEqual(steps, [], token);
   }
 });
 

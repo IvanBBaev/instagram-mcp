@@ -1361,15 +1361,38 @@ test('a report to a TTY is colorized, and NO_COLOR turns it off', async () => {
     assert.ok(colored.report.includes('\u001B['), 'an interactive terminal gets ANSI colors');
     assert.ok(colored.report.includes('Health check passed'), 'and the content is unchanged');
 
-    // NO_COLOR is honored regardless of its value — presence alone opts out.
+    // Any non-empty value opts out — `0` and `false` included, as no-color.org
+    // reads it: the value is never interpreted.
+    for (const value of ['1', '0', 'false', ' ']) {
+      process.env.NO_COLOR = value;
+      const plain = await runDoctor({
+        req: healthyReq(),
+        profile: fbProfile(),
+        settings: baseSettings,
+        nowMs: NOW,
+      });
+      assert.ok(
+        !plain.report.includes('\u001B['),
+        `NO_COLOR=${JSON.stringify(value)} suppresses every escape sequence`,
+      );
+    }
+  });
+});
+
+test('an empty NO_COLOR keeps a TTY report colorized (owner decision 2026-10-22)', async () => {
+  // no-color.org opts out only on a NO_COLOR that is "present and not an empty
+  // string"; until 2026-10-22 presence alone turned the colours off, so an
+  // empty export left by a shell profile or a CI template did.
+  await withTty(async () => {
     process.env.NO_COLOR = '';
-    const plain = await runDoctor({
+    const res = await runDoctor({
       req: healthyReq(),
       profile: fbProfile(),
       settings: baseSettings,
       nowMs: NOW,
     });
-    assert.ok(!plain.report.includes('\u001B['), 'NO_COLOR suppresses every escape sequence');
+    assert.ok(res.report.includes('\u001B['), 'an empty NO_COLOR is read as unset');
+    assert.ok(res.report.includes('Health check passed'), 'and the content is unchanged');
   });
 });
 

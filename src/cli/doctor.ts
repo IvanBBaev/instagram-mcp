@@ -97,9 +97,16 @@ function pathLabel(path: AuthPath): string {
     : 'Instagram Login — graph.instagram.com';
 }
 
-/** Color only when stdout is an interactive terminal and NO_COLOR is unset. */
+/**
+ * Color only when stdout is an interactive terminal and NO_COLOR is unset or
+ * empty. The no-color.org convention opts out on a NO_COLOR that is "present
+ * and not an empty string", so `NO_COLOR=` (an empty export left behind by a
+ * shell profile or a CI template) keeps the colours. Read from the real
+ * process environment, not the `env` seam (CC-PROC-29).
+ */
 function shouldUseColor(): boolean {
-  return Boolean(process.stdout.isTTY) && process.env.NO_COLOR === undefined;
+  const noColor = process.env.NO_COLOR;
+  return Boolean(process.stdout.isTTY) && (noColor === undefined || noColor === '');
 }
 
 /** Render one status line, optionally wrapped in an ANSI color for a TTY. */

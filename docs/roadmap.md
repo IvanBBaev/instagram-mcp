@@ -53,7 +53,7 @@
 | R8 | Plugin-marketplace listing | workplan.md T-R8 | `blocked-owner` | 2 |
 | OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `done` | 8 |
 | OWNER-DOC | Residual owner decisions: record PROC-213, INS-28/29, RATE-18 as accepted | corner-cases.md §10 | `blocked-owner` | 1 |
-| CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `open` | 2 |
+| CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `blocked-external` | 2 |
 
 ### History
 - 2026-10-18 `aad777a` — 80.4 %, 50 h left (first run; baseline)

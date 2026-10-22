@@ -14,6 +14,7 @@ import {
   BUSINESS_MEDIA_CURSOR_PATTERN,
   INSTAGRAM_USERNAME_PATTERN,
   MEDIA_MORE_NOTE,
+  MEDIA_SAME_CURSOR_NOTE,
   discoverBusiness,
   NO_PROFILE_NOTE,
   getHashtagMedia,
@@ -900,6 +901,47 @@ test('discoverBusiness resumes the nested media edge with media.after(cursor) (C
     },
     host: 'graph.facebook.com',
   });
+});
+
+test('discoverBusiness withholds a media cursor that is the mediaAfter it was sent (CC-DATA-134)', async () => {
+  // CC-DATA-134's rule on the nested edge: a resumed page that hands back the
+  // cursor it was resumed from made no progress, and offering it again as
+  // mediaPaging.after sends a caller round the same page forever. Both spellings
+  // of the cursor are checked — `cursors.after` and a `next`-only page — and a
+  // page that advances is untouched.
+  const read = async (media: unknown, mediaAfter?: string): Promise<unknown> => {
+    const { req } = fakeReq(() => ({ business_discovery: { id: 'B1', media } }));
+    const biz = await discoverBusiness(req, {
+      igId: '999',
+      username: 'target',
+      mediaLimit: 5,
+      ...(mediaAfter === undefined ? {} : { mediaAfter }),
+    });
+    return biz.mediaPaging;
+  };
+  const same = { truncated: true, note: MEDIA_SAME_CURSOR_NOTE };
+
+  assert.deepStrictEqual(
+    await read({ data: [{ id: 'm1' }], paging: { cursors: { after: 'CUR' } } }, 'CUR'),
+    same,
+  );
+  assert.deepStrictEqual(
+    await read({ data: [{ id: 'm1' }], paging: { next: 'https://g/x?after=CUR' } }, 'CUR'),
+    same,
+  );
+  assert.deepStrictEqual(
+    await read({ data: [{ id: 'm1' }], paging: { cursors: { after: 'NEXT' } } }, 'CUR'),
+    { after: 'NEXT', truncated: true, note: MEDIA_MORE_NOTE },
+  );
+  assert.deepStrictEqual(
+    await read({ data: [{ id: 'm1' }], paging: { cursors: { after: 'CUR' } } }),
+    { after: 'CUR', truncated: true, note: MEDIA_MORE_NOTE },
+  );
+  assert.equal(
+    MEDIA_SAME_CURSOR_NOTE,
+    'Instagram answered mediaAfter with the same media cursor it was sent (no forward ' +
+      'progress), so it is not offered again — the media list cannot be continued from here',
+  );
 });
 
 test('discoverBusiness refuses a mediaAfter that would rewrite the field expression, without echoing it (CC-DATA-116)', async () => {

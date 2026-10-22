@@ -26,7 +26,7 @@ import { fence } from '../../src/mcp/result.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { discoveryTools } from '../../src/tools/discovery.js';
-import { MEDIA_MORE_NOTE } from '../../src/api/discovery.js';
+import { MEDIA_MORE_NOTE, MEDIA_SAME_CURSOR_NOTE } from '../../src/api/discovery.js';
 import { testSettings } from '../helpers/settings.js';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
@@ -3006,6 +3006,26 @@ test('real McpServer: discover_business publishes the media edge paging and resu
       media: [],
       mediaPaging: { truncated: true },
       note: UNUSABLE_CURSOR_NOTE,
+    });
+
+    // A resumed page that hands back the cursor it was sent: truncated, no
+    // `after` to follow round the same page, and the note says so (CC-DATA-134).
+    const echoed = await tool('instagram_discover_business').handler(
+      { username: 'competitor', mediaAfter: 'QUZU' },
+      makeCtx(
+        fakeReq(() => ({
+          business_discovery: {
+            id: 'B1',
+            media: { data: [{ id: 'p1' }], paging: { cursors: { after: 'QUZU' } } },
+          },
+        })).req,
+      ),
+    );
+    assert.deepEqual(echoed.structuredContent, {
+      id: 'B1',
+      media: [{ id: 'p1' }],
+      mediaPaging: { truncated: true },
+      note: MEDIA_SAME_CURSOR_NOTE,
     });
 
     // No media edge (undisclosed or unreadable): no paging claim at all.

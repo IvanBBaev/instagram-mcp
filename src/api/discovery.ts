@@ -311,6 +311,15 @@ export const MEDIA_MORE_NOTE =
   'mediaPaging.after as mediaAfter to read further; an empty media list there means the end';
 
 /**
+ * Note for a resumed media page that came back with the very cursor it was sent
+ * (CC-DATA-134 on the nested edge): no forward progress, so the cursor is not
+ * offered again — following it would only re-read the same page.
+ */
+export const MEDIA_SAME_CURSOR_NOTE =
+  'Instagram answered mediaAfter with the same media cursor it was sent (no forward ' +
+  'progress), so it is not offered again — the media list cannot be continued from here';
+
+/**
  * The charset a `business_discovery` media cursor must have to be sent back.
  * Like the handle, the cursor is interpolated into the field expression
  * (`media.after(<cursor>)`), which has no escaping, so `(`, `)`, `{`, `}`, `,`,
@@ -435,7 +444,7 @@ interface BusinessDiscoveryWire {
  * either: the wire promised `{data: [...]}`, and a list arriving in its place is
  * a shape change, not a lucky match.
  */
-function readMediaEdge(edge: unknown, result: BusinessDiscovery): void {
+function readMediaEdge(edge: unknown, result: BusinessDiscovery, sent: string | undefined): void {
   if (edge === undefined || edge === null) return;
   if (typeof edge !== 'object' || Array.isArray(edge)) {
     result.mediaUnreadable = true;
@@ -448,7 +457,7 @@ function readMediaEdge(edge: unknown, result: BusinessDiscovery): void {
     return;
   }
   result.media = data as DiscoveredMedia[];
-  result.mediaPaging = readMediaPaging(edge);
+  result.mediaPaging = readMediaPaging(edge, sent);
 }
 
 /**
@@ -465,14 +474,21 @@ function readMediaEdge(edge: unknown, result: BusinessDiscovery): void {
  * `after`) and the documented single-page answer (no cursor, no next: complete).
  * A cursor that cannot be interpolated back into the field expression is the
  * CC-DATA-11 "present but unusable" stop, not the end.
+ *
+ * `sent` is the `mediaAfter` this read resumed from. An edge that answers with
+ * that very cursor made no progress (CC-DATA-134's rule, applied to the nested
+ * edge on 2026-10-22): publishing it as `after` invited the caller to re-read the
+ * same page for as long as it kept following it. It is withheld, and
+ * {@link MEDIA_SAME_CURSOR_NOTE} says why.
  */
-function readMediaPaging(edge: object): BusinessMediaPaging {
+function readMediaPaging(edge: object, sent: string | undefined): BusinessMediaPaging {
   const cursor = (edge as { paging?: { cursors?: { after?: unknown } } }).paging?.cursors?.after;
   const after = cursor !== undefined ? cursor : nextPageCursor(edge);
   if (after === undefined) return { truncated: false };
   if (typeof after !== 'string' || !BUSINESS_MEDIA_CURSOR_PATTERN.test(after)) {
     return { truncated: true, note: UNUSABLE_CURSOR_NOTE };
   }
+  if (after === sent) return { truncated: true, note: MEDIA_SAME_CURSOR_NOTE };
   return { after, truncated: true, note: MEDIA_MORE_NOTE };
 }
 
@@ -544,6 +560,6 @@ export async function discoverBusiness(
     follows_count: bd.follows_count,
     media_count: bd.media_count,
   };
-  readMediaEdge(bd.media, result);
+  readMediaEdge(bd.media, result, params.mediaAfter);
   return result;
 }

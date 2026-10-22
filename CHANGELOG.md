@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `Retry-After` too large to state (past 2^53 ms, or parsed as `Infinity`) no
   longer reads "a Infinity s wait … retry in ~Infinity h"; the call still fails
   fast, without the numbers (CC-RATE-19).
+- Comment hide, unhide, delete and comments-toggle writes answered with a bare
+  JSON `false` are reported as declined instead of done, and a `null` answer no
+  longer fails with a raw `TypeError` (CC-COM-21).
 
 ## [0.8.0] — 2026-10-13
 

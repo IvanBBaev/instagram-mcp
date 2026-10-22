@@ -275,7 +275,14 @@ function assertAcknowledged(ack: CommentWriteResult, action: string): void {
   // check below would wave it through as a silent ack; map it as the same body
   // on a 4xx would be mapped (see `tools/ack.ts`).
   assertNoErrorEnvelope(ack);
-  if (ack.success === false) {
+  // CC-COM-21: `core/http.ts` hands back `JSON.parse(text)` unchanged, so the
+  // body can be a bare scalar. A bare `false` is Graph's legacy form of the same
+  // refusal and must not read as `undefined` (done); `null` would throw a raw
+  // TypeError. Any other non-object discloses nothing, like an absent key.
+  const declined =
+    (ack as unknown) === false ||
+    (typeof ack === 'object' && ack !== null && ack.success === false);
+  if (declined) {
     throw new InstagramError(`Instagram declined to ${action} (success: false).`, {
       kind: 'upstream',
     });

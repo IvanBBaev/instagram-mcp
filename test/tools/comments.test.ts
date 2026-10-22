@@ -970,6 +970,36 @@ test('an acknowledgement without a success key is not read as a refusal', async 
   assert.deepEqual(res.structuredContent, { hidden: 'C1', note: OWN_COMMENT_HIDE_NOTE });
 });
 
+test('a bare JSON false ack is a refusal and a null ack is silent, never a TypeError (CC-COM-21)', async () => {
+  // `core/http.ts` returns `JSON.parse(text)`, so a body of `false` or `null`
+  // reaches the handler as that scalar. Reading `.success` on `false` gave
+  // `undefined` and reported the declined write as done; on `null` it threw a
+  // raw TypeError that carried no `kind`.
+  const journal = join(journalDir, 'scalar-ack.jsonl');
+  const declined = makeCtx(fakeReq(() => false).req, {
+    settings: { allowDestructive: true, writeJournal: journal },
+  });
+  await assert.rejects(
+    async () =>
+      tool('instagram_delete_comment').handler({ commentId: 'C1', apply: true }, declined),
+    (err: unknown) => {
+      assert.ok(err instanceof InstagramError);
+      assert.equal(err.kind, 'upstream');
+      assert.match(err.message, /declined to delete comment C1/);
+      return true;
+    },
+  );
+  assert.equal(existsSync(journal), false, 'nothing was journaled');
+
+  for (const body of [null, true]) {
+    const res = await tool('instagram_hide_comment').handler(
+      { commentId: 'C1', apply: true },
+      makeCtx(fakeReq(() => body).req),
+    );
+    assert.deepEqual(res.structuredContent, { hidden: 'C1', note: OWN_COMMENT_HIDE_NOTE });
+  }
+});
+
 test('a null or non-string comment text, username or caption is dropped, not a crashed page', async () => {
   // The api layer casts the Graph body, so these string fields can arrive as
   // `null`. Handing that to `fence()` threw a TypeError that failed the whole

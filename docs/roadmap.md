@@ -52,7 +52,7 @@
 | R6 | MCPB bundle attach to the GitHub Release | workplan.md T-R6 | `blocked-owner` | 2 |
 | R8 | Plugin-marketplace listing | workplan.md T-R8 | `blocked-owner` | 2 |
 | OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `done` | 8 |
-| OWNER-DOC | Residual owner decisions: record PROC-213, INS-28/29, RATE-18 as accepted; CFG-81 `doctor` source hint | corner-cases.md §10 | `blocked-owner` | 1 |
+| OWNER-DOC | Residual owner decisions: record PROC-213, INS-28/29, RATE-18 as accepted | corner-cases.md §10 | `blocked-owner` | 1 |
 | CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `open` | 2 |
 
 ### History

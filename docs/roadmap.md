@@ -23,11 +23,11 @@
 | | |
 |---|---|
 | Release target | `1.0.0` — field-validated release per [release-checklist.md](release-checklist.md) §3 and the M1–M5 exit gates (current version `0.8.0`) |
-| Progress | **80.4 %** — 205 h of 255 h earned |
-| Remaining | **50 h** Opus 5.5 (2 h workable now, 48 h blocked) |
-| Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); owner go-ahead for the registry, MCPB and marketplace channels; owner sign-off on T-04; owner decisions on the wave-21/23 candidates |
+| Progress | **83.2 %** — 213 h of 256 h earned |
+| Remaining | **43 h** Opus 5.5 (2 h workable now, 41 h blocked) |
+| Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); owner go-ahead for the registry, MCPB and marketplace channels; owner sign-off on T-04; owner record of the residual wave-23 decisions (OWNER-DOC) |
 | Calibration | WORKLOG 2026-09-26 and 2026-10-10: three to four audit waves (4–8 fixes each, full gate) per day → ~3 h per wave; SDK v2 migration plus wave 21 fit in one session day (~10 h) |
-| Updated | 2026-10-18 at `aad777a` |
+| Updated | 2026-10-22 at `e03a018` |
 
 | ID | Item | Source | Status | Est h |
 |---|---|---|---|---|
@@ -51,11 +51,13 @@
 | R5 | MCP-registry submission | workplan.md T-R5 | `blocked-owner` | 1 |
 | R6 | MCPB bundle attach to the GitHub Release | workplan.md T-R6 | `blocked-owner` | 2 |
 | R8 | Plugin-marketplace listing | workplan.md T-R8 | `blocked-owner` | 2 |
-| OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `blocked-owner` | 8 |
+| OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `done` | 8 |
+| OWNER-DOC | Residual owner decisions: record PROC-213, INS-28/29, RATE-18 as accepted; CFG-81 `doctor` source hint | corner-cases.md §10 | `blocked-owner` | 1 |
 | CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `open` | 2 |
 
 ### History
 - 2026-10-18 `aad777a` — 80.4 %, 50 h left (first run; baseline)
+- 2026-10-22 `e03a018` — 83.2 %, 43 h left (OWNER-DEC done: the 13 decided wave-23 items applied; new row OWNER-DOC 1 h for the residual decisions — scope +1 h)
 <!-- release-progress:end -->
 
 ## Current state (updated 2026-10-10)

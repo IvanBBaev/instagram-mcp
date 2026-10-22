@@ -30,8 +30,9 @@ derivable. **Not a throttle:** subcode `2207051` is a spam/integrity restriction
 | 190 (invalid/expired token) | no retry → actionable error ("run `login`/`refresh`") | same |
 | 10 / 200-series (permission) | no retry → names the missing scope | same |
 
-Backoff: `min(500·2^n, 8000) ms + jitter`, max 3 retries; `Retry-After` honored,
-capped 60 s. Per-host concurrency semaphore (default 4).
+Backoff: `min(500·2^n, 8000) ms + jitter`, max 3 retries; `Retry-After` honored
+up to 60 s — a longer one fails fast with a "retry in ~N min" estimate instead of
+holding the call. Per-host concurrency semaphore (default 4).
 **No non-idempotent write is auto-retried — not even on 429**, and not only
 `media_publish`. Meta can throttle a request *after* accepting it, so replaying a
 `POST`/`DELETE` risks a duplicate post or comment: publicly visible and costly in

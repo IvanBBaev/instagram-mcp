@@ -135,7 +135,8 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   idempotent call — `GET` by default. A `POST`/`DELETE` is never replayed, not even
   on `429`: Meta can throttle a request after accepting it (see
   [operations.md](operations.md) §2). `Retry-After` (delta-seconds or an
-  IMF-fixdate) is honored, capped at 60 s. Per-host concurrency semaphore (`IG_MAX_CONCURRENT`, default 4).
+  IMF-fixdate) is honored up to 60 s; a longer one fails fast with a "retry in ~N min"
+  estimate instead of holding the MCP call (CC-RATE-3). Per-host concurrency semaphore (`IG_MAX_CONCURRENT`, default 4).
 - **Rate-limit budget**: parse `X-App-Usage` / `X-Business-Use-Case-Usage` response
   headers on every call and proactively throttle when usage > 90 % (see
   [operations.md](operations.md)). The last-seen snapshot is not exposed yet:

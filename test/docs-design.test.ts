@@ -22,7 +22,7 @@
  *     subcode handled in code but absent from the table is an undocumented
  *     behaviour nobody can review.
  *   - **A retry budget that does not match the code.** "max 3 retries" and
- *     "capped 60 s" are what an operator uses to reason about worst-case latency
+ *     "up to 60 s" are what an operator uses to reason about worst-case latency
  *     and quota burn. They are private constants in `core/http.ts`; changing one
  *     changed nothing else in this repo.
  *   - **A stale version pin.** `GRAPH_VERSION` appears in ~30 places across the
@@ -458,7 +458,8 @@ test('§2 states the retry budget core/http.ts actually implements', () => {
   assert.equal(
     spanBetween(body, 'Backoff:', NO_AUTO_RETRY_RULE, 'docs/operations.md §2'),
     `Backoff: \`min(${base}·2^n, ${cap}) ms + jitter\`, max ${attempts - 1} retries; ` +
-      `\`Retry-After\` honored, capped ${retryAfterCap / 1000} s. ` +
+      `\`Retry-After\` honored up to ${retryAfterCap / 1000} s — a longer one fails fast with a ` +
+      `"retry in ~N min" estimate instead of holding the call. ` +
       `Per-host concurrency semaphore (default ${DEFAULT_SETTINGS.maxConcurrent}).`,
     'docs/operations.md §2 no longer states exactly the retry budget core/http.ts implements ' +
       `(MAX_ATTEMPTS = ${attempts}, BACKOFF_BASE_MS = ${base}, BACKOFF_CAP_MS = ${cap}, ` +

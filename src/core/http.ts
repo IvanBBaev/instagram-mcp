@@ -79,7 +79,10 @@ const BACKOFF_BASE_MS = 500;
  * stall; do not contort a test into "killing" the remaining half.
  */
 const BACKOFF_CAP_MS = 8000;
-/** `Retry-After` is honored but never trusted beyond this ceiling. */
+/**
+ * The longest `Retry-After` this client waits out. A longer one is not slept
+ * on, capped or otherwise: the call fails at once with the estimate (CC-RATE-3).
+ */
 const RETRY_AFTER_CAP_MS = 60_000;
 /** Proactively slow down once usage crosses this percentage. */
 const THROTTLE_PCT = 90;
@@ -296,8 +299,10 @@ const IMF_FIXDATE =
 
 /**
  * Parse `Retry-After` (delta-seconds or an IMF-fixdate) into milliseconds,
- * capped at {@link RETRY_AFTER_CAP_MS}. `now` anchors the date form. Any other
- * value is `undefined`, so the caller backs off instead.
+ * UNCAPPED — the caller compares it with {@link RETRY_AFTER_CAP_MS}, because a
+ * wait over the cap is a different decision (fail fast), not a shorter wait.
+ * `now` anchors the date form. Any other value is `undefined`, so the caller
+ * backs off instead.
  */
 function parseRetryAfter(header: string | null, now: number): number | undefined {
   if (header === null) return undefined;
@@ -313,8 +318,44 @@ function parseRetryAfter(header: string | null, now: number): number | undefined
     if (Number.isNaN(at)) return undefined;
     ms = at - now;
   }
-  if (ms < 0) ms = 0;
-  return Math.min(ms, RETRY_AFTER_CAP_MS);
+  return Math.max(ms, 0);
+}
+
+/**
+ * A wait as an operator reads it: whole minutes under two hours, whole hours
+ * past that, always rounded UP so the estimate never invites a retry that is
+ * still too early. Only ever called with more than {@link RETRY_AFTER_CAP_MS},
+ * so the smallest answer is `~2 min`.
+ */
+function humanWait(ms: number): string {
+  const minutes = Math.ceil(ms / 60_000);
+  return minutes < 120 ? `~${minutes} min` : `~${Math.ceil(minutes / 60)} h`;
+}
+
+/**
+ * CC-RATE-3 — the refusal for a `Retry-After` longer than
+ * {@link RETRY_AFTER_CAP_MS} (owner decision, 2026-10-22). Until then the wait
+ * was clamped to the cap and slept up to three times: a BUC reset hours away
+ * held the MCP call for three minutes and then failed anyway, and every replay
+ * spent another request against a limit Meta had just said would not lift. The
+ * call now fails on the spot, keeping every field of the mapped Graph error and
+ * Meta's own text, with the estimate appended so the operator knows when to try
+ * again.
+ */
+function retryAfterTooLong(mapped: InstagramError, waitMs: number): InstagramError {
+  return new InstagramError(
+    `${mapped.message} — Instagram asked for a ${Math.ceil(waitMs / 1000)} s wait ` +
+      `(Retry-After), longer than the ${RETRY_AFTER_CAP_MS / 1000} s this server holds a ` +
+      `call for, so it was not retried; retry in ${humanWait(waitMs)}.`,
+    {
+      kind: mapped.kind,
+      status: mapped.status,
+      code: mapped.code,
+      subcode: mapped.subcode,
+      fbtraceId: mapped.fbtraceId,
+      cause: mapped.cause,
+    },
+  );
 }
 
 /**
@@ -553,7 +594,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     // time. Until 2026-10-10 this seam resolved the params once, BEFORE waiting
     // for a concurrency slot and before the retry loop, so every attempt carried
     // the instant the call was first made: a call that queued behind
-    // `maxConcurrent` others, or that retried after a capped 60 s Retry-After
+    // `maxConcurrent` others, or that retried after a 60 s Retry-After
     // (three times over, plus a `timeoutMs` per attempt), went out minutes
     // late with the first attempt's timestamp — the replay window CC-AUTH-15
     // bounds, reopened by the transport's own patience, and a recoverable 429
@@ -671,13 +712,22 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
             payload,
             isNonBlank(traceId) ? traceId : undefined,
           );
-          if (lastAttempt || !isRetryableKind(mapped.kind, idempotent)) {
-            throw mapped;
+          const retryable = !lastAttempt && isRetryableKind(mapped.kind, idempotent);
+          // `Retry-After` is read whenever the answer would be retried, and on
+          // every throttle even when it will not be (a write, the last attempt):
+          // a reset past the cap is news the caller needs either way (CC-RATE-3).
+          if (retryable || mapped.kind === 'rate_limit') {
+            const retryAfter = parseRetryAfter(res.headers.get('retry-after'), clock.now());
+            if (retryAfter !== undefined && retryAfter > RETRY_AFTER_CAP_MS) {
+              throw retryAfterTooLong(mapped, retryAfter);
+            }
+            if (retryable) {
+              // Honor Retry-After when present, else exponential backoff.
+              await sleep(retryAfter ?? backoffMs(attempt), opts.signal);
+              continue;
+            }
           }
-          // Honor Retry-After (capped) when present, else exponential backoff.
-          const retryAfter = parseRetryAfter(res.headers.get('retry-after'), clock.now());
-          await sleep(retryAfter ?? backoffMs(attempt), opts.signal);
-          continue;
+          throw mapped;
         }
 
         // 5. Success: parse usage, DRAIN THE BODY, then throttle if hot.

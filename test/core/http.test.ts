@@ -1037,20 +1037,20 @@ test('the transport is told to refuse redirects, not follow them', async () => {
 
 // --- http.ts: retry matrix --------------------------------------------------
 
-test('429 retries then succeeds; Retry-After is honored and capped at 60s', async () => {
+test('429 retries then succeeds; a Retry-After up to the 60 s cap is waited out whole', async () => {
   const clock = recordingClock();
   const { fetchImpl, calls } = mockFetch((n) => {
     if (n === 0)
       return {
         status: 429,
-        headers: { 'retry-after': '120' }, // capped to 60s
-        body: { error: { code: 4, message: 'throttled' } },
+        headers: { 'retry-after': '60' }, // exactly the cap: still waited out
+        body: { error: { code: 80002, message: 'throttled' } },
       };
     if (n === 1)
       return {
         status: 429,
         headers: { 'retry-after': '2' },
-        body: { error: { code: 4, message: 'throttled' } },
+        body: { error: { code: 80002, message: 'throttled' } },
       };
     return { body: { ok: true } };
   });
@@ -1065,6 +1065,184 @@ test('429 retries then succeeds; Retry-After is honored and capped at 60s', asyn
   assert.equal(out.ok, true);
   assert.equal(calls.length, 3);
   assert.deepEqual(clock.sleeps, [60_000, 2_000]);
+});
+
+// --- http.ts: a Retry-After past the cap fails fast (CC-RATE-3) --------------
+
+/** The sentence CC-RATE-3 appends to the Graph message, for a wait of `seconds`. */
+function estimateTail(seconds: number, estimate: string): string {
+  return (
+    ` — Instagram asked for a ${seconds} s wait (Retry-After), longer than the 60 s this ` +
+    `server holds a call for, so it was not retried; retry in ${estimate}.`
+  );
+}
+
+test('a Retry-After past the 60 s cap fails fast with the estimate, keeping the Graph fields (CC-RATE-3)', async () => {
+  // Owner decision 2026-10-22. The wait used to be clamped to 60 s and slept up
+  // to three times: a BUC reset hours away held the MCP call for three minutes,
+  // spent three more requests against a limit that would not lift, and then
+  // failed anyway.
+  const clock = recordingClock();
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    headers: { 'retry-after': '61', 'x-fb-trace-id': 'TRACE61' },
+    body: { error: { code: 80002, error_subcode: 2207001, message: 'throttled' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => {
+      assert.ok(isInstagramError(e));
+      assert.equal(e.message, 'throttled' + estimateTail(61, '~2 min'));
+      assert.equal(e.kind, 'rate_limit');
+      assert.equal(e.status, 429);
+      assert.equal(e.code, 80002);
+      assert.equal(e.subcode, 2207001);
+      assert.equal(e.fbtraceId, 'TRACE61');
+      assert.deepEqual(e.cause, {
+        error: { code: 80002, error_subcode: 2207001, message: 'throttled' },
+      });
+      return true;
+    },
+  );
+  assert.equal(calls.length, 1, 'no replay against a limit that will not lift in time');
+  assert.deepEqual(clock.sleeps, [], 'and no wait before failing');
+});
+
+test('the CC-RATE-3 estimate rounds up: minutes under two hours, hours past that', async () => {
+  const cases: Array<[string, number, string]> = [
+    ['120', 120, '~2 min'],
+    ['121', 121, '~3 min'],
+    ['3600', 3600, '~60 min'],
+    ['7140', 7140, '~119 min'],
+    ['7141', 7141, '~2 h'],
+    ['7200', 7200, '~2 h'],
+    ['7201', 7201, '~3 h'],
+    ['86400', 86400, '~24 h'],
+  ];
+  for (const [header, seconds, estimate] of cases) {
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 429,
+      headers: { 'retry-after': header },
+      body: { error: { code: 80002, message: 'throttled' } },
+    }));
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock: recordingClock(),
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/me' }),
+      (e: unknown) =>
+        isInstagramError(e) && e.message === 'throttled' + estimateTail(seconds, estimate),
+      header,
+    );
+    assert.equal(calls.length, 1, header);
+  }
+});
+
+test('an IMF-fixdate Retry-After hours out fails fast, measured from the injected clock (CC-RATE-3)', async () => {
+  const anchor = Date.parse('2026-01-01T00:00:00Z');
+  const clock = recordingClock(anchor);
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    headers: { 'retry-after': new Date(anchor + 5 * 3_600_000).toUTCString() },
+    body: { error: { code: 80002, message: 'throttled' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => isInstagramError(e) && e.message === 'throttled' + estimateTail(18_000, '~5 h'),
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('a throttled write that is never retried still carries the CC-RATE-3 estimate', async () => {
+  // A write is not replayed whatever the header says; the estimate is still the
+  // one thing the operator needs to know before trying it again by hand.
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 429,
+    headers: { 'retry-after': '900' },
+    body: { error: { code: 80002, message: 'throttled' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'POST', path: '/123/comments', body: { message: 'hi' } }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'rate_limit' &&
+      e.message === 'throttled' + estimateTail(900, '~15 min'),
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('a retryable 5xx with a Retry-After past the cap fails fast and stays upstream (CC-RATE-3)', async () => {
+  // The fail-fast rule is about the wait, not the kind: a 503 that says "come
+  // back in an hour" is not turned into a throttle, but it is not slept on either.
+  const clock = recordingClock();
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 503,
+    headers: { 'retry-after': '3600' },
+    body: { error: { message: 'unavailable' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'upstream' &&
+      e.status === 503 &&
+      e.message === 'unavailable' + estimateTail(3600, '~60 min'),
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('a non-retryable, non-throttle error ignores Retry-After and surfaces unchanged', async () => {
+  const { fetchImpl, calls } = mockFetch(() => ({
+    status: 400,
+    headers: { 'retry-after': '3600' },
+    body: { error: { code: 100, message: 'bad field' } },
+  }));
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+  });
+  await assert.rejects(
+    () => req({ method: 'GET', path: '/me' }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'validation' && e.message === 'bad field',
+  );
+  assert.equal(calls.length, 1);
 });
 
 // --- http.ts: the time-bound proof is signed per attempt (CC-AUTH-79) -------
@@ -1655,7 +1833,7 @@ test('an HTTP-date Retry-After is measured from the injected clock, not from a f
   // the subtraction reads `clock.now()` at all — 0 is both the honest answer and
   // the constant a bug would hard-wire. Anchoring the clock in 2026 separates
   // them: read correctly the wait is 30s; read as 0 it becomes 56 years, which
-  // the 60s cap flattens to a full minute.
+  // fails fast past the 60s cap (CC-RATE-3) instead of being waited out.
   const anchor = Date.parse('2026-01-01T00:00:00Z');
   const clock = recordingClock(anchor);
   const { fetchImpl } = mockFetch((n) =>
@@ -1737,8 +1915,8 @@ test('a Retry-After that is not delta-seconds or an IMF-fixdate falls back to ba
   // 2001-05-01, `'60,'` is 1960, `'12/31'` is 2001-12-31. Against a 2026 clock
   // each becomes a past instant, so the retry fired with ZERO delay (the
   // hammering CC-RATE-10 exists to avoid). The clock is anchored in 2026
-  // because an epoch anchor would turn every one of these into the 60 s cap
-  // instead and hide the zero. (A bare `'2026'` is valid delta-seconds and is
+  // because an epoch anchor would turn every one of these into a wait past the
+  // 60 s cap instead (a CC-RATE-3 fail-fast) and hide the zero. (A bare `'2026'` is valid delta-seconds and is
   // not in this list.) Only the IMF-fixdate form RFC 9110
   // requires senders to use is read as a date; the obsolete forms and a
   // lower-cased fixdate (HTTP-date is case-sensitive) take the backoff too.
@@ -1861,7 +2039,8 @@ test('a padded delta-seconds Retry-After is trimmed when the transport does not 
   // fixture that goes through `new Response` is a fixed point for the `trim()`
   // in `parseRetryAfter`. With the trim gone, `' 2 '` fails the delta-seconds
   // regex and falls to `Date.parse`, which V8 reads leniently as a date in 2001
-  // — a 60s (capped) wait in place of a 2s one. The verbatim transport below is
+  // — a decades-long wait that fails fast past the 60s cap (CC-RATE-3) in place
+  // of a 2s one. The verbatim transport below is
   // the same seam the trace-id test uses: `fetchImpl` is injectable and nothing
   // makes every transport normalize.
   const clock = recordingClock();

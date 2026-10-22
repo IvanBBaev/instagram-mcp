@@ -32,7 +32,7 @@ advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 68 `CC-CFG`, 39 `CC-PUB`, 21 `CC-INS`,
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1849 citation sites across the
+Nothing downstream resolves a case by section number; 1863 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -105,7 +105,7 @@ them still resolves.
 |---|---|---|---|
 | CC-RATE-1 | Usage headers absent on a response (Meta sends them inconsistently) | Budget snapshot keeps the last-seen value with its timestamp; `token_status` marks it "as of \<time\>", never crashes | M1 · unit |
 | CC-RATE-2 | Malformed / unparseable usage-header JSON | Swallowed with a debug log; never breaks the actual response path | M1 · unit |
-| CC-RATE-3 | `Retry-After` absurdly large (or absent) on 429 | Cap wait at 60 s; if the reset is hours away (BUC 24 h window), **fail fast with the estimate** instead of blocking the MCP call | M1 · unit |
+| CC-RATE-3 | `Retry-After` absurdly large (or absent) on 429 | Cap wait at 60 s; if the reset is hours away (BUC 24 h window), **fail fast with the estimate** instead of blocking the MCP call. **Applied 2026-10-22 (owner decision):** a `Retry-After` of up to `RETRY_AFTER_CAP_MS` (60 s) is still waited out and the call retried; a longer one — delta-seconds or an IMF-fixdate, read against the injected clock — is never slept on: the call fails at once, with no further attempt, carrying the Graph fields unchanged (kind, status, code, subcode, fbtrace ID) and a message that appends the requested wait and an estimate ("retry in ~N min", "~N h" from two hours up, rounded up). This applies to every throttle and every retryable response, a write and the last attempt included; a missing header still takes the exponential backoff | M1 · unit |
 | CC-RATE-4 | Hashtag 30-unique/7-days local counter: file corrupted, or same account used from two machines | Counter is advisory only — self-heals on parse failure (reset + warn); Meta's own rejection remains the hard signal. **The multi-machine blind spot is fixable**: `GET /{ig-user-id}/recently_searched_hashtags` returns the account's real 7-day window server-side *[verified 2026-07-30 — https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/recently_searched_hashtags]*, so the counter should be reconciled against it rather than documented as unfixable (see [operations.md](operations.md) §1) | M4 · unit + docs |
 | CC-RATE-5 | Proactive throttle (> 90 % usage) triggering during a composite mid-flow | Composite completes its current step but refuses to start new quota-consuming steps; partial-progress result explains why | M2 · unit |
 | CC-RATE-6 | Semaphore saturation: > `IG_MAX_CONCURRENT` parallel tool calls | Queued fairly (FIFO); a queue-wait timeout produces a clear "server busy" error rather than hanging the MCP call indefinitely | M1 · unit |

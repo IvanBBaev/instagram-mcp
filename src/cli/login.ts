@@ -663,6 +663,31 @@ export function listenHostFor(redirectUri: string): string {
   );
 }
 
+/**
+ * Why `redirectUri` cannot be the URI `login` captures the redirect on, or
+ * `undefined` when it can. The listener is a plain HTTP server, so the browser
+ * can only come back to an `http:` URI: an `https:` one fails the TLS handshake
+ * against it, and a custom scheme (`myapp://…`) is handed to whatever app
+ * claims it, never to this process. Either way the login used to print the
+ * authorize URL, send the operator through Meta's consent screen, and then
+ * wait out the five-minute timeout for a redirect that could not arrive.
+ * `runLogin` asks this before the authorize URL is printed; the capture asks
+ * it again for a direct caller.
+ */
+export function redirectUriProblem(redirectUri: string): string | undefined {
+  const remedy = `use ${DEFAULT_REDIRECT_URI} (and register it in your Meta app).`;
+  if (!URL.canParse(redirectUri)) {
+    return `--redirect-uri is not an absolute URL; ${remedy}`;
+  }
+  const { protocol } = new URL(redirectUri);
+  if (protocol === 'http:') return undefined;
+  return (
+    `--redirect-uri must be an http:// URI, but it uses "${protocol}". login captures the ` +
+    `redirect with a plain HTTP listener on ${LOOPBACK_IPV4} or [${LOOPBACK_IPV6}], so the ` +
+    `browser never comes back to any other scheme; ${remedy}`
+  );
+}
+
 /** Injectable collaborators for {@link captureAuthorizationCode}. */
 export interface CaptureDeps {
   /** Server factory. Defaults to `node:http`; tests inject a socket-free fake. */
@@ -689,23 +714,20 @@ export function captureAuthorizationCode(
   params: { redirectUri: string; state: string },
   deps: CaptureDeps = {},
 ): Promise<string> {
+  const problem = redirectUriProblem(params.redirectUri);
+  if (problem !== undefined) {
+    return Promise.reject(new InstagramError(problem, { kind: 'validation' }));
+  }
   const url = new URL(params.redirectUri);
   // An empty `url.port` means the URI names no port OR names the scheme's own
   // default (the WHATWG parser drops `:80` from an `http:` URI). Either way the
-  // browser follows an `http:` redirect to port 80, so that is where to listen;
-  // 8723 there left the listener where the redirect never arrives. Any other
-  // scheme keeps the CLI default. Pinned by "captureAuthorizationCode binds the
-  // scheme default port when the redirect URI names none".
-  const defaultPort = url.protocol === 'http:' ? HTTP_DEFAULT_PORT : DEFAULT_REDIRECT_PORT;
-  const port = url.port !== '' ? Number(url.port) : defaultPort;
-  // The `'/'` arm is reached by a redirect URI whose scheme is not special:
-  // the WHATWG parser normalises an empty path to `/` only for special schemes,
-  // `listenHostFor` below checks the HOST and not the scheme, and nothing between
-  // `--redirect-uri` and this line checks it either. Pinned by
-  // "captureAuthorizationCode routes a pathless redirect URI to the root path" —
-  // it was marked unreachable and coverage-excluded until 2026-09-23. Without the
-  // arm an empty `expectedPath` would make the route match nothing at all.
-  const expectedPath = url.pathname === '' ? '/' : url.pathname;
+  // browser follows the redirect to port 80, so that is where to listen; 8723
+  // there left the listener where the redirect never arrives (CC-CFG-82).
+  // Pinned by "captureAuthorizationCode binds the scheme default port when the
+  // redirect URI names none". The URI is `http:` here, a special scheme, so its
+  // `pathname` is never empty: the parser normalises an empty path to `/`.
+  const port = url.port !== '' ? Number(url.port) : HTTP_DEFAULT_PORT;
+  const expectedPath = url.pathname;
   const clock = deps.clock ?? systemClock;
   const timeoutMs = deps.timeoutMs ?? CAPTURE_TIMEOUT_MS;
   const createServerImpl = deps.createServerImpl ?? defaultCreateServer;
@@ -1193,6 +1215,13 @@ export async function runLogin(argv: string[], deps: LoginDeps = {}): Promise<nu
       "login: --profile takes only letters, digits, '_', '.' and '-' — a profile stored " +
         'under any other name could never be loaded back from the credentials file.\n',
     );
+    return 2;
+  }
+  // Refused before anything is printed or opened: a redirect URI the listener
+  // cannot receive sends the operator through Meta's consent screen for nothing.
+  const redirectProblem = redirectUriProblem(opts.redirectUri);
+  if (redirectProblem !== undefined) {
+    stderr(`login: ${redirectProblem}\n`);
     return 2;
   }
   const path = opts.path;

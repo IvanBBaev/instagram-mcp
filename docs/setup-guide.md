@@ -177,7 +177,7 @@ Useful flags (`login --help` for the full list):
 |---|---|
 | `--path <ig\|fb>` | Auth path. **Required.** |
 | `--app-id` / `--app-secret` | App credentials (or env `IG_APP_ID` / `IG_APP_SECRET`). |
-| `--redirect-uri <uri>` | OAuth redirect (default `http://127.0.0.1:8723/callback`) — must match an entry whitelisted in the app **literally**: Meta treats `127.0.0.1` and `localhost` as different entries. |
+| `--redirect-uri <uri>` | OAuth redirect (default `http://127.0.0.1:8723/callback`) — must match an entry whitelisted in the app **literally**: Meta treats `127.0.0.1` and `localhost` as different entries. It must be an `http://` URI on `127.0.0.1` or `[::1]` (`localhost` counts as `127.0.0.1`): `login` captures the redirect with a plain HTTP listener, so an `https://` or custom-scheme URI is refused with exit code 2 before the authorize URL is printed. |
 | `--account-id <id>` | Pre-set the IG professional-account id to store (otherwise Path A stores the `user_id` its code exchange returns, and Path B stores none). |
 | `--profile <name>` | Which account profile to write (default `default`); letters, digits, `_`, `.` and `-` only — any other name is refused with exit code 2. |
 | `--scopes <csv>` | Override the per-path scope defaults. |

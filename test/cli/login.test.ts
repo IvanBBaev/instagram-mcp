@@ -939,12 +939,11 @@ test('listenHostFor lowercases the host itself, for the schemes the parser will 
   // `new URL('http://LOCALHOST/').hostname` really is `'localhost'` and the test
   // above cannot tell the call apart from its absence. Nothing, however, confines
   // this function to a special scheme. A custom-scheme redirect URI is the
-  // mainstream native-OAuth idiom, `--redirect-uri` is only trimmed at parse time,
-  // and `captureAuthorizationCode` runs `new URL(...)` and then this function with
-  // no scheme check in between — so a non-special scheme reaches here, and the
-  // parser leaves ITS host exactly as typed. Measured 2026-09-23: with the call
-  // dropped, `foo://LOCALHOST:8723/callback` stops being loopback and the login
-  // refuses to bind at all.
+  // mainstream native-OAuth idiom, and the parser leaves ITS host exactly as
+  // typed. Since 2026-10-22 `runLogin` and `captureAuthorizationCode` refuse any
+  // scheme but `http:` before calling here, but this function is exported and
+  // its contract is the host alone. Measured 2026-09-23: with the call dropped,
+  // `foo://LOCALHOST:8723/callback` stops being loopback.
   assert.equal(new URL('foo://LOCALHOST:8723/callback').hostname, 'LOCALHOST');
   assert.equal(listenHostFor('foo://LOCALHOST:8723/callback'), '127.0.0.1');
   assert.equal(listenHostFor('com.example.app://LocalHost/cb'), '127.0.0.1');
@@ -1032,27 +1031,36 @@ test('captureAuthorizationCode ignores requests off the redirect path and keeps 
   assert.equal(server.closes(), 1, 'the listener is closed exactly once');
 });
 
-test('captureAuthorizationCode routes a pathless redirect URI to the root path', async () => {
-  // The empty-path arm was marked unreachable and excluded from coverage, on the
-  // ground that the WHATWG parser normalises an empty path to `/`. It does — for
-  // SPECIAL schemes. A custom-scheme redirect URI (the native-OAuth idiom) is not
-  // one, nothing between `--redirect-uri` and here checks the scheme, and
-  // `listenHostFor` only checks the HOST, so `foo://127.0.0.1:8723` arrives with a
-  // `pathname` of `''`. Without the arm the route would match nothing at all and
-  // the capture would hang until the deadline.
-  assert.equal(new URL('foo://127.0.0.1:8723').pathname, '');
-
-  const server = fakeCallbackServer();
-  const pending = captureAuthorizationCode(
-    { redirectUri: 'foo://127.0.0.1:8723', state: 'st' },
-    { createServerImpl: server.create, clock: fakeClock(0) },
-  );
-  assert.deepEqual(server.listens, [{ port: 8723, host: '127.0.0.1' }]);
-  assert.equal(server.send('/callback?code=wrong&state=st').status, 404);
-  assert.equal(await isPending(pending), true, 'the root is the only route that settles');
-
-  assert.equal(server.send('/?code=real&state=st').status, 200);
-  assert.equal(await pending, 'real');
+test('captureAuthorizationCode refuses a redirect URI that is not http, before anything binds', async () => {
+  // The listener is plain HTTP, so an `https:` or custom-scheme redirect never
+  // reaches it. Until 2026-10-22 a custom scheme was bound on 8723 and, with no
+  // path, routed to `/` — a capture that could only time out. `runLogin`
+  // refuses the URI up front; the exported capture refuses it too, with the
+  // same sentence, and binds nothing.
+  for (const [redirectUri, problem] of [
+    [
+      'foo://127.0.0.1:8723',
+      '--redirect-uri must be an http:// URI, but it uses "foo:". login captures the redirect ' +
+        'with a plain HTTP listener on 127.0.0.1 or [::1], so the browser never comes back to ' +
+        `any other scheme; use ${DEFAULT_REDIRECT_URI} (and register it in your Meta app).`,
+    ],
+    [
+      'not a url',
+      `--redirect-uri is not an absolute URL; use ${DEFAULT_REDIRECT_URI} (and register it in ` +
+        'your Meta app).',
+    ],
+  ] as const) {
+    const server = fakeCallbackServer();
+    await assert.rejects(
+      captureAuthorizationCode(
+        { redirectUri, state: 'st' },
+        { createServerImpl: server.create, clock: fakeClock(0) },
+      ),
+      (err: unknown) =>
+        isInstagramError(err) && err.kind === 'validation' && err.message === problem,
+    );
+    assert.deepEqual(server.listens, [], redirectUri);
+  }
 });
 
 test('captureAuthorizationCode rejects a state mismatch and an explicit denial', async () => {
@@ -3764,15 +3772,66 @@ test('captureAuthorizationCode binds the scheme default port when the redirect U
     server.send('/callback?code=abc&state=s');
     assert.equal(await pending, 'abc');
   }
-  // A scheme with no browser default to follow keeps the CLI's own port.
+  // A pathless `http:` URI is routed to `/`: the parser normalises its path.
   const server = fakeCallbackServer();
   const pending = captureAuthorizationCode(
-    { redirectUri: 'foo://127.0.0.1/callback', state: 's' },
+    { redirectUri: 'http://127.0.0.1:8124', state: 's' },
     { createServerImpl: server.create, clock: fakeClock(0), timeoutMs: 1000 },
   );
-  assert.deepEqual(server.listens[0], { port: 8723, host: '127.0.0.1' });
-  server.send('/callback?code=abc&state=s');
+  assert.deepEqual(server.listens[0], { port: 8124, host: '127.0.0.1' });
+  assert.equal(server.send('/callback?code=abc&state=s').status, 404);
+  server.send('/?code=abc&state=s');
   assert.equal(await pending, 'abc');
+});
+
+test('runLogin refuses a redirect URI that is not http before the authorize URL is printed', async () => {
+  // An `https:` or custom-scheme redirect URI cannot reach the plain HTTP
+  // listener, so the login used to print the authorize URL, open the browser,
+  // walk the operator through Meta's consent screen and then time out. It is
+  // now a usage error (exit 2) naming the scheme and the URI that works, and
+  // nothing is printed, opened, captured, exchanged or written.
+  for (const [redirectUri, problem] of [
+    [
+      'https://127.0.0.1:8723/callback',
+      '--redirect-uri must be an http:// URI, but it uses "https:". login captures the ' +
+        'redirect with a plain HTTP listener on 127.0.0.1 or [::1], so the browser never comes ' +
+        `back to any other scheme; use ${DEFAULT_REDIRECT_URI} (and register it in your Meta app).`,
+    ],
+    [
+      'com.example.app://127.0.0.1/cb',
+      '--redirect-uri must be an http:// URI, but it uses "com.example.app:". login captures ' +
+        'the redirect with a plain HTTP listener on 127.0.0.1 or [::1], so the browser never ' +
+        `comes back to any other scheme; use ${DEFAULT_REDIRECT_URI} (and register it in your ` +
+        'Meta app).',
+    ],
+    [
+      // `http://` forgotten: the parser reads the host as the scheme.
+      'localhost:8723/callback',
+      '--redirect-uri must be an http:// URI, but it uses "localhost:". login captures the ' +
+        'redirect with a plain HTTP listener on 127.0.0.1 or [::1], so the browser never comes ' +
+        `back to any other scheme; use ${DEFAULT_REDIRECT_URI} (and register it in your Meta app).`,
+    ],
+    [
+      '/callback',
+      `--redirect-uri is not an absolute URL; use ${DEFAULT_REDIRECT_URI} (and register it in ` +
+        'your Meta app).',
+    ],
+  ] as const) {
+    const { deps, out, steps } = mustStopAtParsing();
+    const code = await runLogin(
+      [
+        '--path',
+        'ig',
+        '--app-id=55500',
+        `--app-secret=${APP_SECRET}`,
+        `--redirect-uri=${redirectUri}`,
+      ],
+      deps,
+    );
+    assert.equal(code, 2, redirectUri);
+    assert.equal(out(), `login: ${problem}\n`, redirectUri);
+    assert.deepEqual(steps, [], redirectUri);
+  }
 });
 
 /** An ephemeral loopback port that is free right now (bound, then released). */

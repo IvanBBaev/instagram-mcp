@@ -18,6 +18,7 @@
  */
 import { z } from 'zod';
 import { InstagramError } from '../core/types.js';
+import { INSTAGRAM_USERNAME_PATTERN } from './discovery.js';
 
 // --- Limits (from docs/tools.md, verified against Instagram Platform docs) ---
 
@@ -27,6 +28,8 @@ export const MAX_CAPTION_CODEPOINTS = 2200;
 export const MAX_HASHTAGS = 30;
 /** Maximum @mentions allowed in a caption. */
 export const MAX_MENTIONS = 20;
+/** Maximum user tags on one feed image (Meta's tagging limit). */
+export const MAX_USER_TAGS = 20;
 /** Carousel album bounds (inclusive). */
 export const CAROUSEL_MIN = 2;
 export const CAROUSEL_MAX = 10;
@@ -45,9 +48,25 @@ export const containerMediaTypeSchema = z.enum(CONTAINER_MEDIA_TYPES);
 
 // --- Zod specs (reused by tool input schemas) -------------------------------
 
-/** A user tag on a feed image: handle plus optional 0–1 relative coordinates. */
+/**
+ * A user tag on a feed image: handle plus optional 0–1 relative coordinates.
+ *
+ * `username` takes the same Instagram handle charset discovery enforces
+ * ({@link INSTAGRAM_USERNAME_PATTERN}): a leading `@`, a space or a URL is not a
+ * handle Instagram can tag, and refusing it here costs nothing, where Graph
+ * would refuse it only at container creation, after the write gate. `x` / `y`
+ * stay optional until a live probe settles whether Meta requires them on a feed
+ * image (CC-PUB-61).
+ */
 export const userTagSchema = z.object({
-  username: z.string().min(1),
+  username: z
+    .string()
+    .min(1)
+    .max(30)
+    .regex(
+      INSTAGRAM_USERNAME_PATTERN,
+      'must be a plain Instagram handle: letters, digits, "." and "_" only',
+    ),
   x: z.number().min(0).max(1).optional(),
   y: z.number().min(0).max(1).optional(),
 });

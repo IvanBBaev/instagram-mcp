@@ -1510,6 +1510,48 @@ test('the carousel bounds are declared in the schema, not only re-checked in the
   );
 });
 
+test('userTags takes at most 20 tags, each a plain Instagram handle (CC-PUB-61)', () => {
+  // A tag Instagram cannot apply was refused only at container creation, after
+  // the write gate. The handle rule is discovery's INSTAGRAM_USERNAME_PATTERN;
+  // the 20-tag ceiling is Meta's own per-image limit. x/y stay optional.
+  const tags = (n: number) => Array.from({ length: n }, (_, i) => ({ username: `user_${i}` }));
+  for (const name of ['instagram_create_media_container', 'instagram_post_image']) {
+    const input = inputOf(name);
+    const accepts = (userTags: unknown) => input.safeParse({ userTags }).success;
+    assert.equal(accepts([]), true, `${name}: no tags`);
+    assert.equal(accepts(tags(20)), true, `${name}: 20 tags is the ceiling`);
+    assert.equal(accepts(tags(21)), false, `${name}: 21 tags is over the ceiling`);
+    assert.equal(accepts([{ username: 'NASA_Gov.1' }]), true, `${name}: a handle, no x/y`);
+    assert.equal(accepts([{ username: 'a'.repeat(30), x: 0, y: 1 }]), true, `${name}: 30 chars`);
+    for (const bad of [
+      '',
+      '@ana',
+      'ana smith',
+      'a'.repeat(31),
+      'ana)',
+      'https://instagram.com/ana',
+    ]) {
+      assert.equal(accepts([{ username: bad }]), false, `${name}: ${JSON.stringify(bad)}`);
+    }
+  }
+  const refused = inputOf('instagram_post_image').safeParse({ userTags: [{ username: '@ana' }] });
+  assert.equal(refused.success, false);
+  assert.deepEqual(
+    refused.error?.issues.map((issue) => [issue.path.join('.'), issue.message]),
+    [
+      [
+        'userTags.0.username',
+        'must be a plain Instagram handle: letters, digits, "." and "_" only',
+      ],
+    ],
+  );
+  const tooMany = inputOf('instagram_post_image').safeParse({ userTags: tags(21) });
+  assert.deepEqual(
+    tooMany.error?.issues.map((issue) => [issue.path.join('.'), issue.message]),
+    [['userTags', 'Too big: expected array to have <=20 items']],
+  );
+});
+
 test('thumbOffset is declared as a whole, non-negative number of milliseconds', () => {
   // The offset picks the cover frame. Graph rejects a negative or fractional
   // offset at container creation, so anything the schema lets through is a failed
@@ -4216,14 +4258,21 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           items: {
             type: 'object',
             properties: {
-              username: { type: 'string', minLength: 1 },
+              username: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 30,
+                pattern: '^[A-Za-z0-9._]{1,30}$',
+              },
               x: { type: 'number', minimum: 0, maximum: 1 },
               y: { type: 'number', minimum: 0, maximum: 1 },
             },
             required: ['username'],
           },
+          minItems: 0,
+          maxItems: 20,
           description:
-            'User tags for a feed image: handles with optional 0–1 relative x/y coordinates.',
+            'User tags for a feed image (at most 20): handles without "@" (letters, digits, "." and "_") with optional 0–1 relative x/y coordinates.',
         },
         children: {
           type: 'array',
@@ -4392,14 +4441,21 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           items: {
             type: 'object',
             properties: {
-              username: { type: 'string', minLength: 1 },
+              username: {
+                type: 'string',
+                minLength: 1,
+                maxLength: 30,
+                pattern: '^[A-Za-z0-9._]{1,30}$',
+              },
               x: { type: 'number', minimum: 0, maximum: 1 },
               y: { type: 'number', minimum: 0, maximum: 1 },
             },
             required: ['username'],
           },
+          minItems: 0,
+          maxItems: 20,
           description:
-            'User tags for a single feed image (not carousels): handles with optional 0–1 x/y.',
+            'User tags for a single feed image (not carousels), at most 20: handles without "@" (letters, digits, "." and "_") with optional 0–1 x/y.',
         },
         resumeContainerId: {
           type: 'string',

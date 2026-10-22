@@ -781,7 +781,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
             <tr><td><code>caption</code></td><td>string</td><td><span class="opt">optional</span></td><td>≤2200 chars, ≤30 hashtags, ≤20 mentions.</td></tr>
             <tr><td><code>children</code></td><td>string[]</td><td><span class="opt">optional</span></td><td>2–10 carousel-item container ids.</td></tr>
             <tr><td><code>locationId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Page/location id to tag.</td></tr>
-            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag in the media.</td></tr>
+            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag in the media: at most 20, each a plain handle without <code>@</code>.</td></tr>
             <tr><td><code>coverUrl</code> / <code>thumbOffset</code></td><td>string / number</td><td><span class="opt">optional</span></td><td>Reel cover image or thumbnail frame offset.</td></tr>
             <tr><td><code>shareToFeed</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Also share a reel to the main feed.</td></tr>
             <tr><td><code>isCarouselItem</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Mark this container as a carousel child.</td></tr>
@@ -811,7 +811,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
             <tr><td><code>imageUrls</code></td><td>string[]</td><td><span class="req">required</span></td><td>1 URL = single photo; 2–10 = carousel. Public HTTPS only.</td></tr>
             <tr><td><code>caption</code></td><td>string</td><td><span class="opt">optional</span></td><td>≤2200 chars, ≤30 hashtags, ≤20 mentions.</td></tr>
             <tr><td><code>locationId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Location/page id to tag.</td></tr>
-            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag.</td></tr>
+            <tr><td><code>userTags</code></td><td>object[]</td><td><span class="opt">optional</span></td><td>Users to tag on a single image: at most 20, each a plain handle without <code>@</code>.</td></tr>
             <tr><td><code>resumeContainerId</code></td><td>string</td><td><span class="opt">optional</span></td><td>Resume a previously-created container instead of rebuilding.</td></tr>
             <tr><td><code>apply</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Set <code>true</code> to perform the write; omitted/false previews only.</td></tr>
           </tbody></table></div>

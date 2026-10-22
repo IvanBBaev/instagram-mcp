@@ -73,6 +73,7 @@ import {
   httpsUrl,
   imageUrlFormatWarning,
   userTagSchema,
+  MAX_USER_TAGS,
   CAROUSEL_MAX,
   CAROUSEL_MIN,
   type CaptionStats,
@@ -455,10 +456,11 @@ const createContainerInput = {
     .describe('Public HTTPS video URL Instagram will fetch (Reels/Stories video).'),
   caption: captionField,
   locationId: locationField,
-  userTags: z
-    .array(userTagSchema)
+  userTags: boundedArray(userTagSchema, 0, MAX_USER_TAGS)
     .optional()
-    .describe('User tags for a feed image: handles with optional 0–1 relative x/y coordinates.'),
+    .describe(
+      'User tags for a feed image (at most 20): handles without "@" (letters, digits, "." and "_") with optional 0–1 relative x/y coordinates.',
+    ),
   children: boundedArray(graphObjectId(), CAROUSEL_MIN, CAROUSEL_MAX)
     .optional()
     .describe('CAROUSEL album only: 2–10 previously-created child container ids to combine.'),
@@ -678,10 +680,11 @@ const postImageInput = {
     ),
   caption: captionField,
   locationId: locationField,
-  userTags: z
-    .array(userTagSchema)
+  userTags: boundedArray(userTagSchema, 0, MAX_USER_TAGS)
     .optional()
-    .describe('User tags for a single feed image (not carousels): handles with optional 0–1 x/y.'),
+    .describe(
+      'User tags for a single feed image (not carousels), at most 20: handles without "@" (letters, digits, "." and "_") with optional 0–1 x/y.',
+    ),
   resumeContainerId: resumeField,
   apply: applyField,
 };

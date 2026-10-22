@@ -174,6 +174,9 @@ but v1 clients are still in the field) (CC-DATA-61).
   rather than resolving them against the cwd (CC-CFG-69). A relative
   `IG_ENV_FILE` stops the start (CC-CFG-70); an unexpanded
   `${user_config.X}` template inside an env file reads as unset (CC-CFG-71).
+  A blank (empty or whitespace-only) `IG_*` value — in the client's environment
+  or in an env file — reads as unset at load time too, so it never shadows a
+  later env file that sets the key (CC-CFG-81).
 - `doctor` CLI — five sections, matching `src/cli/doctor.ts` (which cites this
   section as its spec, so the two must not drift):
   1. **Configuration** — profile, auth path, transport, write mode, destructive

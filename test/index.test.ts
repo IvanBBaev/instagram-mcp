@@ -1288,6 +1288,66 @@ test('an MCPB placeholder written INTO an env file reads as unset too, so a late
   }
 });
 
+test('a blank IG_* value in the client environment reads as unset, so the env file fills it (CC-CFG-81)', async () => {
+  // dotenv loads with `override: false` and skips every key that exists, blank
+  // or not, so an MCP host passing `""` for a field it was given nothing for
+  // shadowed the config-home file: the token and the account id were "set" to
+  // nothing and the start failed with "No default profile configured". A blank
+  // `IG_*` value is now dropped before the load, as an MCPB placeholder is.
+  const sandbox = await makeSandbox();
+  try {
+    const { writeCredentials } = await import('../src/core/config-write.js');
+    await writeCredentials(
+      'default',
+      { accessToken: TOKEN, authPath: 'ig-login', accountId: '17841400000000000' },
+      { configDir: sandbox.configHome },
+    );
+
+    const run = runEntry(sandbox, ['doctor'], {
+      env: { IG_ACCESS_TOKEN: '', IG_ACCOUNT_ID: '  ', IG_ENV_FILE: ' ' },
+      routes: [{ match: '/17841400000000000', body: { id: '17841400000000000' } }],
+    });
+
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+    const requests = await recordedRequests(sandbox);
+    assert.match(requests[0] ?? '', /\/17841400000000000\?/, requests.join(' | '));
+    assert.ok(
+      (requests[0] ?? '').includes(`access_token=${encodeURIComponent(TOKEN)}`),
+      `the file's token must be used: ${requests.join(' | ')}`,
+    );
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
+test('a blank IG_* value in the config-home file reads as unset, so the project .env fills it (CC-CFG-81)', async () => {
+  // The same shadowing between two candidate files: a config-home
+  // `IG_ACCOUNT_ID=` kept the project `.env` from supplying the account id.
+  // A blank value a file adds is dropped again after that file loads.
+  const sandbox = await makeSandbox();
+  try {
+    const { writeCredentials } = await import('../src/core/config-write.js');
+    await writeCredentials(
+      'default',
+      { accessToken: TOKEN, authPath: 'ig-login' },
+      { configDir: sandbox.configHome },
+    );
+    const home = envFileIn(sandbox.configHome);
+    await writeFile(home, `${await readFile(home, 'utf8')}IG_ACCOUNT_ID=\n`, 'utf8');
+    await writeFile(path.join(sandbox.cwd, '.env'), 'IG_ACCOUNT_ID=17841400000000000\n', 'utf8');
+
+    const run = runEntry(sandbox, ['doctor'], {
+      routes: [{ match: '/17841400000000000', body: { id: '17841400000000000' } }],
+    });
+
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+    const requests = await recordedRequests(sandbox);
+    assert.match(requests[0] ?? '', /\/17841400000000000\?/, requests.join(' | '));
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
 test('a relative IG_ENV_FILE stops the start instead of reading a file relative to the cwd (CC-CFG-70)', async () => {
   // The entry read a relative value against the cwd its client chose, while
   // `login` / `refresh` refused the same value: a server could run for weeks on

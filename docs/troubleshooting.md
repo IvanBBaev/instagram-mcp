@@ -144,7 +144,9 @@ instagram-mcp-ai failed to start: IG_ENV_FILE is set to "secrets.env", which is 
 An env file that holds an unexpanded MCPB template as a value
 (`IG_ACCOUNT_ID=${user_config.IG_ACCOUNT_ID}`) is treated as not setting that
 key, exactly as the same value in the client's environment is, so the next env
-file can still supply it.
+file can still supply it. A blank value (`IG_ACCOUNT_ID=`, or `""` passed by the
+MCP client) is treated the same way: it does not set the key, so a later env file
+that does set it is used.
 
 A spelling only a shell can expand stops the server itself from starting, since
 it is also the file the server would read:

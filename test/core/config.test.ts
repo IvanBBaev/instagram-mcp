@@ -12,6 +12,7 @@ import {
   strayExpiryKeys,
   tokenFingerprint,
   unsetPlaceholderKeys,
+  blankKeys,
   withAccount,
   type Env,
 } from '../../src/core/config.js';
@@ -1115,6 +1116,19 @@ test('strayExpiryKeys: a record with no token, or an unset key, is left alone', 
     strayExpiryKeys(env, (k) => k),
     [],
   );
+});
+
+test('blankKeys names exactly the IG_* keys whose value is empty or whitespace only (CC-CFG-81)', () => {
+  const env: Env = {
+    IG_ACCESS_TOKEN: '',
+    IG_ACCOUNT_ID: ' \t\n ',
+    IG_APP_ID: ' x ',
+    IG_UNSET: undefined,
+    OTHER_BLANK: '',
+    XIG_BLANK: '',
+  };
+  assert.deepEqual(blankKeys(env), ['IG_ACCESS_TOKEN', 'IG_ACCOUNT_ID']);
+  assert.deepEqual(blankKeys({}), []);
 });
 
 test('unsetPlaceholderKeys names exactly the IG_* keys holding a whole MCPB template (CC-CFG-46)', () => {

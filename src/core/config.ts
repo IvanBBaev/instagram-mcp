@@ -395,6 +395,22 @@ export function unsetPlaceholderKeys(env: Env): string[] {
   );
 }
 
+/**
+ * The `IG_*` keys of `env` whose value is blank — empty or whitespace only
+ * (CC-CFG-81). Everything downstream already reads such a value as unset
+ * (`clean`, CC-CFG-15), but the env files load with `override: false`, and
+ * dotenv skips a key that EXISTS, blank or not: an MCP host passing `""` for an
+ * optional field it was given nothing for, or a config-home `.env` with
+ * `IG_ACCESS_TOKEN=`, kept a later candidate from supplying the key, and the
+ * operator read "No default profile configured" about a value the next file
+ * does set. The composition root deletes these keys before the load and after
+ * each file, as it does {@link unsetPlaceholderKeys}, so blank means unset at
+ * load time too.
+ */
+export function blankKeys(env: Env): string[] {
+  return Object.keys(env).filter((key) => key.startsWith('IG_') && env[key]?.trim() === '');
+}
+
 /** The profile and suffix spelling an owned `IG_*` key belongs to, if any. */
 function ownedKeyOf(key: string): { name: string; spelling: string } | undefined {
   if (key.startsWith(NAMED_PREFIX)) return splitNamedKey(key, OWNED_SUFFIXES);

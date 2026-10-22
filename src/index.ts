@@ -24,6 +24,7 @@ import { systemClock } from './core/clock.js';
 import { expiryLabel } from './core/time.js';
 import { SETTINGS_ENV_NAMES, loadSettings } from './core/settings.js';
 import {
+  blankKeys,
   isProfileEnvName,
   loadProfiles,
   resolveProfile,
@@ -134,9 +135,11 @@ function loadEnvFiles(): Map<string, string> {
     // (CC-CFG-46). An unexpanded `${user_config.X}` template written INTO a file
     // is unset, not a value: it is dropped again, so it neither reaches Graph nor
     // keeps a later candidate (the project `.env`) from supplying the key.
-    const unset = new Set(
-      unsetPlaceholderKeys(Object.fromEntries(added.map((key) => [key, process.env[key]]))),
-    );
+    // CC-CFG-81: a blank file value is unset too, by the same token, so a
+    // config-home `IG_ACCESS_TOKEN=` no longer keeps the project `.env` from
+    // supplying the token.
+    const addedEnv = Object.fromEntries(added.map((key) => [key, process.env[key]]));
+    const unset = new Set([...unsetPlaceholderKeys(addedEnv), ...blankKeys(addedEnv)]);
     for (const key of added) {
       if (unset.has(key)) delete process.env[key];
       else setBy.set(key, file);
@@ -336,7 +339,12 @@ async function main(): Promise<void> {
   // An MCPB host passes an optional field the user left empty as its literal
   // `${user_config.X}` template (CC-CFG-46). Dropped BEFORE the env files load,
   // so a file can still supply the key and `IG_ENV_FILE` is not read as a path.
-  for (const key of unsetPlaceholderKeys(process.env)) delete process.env[key];
+  // A blank `IG_*` value (`""`, whitespace) is the same "unset" spelled
+  // differently and is dropped with it (CC-CFG-81): dotenv never fills a key
+  // that exists, so left in place it would shadow every env file.
+  for (const key of [...unsetPlaceholderKeys(process.env), ...blankKeys(process.env)]) {
+    delete process.env[key];
+  }
   const setBy = loadEnvFiles();
   // `IG_ENV_FILE` is read once, above, from the environment the client passed.
   // One that an env file supplied was never followed — the load was already

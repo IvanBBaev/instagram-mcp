@@ -22,6 +22,7 @@ import { DEFAULT_SETTINGS } from '../../src/core/settings.js';
 import { ALLOWED_HOSTS, GRAPH_VERSION, assertAllowedHost, buildUrl } from '../../src/core/host.js';
 import { createIgRequest, createSemaphoreRegistry } from '../../src/core/http.js';
 import { REDACTED, createRedactor } from '../../src/core/redact.js';
+import { fakeClock } from '../helpers/fake-clock.js';
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -1473,7 +1474,9 @@ test('a retried idempotent write is re-signed in its body, carrying one credenti
 });
 
 test('a call queued for a concurrency slot is signed when it is sent, not when it queued (CC-AUTH-79)', async () => {
-  const clock = advancingClock(1_790_000_000_000);
+  // A fake clock, not an advancing one: the queue wait itself runs on the clock
+  // (CC-RATE-6), and a sleep that ends at once would expire it on the spot.
+  const clock = fakeClock(1_790_000_000_000);
   let releaseFirst!: () => void;
   const firstHeld = new Promise<void>((resolve) => {
     releaseFirst = resolve;
@@ -1495,12 +1498,12 @@ test('a call queued for a concurrency slot is signed when it is sent, not when i
   const second = req({ method: 'GET', path: '/me' });
   await flush();
   assert.equal(calls.length, 1, 'the second call is queued behind the first');
-  clock.advance(90_000);
+  clock.advance(20_000); // inside the 30 s queue-wait bound
   releaseFirst();
   await Promise.all([first, second]);
   assert.deepEqual(calls.map(signedPair), [
     { time: '1790000000', proof: expectedProof('1790000000') },
-    { time: '1790000090', proof: expectedProof('1790000090') },
+    { time: '1790000020', proof: expectedProof('1790000020') },
   ]);
 });
 
@@ -1524,9 +1527,9 @@ test('an unpinned path is refused before the auth provider runs or a slot is tak
     log: testLogger(),
     fetchImpl,
     semaphores: {
-      acquire: (host, max, signal) => {
+      acquire: (host, max, signal, wait) => {
         acquired.push(host);
-        return registry.acquire(host, max, signal);
+        return registry.acquire(host, max, signal, wait);
       },
     },
   });
@@ -3371,7 +3374,9 @@ test('the per-host semaphore serializes calls beyond maxConcurrent', async () =>
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     // Own counters: this test uses a non-default limit and must not disturb (or
@@ -3418,7 +3423,9 @@ test('a freed slot is handed over, not duplicated: a later arrival still queues'
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
@@ -3461,7 +3468,9 @@ test('the wait queue is FIFO — the longest waiter gets the freed slot (CC-RATE
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
@@ -3515,7 +3524,9 @@ test('maxConcurrent bounds the process, not one seam: separately built seams sha
     createIgRequest({
       auth: igAuth,
       settings: s(),
-      clock: recordingClock(),
+      // A clock whose sleeps only end on `advance`: the queue-wait bound
+      // (CC-RATE-6) must not fire while this test holds the slot.
+      clock: fakeClock(),
       log: testLogger(),
       fetchImpl,
     });
@@ -3626,7 +3637,9 @@ test('an already-aborted call does not queue behind a busy slot', async () => {
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
@@ -3657,7 +3670,9 @@ test('aborting a queued call rejects it at once and gives its place to the next 
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
@@ -3704,7 +3719,9 @@ test('a queued call that is granted its slot leaves no listener on the caller si
   const req = createIgRequest({
     auth: igAuth,
     settings: s({ maxConcurrent: 1 }),
-    clock: recordingClock(),
+    // A clock whose sleeps only end on `advance`: the queue-wait bound
+    // (CC-RATE-6) must not fire while this test holds the slot.
+    clock: fakeClock(),
     log: testLogger(),
     fetchImpl,
     semaphores: createSemaphoreRegistry(),
@@ -3720,4 +3737,233 @@ test('a queued call that is granted its slot leaves no listener on the caller si
   gates[1]!();
   await queued;
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+// --- http.ts: the queue wait is bounded (CC-RATE-6) --------------------------
+
+/** A seam over `registry` whose fetch holds every call until its gate is opened. */
+function gatedSeam(
+  clock: Clock,
+  registry: ReturnType<typeof createSemaphoreRegistry>,
+  overrides: Partial<Settings> = {},
+): {
+  req: ReturnType<typeof createIgRequest>;
+  calls: FetchCall[];
+  gates: Array<() => void>;
+} {
+  const gates: Array<() => void> = [];
+  const { fetchImpl, calls } = mockFetch(
+    () => new Promise<MockResponseSpec>((resolve) => gates.push(() => resolve({ body: {} }))),
+  );
+  const req = createIgRequest({
+    auth: igAuth,
+    settings: s({ maxConcurrent: 1, ...overrides }),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+    semaphores: registry,
+  });
+  return { req, calls, gates };
+}
+
+/** The CC-RATE-6 refusal for a wait of `seconds` behind a limit of one. */
+function serverBusyMessage(seconds: number): string {
+  return (
+    `Server busy: this call waited ${seconds} s for one of the 1 concurrent Graph request ` +
+    'slots (IG_MAX_CONCURRENT) and none came free, so it was not sent. Retry it once the ' +
+    'other in-flight calls have finished.'
+  );
+}
+
+test('a call queued past the 30 s floor fails with "server busy" and is never sent (CC-RATE-6)', async () => {
+  // Owner decision 2026-10-22. Before it a queued call waited for as long as the
+  // slot was held — up to four timed-out attempts plus their backoffs per call
+  // ahead of it — and the MCP client saw a call that simply hung.
+  const clock = fakeClock();
+  const { req, calls, gates } = gatedSeam(clock, createSemaphoreRegistry(), { timeoutMs: 5_000 });
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  const queued = track(req({ method: 'GET', path: '/queued' }));
+  await flush();
+
+  clock.advance(29_999); // the floor, not timeoutMs, bounds the wait
+  await flush();
+  assert.equal(queued.state(), 'pending');
+
+  clock.advance(1);
+  await flush();
+  assert.equal(queued.state(), 'rejected');
+  const e = queued.error();
+  assert.ok(isInstagramError(e));
+  assert.equal(e.message, serverBusyMessage(30));
+  assert.equal(e.kind, 'upstream');
+  assert.equal(e.status, undefined);
+  assert.equal(calls.length, 1, 'the timed-out call never reached the transport');
+
+  // It gave back nothing it did not hold: once the holder finishes, the next
+  // arrival is served at once.
+  gates[0]!();
+  await holder;
+  const next = req({ method: 'GET', path: '/next' });
+  await flush();
+  assert.equal(calls.length, 2);
+  gates[1]!();
+  await next;
+});
+
+test('a timeoutMs above the floor is the queue-wait bound (CC-RATE-6)', async () => {
+  const clock = fakeClock();
+  const { req, gates } = gatedSeam(clock, createSemaphoreRegistry(), { timeoutMs: 45_000 });
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  const queued = track(req({ method: 'GET', path: '/queued' }));
+  await flush();
+  clock.advance(44_999);
+  await flush();
+  assert.equal(queued.state(), 'pending');
+  clock.advance(1);
+  await flush();
+  assert.equal(queued.state(), 'rejected');
+  const e = queued.error();
+  assert.ok(isInstagramError(e) && e.message === serverBusyMessage(45));
+  gates[0]!();
+  await holder;
+});
+
+test('a timed-out waiter leaves the queue from where it stood; the others keep FIFO order (CC-RATE-6)', async () => {
+  // Two seams over one registry with different bounds put the expiring waiter
+  // in the MIDDLE of the queue, which pins which entry is removed: dropping the
+  // head instead would strand the first waiter and serve the last one early.
+  const clock = fakeClock();
+  const registry = createSemaphoreRegistry();
+  const long = gatedSeam(clock, registry, { timeoutMs: 60_000 });
+  const short = gatedSeam(clock, registry, { timeoutMs: 30_000 });
+  const holder = long.req({ method: 'GET', path: '/holder' });
+  await flush();
+  const first = long.req({ method: 'GET', path: '/first' });
+  const middle = track(short.req({ method: 'GET', path: '/middle' }));
+  const last = long.req({ method: 'GET', path: '/last' });
+  await flush();
+
+  clock.advance(30_000);
+  await flush();
+  assert.equal(middle.state(), 'rejected');
+  assert.ok(isInstagramError(middle.error()));
+
+  long.gates[0]!();
+  await holder;
+  await flush();
+  assert.equal(long.calls.length, 2);
+  assert.match(long.calls[1]!.url, /\/first\b/, 'the oldest waiter is still served first');
+  long.gates[1]!();
+  await first;
+  await flush();
+  assert.equal(long.calls.length, 3);
+  assert.match(long.calls[2]!.url, /\/last\b/);
+  long.gates[2]!();
+  await last;
+  assert.equal(short.calls.length, 0);
+});
+
+test('a timed-out wait leaves no listener on the caller signal (CC-RATE-6)', async () => {
+  const clock = fakeClock();
+  const { req, gates } = gatedSeam(clock, createSemaphoreRegistry());
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  const controller = new AbortController();
+  const queued = track(req({ method: 'GET', path: '/queued', signal: controller.signal }));
+  await flush();
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 1, 'waiting: one listener');
+  clock.advance(30_000);
+  await flush();
+  assert.equal(queued.state(), 'rejected');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  // A later abort of the same signal is a no-op for the expired wait.
+  controller.abort();
+  await flush();
+  assert.ok(isInstagramError(queued.error()));
+  assert.match((queued.error() as Error).message, /^Server busy:/);
+  gates[0]!();
+  await holder;
+});
+
+test('a queue-wait timer that fires after its waiter left is a no-op (CC-RATE-6)', async () => {
+  // The fake clock ignores the cancel signal, as any clock may: a granted (or
+  // aborted) waiter's timer still runs out. It must not evict the waiter now
+  // at the head of the queue — `indexOf` misses, and `splice(-1, 1)` would
+  // drop the LAST waiter — nor reject anything a second time.
+  const clock = fakeClock();
+  const { req, calls, gates } = gatedSeam(clock, createSemaphoreRegistry());
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  const controller = new AbortController();
+  const granted = track(req({ method: 'GET', path: '/granted' })); // timer due at 30 s
+  const aborted = track(req({ method: 'GET', path: '/aborted', signal: controller.signal }));
+  await flush();
+
+  clock.advance(10_000);
+  controller.abort();
+  gates[0]!(); // the holder finishes: /granted takes the slot at 10 s
+  await holder;
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(aborted.state(), 'rejected');
+  const later = track(req({ method: 'GET', path: '/later' })); // timer due at 40 s
+  await flush();
+
+  clock.advance(20_000); // 30 s: both stale timers run out
+  await flush();
+  assert.equal(later.state(), 'pending', 'the live waiter keeps its place');
+  assert.match((aborted.error() as Error).message, /aborted/);
+
+  gates[1]!();
+  await flush();
+  assert.equal(granted.state(), 'fulfilled');
+  assert.equal(calls.length, 3);
+  assert.match(calls[2]!.url, /\/later\b/);
+  gates[2]!();
+  await flush();
+  assert.equal(later.state(), 'fulfilled');
+});
+
+test('the queue-wait timer is cancelled on grant and on abort, and runs only for a queued call (CC-RATE-6)', async () => {
+  // The production clock clears its timeout when the sleep's signal aborts, so
+  // cancelling is what keeps a granted wait from pinning a 30 s timer — and the
+  // event loop — behind it. This clock rejects on abort as systemClock does.
+  const sleeps: Array<{ ms: number; signal: AbortSignal | undefined }> = [];
+  const clock: Clock = {
+    now: () => 0,
+    sleep: (ms, signal) =>
+      new Promise<void>((_, reject) => {
+        sleeps.push({ ms, signal });
+        signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      }),
+  };
+  const { req, gates } = gatedSeam(clock, createSemaphoreRegistry(), { timeoutMs: 40_000 });
+  const holder = req({ method: 'GET', path: '/holder' });
+  await flush();
+  assert.equal(sleeps.length, 0, 'a call served at once starts no timer');
+
+  const controller = new AbortController();
+  const queued = req({ method: 'GET', path: '/queued' });
+  const aborted = track(req({ method: 'GET', path: '/aborted', signal: controller.signal }));
+  await flush();
+  assert.deepEqual(
+    sleeps.map((x) => x.ms),
+    [40_000, 40_000],
+  );
+  assert.ok(sleeps.every((x) => x.signal?.aborted === false));
+
+  controller.abort();
+  await flush();
+  assert.equal(aborted.state(), 'rejected');
+  assert.equal(sleeps[1]!.signal?.aborted, true, 'abort cancels the timer');
+  assert.equal(sleeps[0]!.signal?.aborted, false);
+
+  gates[0]!();
+  await holder;
+  await flush();
+  assert.equal(sleeps[0]!.signal?.aborted, true, 'grant cancels the timer');
+  gates[1]!();
+  await queued;
 });

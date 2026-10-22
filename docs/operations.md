@@ -35,7 +35,9 @@ replay seconds later meets the same exhausted counter and is charged to it. **No
 
 Backoff: `min(500·2^n, 8000) ms + jitter`, max 3 retries; `Retry-After` honored
 up to 60 s — a longer one fails fast with a "retry in ~N min" estimate instead of
-holding the call. Per-host concurrency semaphore (default 4).
+holding the call. Per-host concurrency semaphore (default 4); a call that waits
+for a slot longer than `max(IG_TIMEOUT_MS, 30 s)` fails with a "server busy" error
+instead of hanging.
 **No non-idempotent write is auto-retried — not even on 429**, and not only
 `media_publish`. Meta can throttle a request *after* accepting it, so replaying a
 `POST`/`DELETE` risks a duplicate post or comment: publicly visible and costly in

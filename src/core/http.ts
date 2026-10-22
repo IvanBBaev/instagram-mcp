@@ -93,12 +93,37 @@ const USAGE_FIELDS = ['call_count', 'total_cputime', 'total_time'] as const;
 
 // --- Per-host concurrency semaphore ----------------------------------------
 
+/**
+ * The floor of the queue-wait bound (CC-RATE-6). A call waits for a slot at
+ * most `max(timeoutMs, QUEUE_WAIT_FLOOR_MS)`: one request timeout, so a queue
+ * that is moving is never cut short, but never less than 30 s, so a small
+ * `IG_TIMEOUT_MS` does not turn a brief burst into "server busy".
+ */
+const QUEUE_WAIT_FLOOR_MS = 30_000;
+
+/** How long a queued call waits for a slot, measured on `clock` (CC-RATE-6). */
+export interface QueueWait {
+  readonly clock: Clock;
+  readonly ms: number;
+}
+
 interface Semaphore {
   /**
-   * Resolves with a release function once a slot is free; rejects with the
-   * abort reason, as an InstagramError, if `signal` is aborted before then.
+   * Resolves with a release function once a slot is free. Rejects, as an
+   * InstagramError, with the abort reason if `signal` is aborted first, or with
+   * a "server busy" `upstream` error once the call has queued for `wait.ms`.
    */
-  acquire(signal?: AbortSignal): Promise<() => void>;
+  acquire(signal: AbortSignal | undefined, wait: QueueWait): Promise<() => void>;
+}
+
+/** The CC-RATE-6 refusal: a call that queued for a slot longer than `ms`. */
+function serverBusy(max: number, ms: number): InstagramError {
+  return new InstagramError(
+    `Server busy: this call waited ${Math.ceil(ms / 1000)} s for one of the ${max} ` +
+      'concurrent Graph request slots (IG_MAX_CONCURRENT) and none came free, so it was ' +
+      'not sent. Retry it once the other in-flight calls have finished.',
+    { kind: 'upstream' },
+  );
 }
 
 function createSemaphore(max: number): Semaphore {
@@ -115,7 +140,7 @@ function createSemaphore(max: number): Semaphore {
   };
 
   return {
-    acquire: (signal) =>
+    acquire: (signal, wait) =>
       new Promise<() => void>((resolve, reject) => {
         // The caller's signal is honoured HERE, not only by `fetch`, because
         // until 2026-09-23 it was not, and the wait for a slot is the one wait
@@ -140,17 +165,38 @@ function createSemaphore(max: number): Semaphore {
         // (it spans every attempt of the request), and `{ once: true }` only
         // detaches when `abort` fires.
         let detach = (): void => {};
+        // The queue-wait timer (CC-RATE-6). It runs on the injected clock and is
+        // cancelled through its own controller on every way out of the queue,
+        // so a granted or aborted wait leaves no timer behind. The `aborted`
+        // check in the expiry handler is not redundant with that: a clock is
+        // free to resolve a sleep it was asked to cancel (the test fake does),
+        // and a late expiry must not evict a waiter that already left.
+        const timer = new AbortController();
         const waiter = (): void => {
+          timer.abort();
           detach();
           resolve(release);
         };
         queue.push(waiter);
+        // A rejected sleep is the clock honouring `timer.abort()` — the wait
+        // already ended some other way, so there is nothing left to do.
+        wait.clock.sleep(wait.ms, timer.signal).then(
+          () => {
+            if (timer.signal.aborted) return;
+            // Same exit as an abort: leave the queue, give back nothing.
+            queue.splice(queue.indexOf(waiter), 1);
+            detach();
+            reject(serverBusy(max, wait.ms));
+          },
+          () => {},
+        );
         if (signal !== undefined) {
           const onAbort = (): void => {
             // Leave the queue without touching `active`: a waiter never held a
             // slot, so there is nothing to give back. `release` cannot have
             // shifted this waiter already - it calls `waiter`, which detaches
             // this listener synchronously, before `abort` could fire it.
+            timer.abort();
             queue.splice(queue.indexOf(waiter), 1);
             reject(toInstagramError(signal.reason));
           };
@@ -173,9 +219,15 @@ export interface SemaphoreRegistry {
    * Take a slot for `host`, resolving with its release function. `max` is used
    * only the first time a host is seen — `maxConcurrent` is resolved once per
    * process by the composition root, so every caller passes the same value.
-   * An aborted `signal` rejects the wait and removes it from the queue.
+   * An aborted `signal` rejects the wait and removes it from the queue, and so
+   * does a wait longer than `wait.ms` — with a "server busy" error (CC-RATE-6).
    */
-  acquire(host: GraphHost, max: number, signal?: AbortSignal): Promise<() => void>;
+  acquire(
+    host: GraphHost,
+    max: number,
+    signal: AbortSignal | undefined,
+    wait: QueueWait,
+  ): Promise<() => void>;
 }
 
 /** An independent set of per-host counters (one per process; tests make their own). */
@@ -183,13 +235,18 @@ export function createSemaphoreRegistry(): SemaphoreRegistry {
   // One semaphore per host, created lazily; only allowlisted hosts reach here.
   const semaphores = new Map<GraphHost, Semaphore>();
   return {
-    acquire(host: GraphHost, max: number, signal?: AbortSignal): Promise<() => void> {
+    acquire(
+      host: GraphHost,
+      max: number,
+      signal: AbortSignal | undefined,
+      wait: QueueWait,
+    ): Promise<() => void> {
       let sem = semaphores.get(host);
       if (sem === undefined) {
         sem = createSemaphore(max);
         semaphores.set(host, sem);
       }
-      return sem.acquire(signal);
+      return sem.acquire(signal, wait);
     },
   };
 }
@@ -672,7 +729,10 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
     // A cancelled call leaves here, before any slot or socket is spent on it:
     // an already-aborted signal rejects at once, and one aborted while queued
     // rejects when it fires (see `createSemaphore`).
-    const release = await semaphores.acquire(host, settings.maxConcurrent, opts.signal);
+    const release = await semaphores.acquire(host, settings.maxConcurrent, opts.signal, {
+      clock,
+      ms: Math.max(settings.timeoutMs, QUEUE_WAIT_FLOOR_MS),
+    });
     try {
       for (let attempt = 0; ; attempt++) {
         const lastAttempt = attempt >= MAX_ATTEMPTS - 1;

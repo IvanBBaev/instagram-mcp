@@ -138,7 +138,10 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   retried, not even on a `GET`: they are call-count limits a replay seconds later
   would only be charged to. `Retry-After` (delta-seconds or an
   IMF-fixdate) is honored up to 60 s; a longer one fails fast with a "retry in ~N min"
-  estimate instead of holding the MCP call (CC-RATE-3). Per-host concurrency semaphore (`IG_MAX_CONCURRENT`, default 4).
+  estimate instead of holding the MCP call (CC-RATE-3). Per-host concurrency semaphore (`IG_MAX_CONCURRENT`, default 4),
+  FIFO; a call queued for a slot longer than `max(IG_TIMEOUT_MS, 30 s)`, measured on
+  the injected clock, leaves the queue with a "server busy" `upstream` error
+  instead of hanging the MCP call (CC-RATE-6).
 - **Rate-limit budget**: parse `X-App-Usage` / `X-Business-Use-Case-Usage` response
   headers on every call and proactively throttle when usage > 90 % (see
   [operations.md](operations.md)). The last-seen snapshot is not exposed yet:

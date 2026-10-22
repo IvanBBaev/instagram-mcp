@@ -446,6 +446,7 @@ test('§2 states the retry budget core/http.ts actually implements', () => {
   const cap = numericConst('src/core/http.ts', 'BACKOFF_CAP_MS');
   const retryAfterCap = numericConst('src/core/http.ts', 'RETRY_AFTER_CAP_MS');
   const attempts = numericConst('src/core/http.ts', 'MAX_ATTEMPTS');
+  const queueWaitFloor = numericConst('src/core/http.ts', 'QUEUE_WAIT_FLOOR_MS');
 
   // All four numbers live in one sentence, and each used to be matched on its
   // own, anywhere in the section. A containment match cannot see what is written
@@ -460,10 +461,12 @@ test('§2 states the retry budget core/http.ts actually implements', () => {
     `Backoff: \`min(${base}·2^n, ${cap}) ms + jitter\`, max ${attempts - 1} retries; ` +
       `\`Retry-After\` honored up to ${retryAfterCap / 1000} s — a longer one fails fast with a ` +
       `"retry in ~N min" estimate instead of holding the call. ` +
-      `Per-host concurrency semaphore (default ${DEFAULT_SETTINGS.maxConcurrent}).`,
+      `Per-host concurrency semaphore (default ${DEFAULT_SETTINGS.maxConcurrent}); a call that ` +
+      `waits for a slot longer than \`max(IG_TIMEOUT_MS, ${queueWaitFloor / 1000} s)\` fails ` +
+      'with a "server busy" error instead of hanging.',
     'docs/operations.md §2 no longer states exactly the retry budget core/http.ts implements ' +
       `(MAX_ATTEMPTS = ${attempts}, BACKOFF_BASE_MS = ${base}, BACKOFF_CAP_MS = ${cap}, ` +
-      `RETRY_AFTER_CAP_MS = ${retryAfterCap})`,
+      `RETRY_AFTER_CAP_MS = ${retryAfterCap}, QUEUE_WAIT_FLOOR_MS = ${queueWaitFloor})`,
   );
 });
 

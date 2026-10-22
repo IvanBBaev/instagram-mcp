@@ -412,19 +412,27 @@ function humanWait(ms: number): string {
  * again.
  */
 function retryAfterTooLong(mapped: InstagramError, waitMs: number): InstagramError {
-  return new InstagramError(
-    `${mapped.message} — Instagram asked for a ${Math.ceil(waitMs / 1000)} s wait ` +
-      `(Retry-After), longer than the ${RETRY_AFTER_CAP_MS / 1000} s this server holds a ` +
-      `call for, so it was not retried; retry in ${humanWait(waitMs)}.`,
-    {
-      kind: mapped.kind,
-      status: mapped.status,
-      code: mapped.code,
-      subcode: mapped.subcode,
-      fbtraceId: mapped.fbtraceId,
-      cause: mapped.cause,
-    },
-  );
+  // CC-RATE-19: a delta-seconds value of 309+ digits parses to `Infinity`, and
+  // one past 2^53 ms prints in exponent notation, so the sentence read "a
+  // Infinity s wait … retry in ~Infinity h". Past the safe-integer range the
+  // numbers carry nothing an operator can act on: keep the refusal, drop them.
+  // `<=` and `<` are equivalent: a delta-seconds wait is a multiple of 1000 and
+  // 2^53 − 1 is not, and an IMF-fixdate (four-digit year) never gets that far.
+  const tail =
+    waitMs <= Number.MAX_SAFE_INTEGER
+      ? `a ${Math.ceil(waitMs / 1000)} s wait (Retry-After), longer than the ` +
+        `${RETRY_AFTER_CAP_MS / 1000} s this server holds a call for, so it was not ` +
+        `retried; retry in ${humanWait(waitMs)}.`
+      : `a Retry-After wait too long to estimate, longer than the ` +
+        `${RETRY_AFTER_CAP_MS / 1000} s this server holds a call for, so it was not retried.`;
+  return new InstagramError(`${mapped.message} — Instagram asked for ${tail}`, {
+    kind: mapped.kind,
+    status: mapped.status,
+    code: mapped.code,
+    subcode: mapped.subcode,
+    fbtraceId: mapped.fbtraceId,
+    cause: mapped.cause,
+  });
 }
 
 /**

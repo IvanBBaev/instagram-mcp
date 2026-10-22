@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent, so a client cannot loop on the same page (CC-DATA-134).
 - The untrusted-text fence also defangs fullwidth and small-form forgeries of
   its delimiters, found through an NFKC fold (CC-DATA-125).
+- A `Retry-After` too large to state (past 2^53 ms, or parsed as `Infinity`) no
+  longer reads "a Infinity s wait … retry in ~Infinity h"; the call still fails
+  fast, without the numbers (CC-RATE-19).
 
 ## [0.8.0] — 2026-10-13
 

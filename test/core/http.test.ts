@@ -1198,6 +1198,49 @@ test('a throttled write that is never retried still carries the CC-RATE-3 estima
   assert.equal(calls.length, 1);
 });
 
+test('a Retry-After too large to state still fails fast, without a nonsense estimate (CC-RATE-19)', async () => {
+  // A delta-seconds value of 309+ digits is `Infinity` once parsed, and one past
+  // 2^53 ms prints in exponent notation, so the CC-RATE-3 sentence read "a
+  // Infinity s wait … retry in ~Infinity h" or "a 1e+25 s wait". The fail-fast
+  // stays; only the numbers go. The last value that still gets them is pinned
+  // beside the first that does not.
+  const tooLong =
+    ' — Instagram asked for a Retry-After wait too long to estimate, longer than the 60 s ' +
+    'this server holds a call for, so it was not retried.';
+  const cases: Array<[string, string]> = [
+    ['9'.repeat(400), 'throttled' + tooLong],
+    ['1' + '0'.repeat(25), 'throttled' + tooLong],
+    ['9007199254741', 'throttled' + tooLong],
+    ['9007199254740', 'throttled' + estimateTail(9_007_199_254_740, '~2501999793 h')],
+  ];
+  for (const [header, message] of cases) {
+    const clock = recordingClock();
+    const { fetchImpl, calls } = mockFetch(() => ({
+      status: 429,
+      headers: { 'retry-after': header },
+      body: { error: { code: 80002, message: 'throttled' } },
+    }));
+    const req = createIgRequest({
+      auth: igAuth,
+      settings: s(),
+      clock,
+      log: testLogger(),
+      fetchImpl,
+    });
+    await assert.rejects(
+      () => req({ method: 'GET', path: '/me' }),
+      (e: unknown) => {
+        assert.ok(isInstagramError(e));
+        assert.equal(e.message, message, header.slice(0, 20));
+        assert.equal(e.kind, 'rate_limit');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1, header.slice(0, 20));
+    assert.deepEqual(clock.sleeps, [], header.slice(0, 20));
+  }
+});
+
 test('a retryable 5xx with a Retry-After past the cap fails fast and stays upstream (CC-RATE-3)', async () => {
   // The fail-fast rule is about the wait, not the kind: a 503 that says "come
   // back in an hour" is not turned into a throttle, but it is not slept on either.

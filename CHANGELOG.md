@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `login --profile <name>` no longer stores the default profile's `IG_ACCOUNT_ID`
+  as the named profile's account id; it falls back to
+  `IG_PROFILE_<NAME>_ACCOUNT_ID`, then the returned `user_id` (CC-CFG-84).
 - `login` no longer echoes an app secret in its unknown-argument refusal: a
   single-dash `-x=` token is named only up to `=`, and a bare hex secret is
   masked (CC-CFG-83).

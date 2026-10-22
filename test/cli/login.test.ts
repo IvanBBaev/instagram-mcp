@@ -1855,6 +1855,63 @@ test('runLogin reads app credentials and account id from the environment', async
   assert.match(out(), /Token expiry: never\./);
 });
 
+test("a named profile's login never adopts the default profile's IG_ACCOUNT_ID (CC-CFG-84)", async () => {
+  // The config-home `.env` a default-profile login wrote holds bare
+  // `IG_ACCOUNT_ID`, and the entry loads it before `login` runs. A later
+  // `login --profile biz` must not store that id as the biz account: Meta's
+  // `user_id` (Path A) names the account actually authorized, and only the
+  // profile's own `IG_PROFILE_BIZ_ACCOUNT_ID` or `--account-id` outranks it.
+  const routes = () =>
+    routingFetch([
+      {
+        match: 'api.instagram.com/oauth/access_token',
+        body: { access_token: SHORT_TOKEN, user_id: 178414 },
+      },
+      {
+        match: 'graph.instagram.com/access_token',
+        body: { access_token: LONG_TOKEN, expires_in: 5184000 },
+      },
+    ]).fetchFn;
+  const env = { IG_APP_ID: '55500', IG_APP_SECRET: APP_SECRET, IG_ACCOUNT_ID: 'default-account' };
+  const run = async (argv: string[], extra: Record<string, string> = {}) => {
+    const { persist, seen } = fakePersist();
+    const { deps } = stderrSink();
+    const code = await runLogin(argv, {
+      ...deps,
+      env: { ...env, ...extra },
+      fetchFn: routes(),
+      persist,
+      now: () => 0,
+      captureCode: async () => 'auth-code',
+    });
+    assert.equal(code, 0);
+    return seen[0]?.creds.accountId;
+  };
+
+  assert.equal(
+    await run(['--profile', 'biz', '--path', 'ig']),
+    '178414',
+    'user_id, not the default id',
+  );
+  assert.equal(
+    await run(['--profile', 'biz', '--path', 'ig'], { IG_PROFILE_BIZ_ACCOUNT_ID: 'biz-account' }),
+    'biz-account',
+    "the profile's own key is still a fallback",
+  );
+  assert.equal(
+    await run(['--profile', 'BIZ', '--path', 'ig', '--account-id', 'cli-account'], {
+      IG_PROFILE_BIZ_ACCOUNT_ID: 'biz-account',
+    }),
+    'cli-account',
+    'the command line wins over the env key',
+  );
+  assert.equal(
+    await run(['--path', 'ig']),
+    'default-account',
+    'the default profile keeps bare IG_ACCOUNT_ID',
+  );
+});
+
 test('the app credentials are trimmed on their way out of the environment', async () => {
   // These usually arrive from a `.env` file or `IG_APP_ID=$(cat id.txt)`, both of
   // which keep the trailing newline. Meta answers a padded `client_id` with a

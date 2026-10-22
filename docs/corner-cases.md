@@ -25,14 +25,14 @@ pending a decision, or accepted.
 originally designed cases by area, and each heading names the prefix that dominates
 it. Those sections are **not exhaustive for their prefix.** Every case found after the
 sectioning was set is appended at the *end of §8*, in discovery order, carrying
-whatever prefix its subject belongs to — so §8 today holds 533 of the 648 rows the
-catalogue defines, and 318 of those carry a prefix other than the `CC-PROC` its heading
-advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 68 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
+whatever prefix its subject belongs to — so §8 today holds 534 of the 649 rows the
+catalogue defines, and 319 of those carry a prefix other than the `CC-PROC` its heading
+advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 69 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
 12 `CC-COM` and 9 `CC-RATE`. That is deliberate on both counts: chronology is the more
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1929 citation sites across the
+Nothing downstream resolves a case by section number; 1932 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -728,6 +728,7 @@ them still resolves.
 | CC-PROC-215 | `doctor` runs on a TTY with `NO_COLOR=` set but empty | **Applied 2026-10-22 (owner decision).** An empty value counted as an opt-out, against no-color.org ("when present and not an empty string"). Only a non-empty `NO_COLOR` now disables colour; the CC-PROC-29 seam is unchanged. Closed by `an empty NO_COLOR keeps a TTY report colorized (owner decision 2026-10-22)` | post-M5 · unit (`test/cli/doctor.test.ts`) |
 | CC-INS-30 | A metric named twice in `metrics` (`['reach','reach']`) | **Applied 2026-10-22 (owner decision).** It went out as `metric=reach,reach`, and a missing metric was listed twice. `uniqueMetrics` now de-duplicates in first-occurrence order on the account, media and demographics paths; the output shape is unchanged. Closed by `a metric named twice is requested once and listed missing once, in first-occurrence order` | post-M5 · unit (`test/api/insights.test.ts`) |
 | CC-RATE-19 | A throttled response carries a delta-seconds `Retry-After` too large to state: 309 or more digits (parsed as `Infinity`), or any value past 2^53 ms (`1` followed by 25 zeros) | **Found by audit 2026-10-22 (wave 24, lane A).** [[CC-RATE-3]] fails such a call fast, correctly, but `retryAfterTooLong` in `src/core/http.ts` printed the parsed number, so the operator read "Instagram asked for a Infinity s wait (Retry-After) … retry in ~Infinity h", or "a 1e+25 s wait … ~2.777777777777778e+21 h". **Fixed:** past `Number.MAX_SAFE_INTEGER` ms the sentence drops the seconds and the estimate ("asked for a Retry-After wait too long to estimate, longer than the 60 s this server holds a call for, so it was not retried"); the fail-fast, the Graph fields and every smaller wait are unchanged. Test: `a Retry-After too large to state still fails fast, without a nonsense estimate (CC-RATE-19)`, which failed before the fix with `a Infinity s wait`; it pins `9007199254740` (still estimated, `~2501999793 h`) beside `9007199254741`. Hand mutants (always estimate, `Number.isFinite`, a bound of `1e16`) are killed; `<` for `<=` is equivalent (a delta-seconds wait is a multiple of 1000, 2^53 − 1 is not). Whether a wait this absurd should take the backoff instead, as an unreadable hint does ([[CC-RATE-17]]), is left to the owner | post-M5 · unit |
+| CC-CFG-84 | `login --profile <name>` runs where bare `IG_ACCOUNT_ID` is set — typically the config-home `.env` an earlier default-profile `login` wrote, or a client config that sets it for the default profile | **Found by audit 2026-10-22 (wave 24, lane B).** `parseArgs` in `src/cli/login.ts` read the account-id env fallback from bare `IG_ACCOUNT_ID` whatever `--profile` named, and the entry loads the env files before it dispatches `login`. The fallback outranks Meta's `user_id` (`opts.accountId ?? short.userId`), so `login --profile biz --path ig` stored the DEFAULT account's id as `IG_PROFILE_BIZ_ACCOUNT_ID` instead of the account just authorized, and on Path B stored the default's id where none was asked for. Every `biz` call then addressed the wrong account. **Fixed:** the fallback is read after the line is parsed, from the profile's own key (`envVarFor(profile, 'ACCOUNT_ID')`): bare `IG_ACCOUNT_ID` for the default profile (unchanged), `IG_PROFILE_<NAME>_ACCOUNT_ID` for a named one. `--account-id` on the line still wins, an empty one included. The app id / secret / auth-path fallbacks stay on the bare keys — the help documents them that way and one app commonly serves several profiles; making them per-profile is an owner decision. Closed by `a named profile's login never adopts the default profile's IG_ACCOUNT_ID (CC-CFG-84)`. Hand mutation: 2/2 killed (bare key restored; argv flag ignored). | post-M5 · unit (`test/cli/login.test.ts`) |
 
 ## 9. Live-probe protocol (cases marked `live`)
 

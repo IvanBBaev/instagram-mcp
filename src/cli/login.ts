@@ -30,7 +30,7 @@ import { systemClock } from '../core/clock.js';
 import type { Clock } from '../core/clock.js';
 import { GRAPH_VERSION } from '../core/host.js';
 import { expiryFromLifetime, lifetimeFromWire } from '../core/time.js';
-import { DEFAULT_PROFILE_NAME } from '../core/config.js';
+import { DEFAULT_PROFILE_NAME, envVarFor } from '../core/config.js';
 import { MAX_GRAPH_MESSAGE_LENGTH, toInstagramError } from '../core/errors.js';
 import { createRedactor, surfaceForms } from '../core/redact.js';
 import { InstagramError } from '../core/types.js';
@@ -1036,7 +1036,6 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions | Unkno
     help: false,
     appId: clean(env.IG_APP_ID),
     appSecret: clean(env.IG_APP_SECRET),
-    accountId: clean(env.IG_ACCOUNT_ID),
     path: normalizePath(clean(env.IG_AUTH_PATH) ?? clean(env.IG_AUTH_MODE)),
   };
   // Whether the command line has named the path yet — by `--path`/`-p` (well
@@ -1046,6 +1045,9 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions | Unkno
   // request, not a second one, and it wins over the default exactly as
   // `--path ig` does.
   let pathOnArgv = false;
+  // Whether `--account-id` was on the line. Its env fallback is read after
+  // the loop because it depends on `--profile` (CC-CFG-84).
+  let accountIdOnArgv = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -1092,6 +1094,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions | Unkno
       }
       case '--account-id':
         opts.accountId = clean(value());
+        accountIdOnArgv = true;
         break;
       case '--scopes': {
         // A value that names no scope at all (`--scopes=`, `--scopes ,`) is
@@ -1159,6 +1162,14 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions | Unkno
       }
     }
   }
+  // The account id is per profile, so its env fallback is the profile's own
+  // key: `IG_ACCOUNT_ID` for the default, `IG_PROFILE_<NAME>_ACCOUNT_ID` for a
+  // named one. Bare `IG_ACCOUNT_ID` is usually the config-home `.env` a
+  // default-profile login wrote, and the entry loads it before `login` runs;
+  // read for `--profile biz`, it outranked Meta's `user_id` and stored the
+  // DEFAULT account as biz's, so every biz call addressed the wrong account
+  // (CC-CFG-84).
+  if (!accountIdOnArgv) opts.accountId = clean(env[envVarFor(opts.profile, 'ACCOUNT_ID')]);
   return opts;
 }
 

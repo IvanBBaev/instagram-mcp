@@ -228,6 +228,17 @@ function requireAccountId(accountId: string | undefined): string {
 }
 
 /**
+ * The metric list with each name kept once, in first-occurrence order. A caller
+ * that names a metric twice (`['reach', 'reach']`) asked for it once: joined
+ * as-is the wire carried `metric=reach,reach`, and {@link findMissingMetrics}
+ * listed a metric Graph left out twice in `missingMetrics`. De-duplicated
+ * silently — the output shape is unchanged and the request means the same.
+ */
+export function uniqueMetrics<T extends string>(metrics: readonly T[]): T[] {
+  return [...new Set(metrics)];
+}
+
+/**
  * The requested metric names Graph returned no row for, in request order.
  *
  * Graph answers a multi-metric insights call with one row per metric it has data
@@ -473,9 +484,10 @@ export async function getAccountInsights(
   // falls back"; an empty array is truthy, so `||` would swallow nothing here
   // that `??` keeps. Do not contort a test into 'killing' any of them.
   const metricType = params.metricType ?? 'total_value';
-  const metrics =
+  const metrics = uniqueMetrics(
     params.metrics ??
-    (metricType === 'time_series' ? TIME_SERIES_ACCOUNT_METRICS : ACCOUNT_METRICS);
+      (metricType === 'time_series' ? TIME_SERIES_ACCOUNT_METRICS : ACCOUNT_METRICS),
+  );
   // CC-INS-25: only `reach` is served as a time series. The whole request
   // would otherwise be spent and rejected by Graph for the other metrics in it.
   if (metricType === 'time_series') {
@@ -613,10 +625,11 @@ export async function getMediaInsights(
   // row; an unrecognised or unstated one (CC-DATA-6 open vocabulary) falls
   // through to the feed set exactly as before, and the FEED/REELS rows are
   // element-for-element identical to it, so STORY is the only behaviour change.
-  const metrics =
+  const metrics = uniqueMetrics(
     params.metrics ??
-    MEDIA_METRIC_MATRIX[params.mediaProductType?.toUpperCase() ?? ''] ??
-    DEFAULT_MEDIA_METRICS;
+      MEDIA_METRIC_MATRIX[params.mediaProductType?.toUpperCase() ?? ''] ??
+      DEFAULT_MEDIA_METRICS,
+  );
   validateMediaMetrics(metrics, params.mediaProductType);
   const read = readInsightsBody(
     await req<unknown>({
@@ -657,7 +670,7 @@ export async function getAudienceDemographics(
   params: AudienceDemographicsParams,
 ): Promise<AudienceDemographicsResult> {
   const accountId = requireAccountId(params.accountId);
-  const metrics = params.metrics ?? (['follower_demographics'] as const);
+  const metrics = uniqueMetrics(params.metrics ?? (['follower_demographics'] as const));
   const read = readInsightsBody(
     await req<unknown>({
       method: 'GET',

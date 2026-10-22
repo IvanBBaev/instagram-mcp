@@ -210,7 +210,8 @@ a list at all counts as one (CC-INS-24). A `total_value` measurement
 that is unreadable — a non-numeric `value`, a breakdown result without a finite `value` and
 string `dimension_values`, or a breakdown with no `results` list — is left out and counted
 in `omittedTotalValues` (CC-INS-20, CC-INS-21). A requested metric
-with no row at all is named in `missingMetrics` (CC-INS-17).
+with no row at all is named in `missingMetrics` (CC-INS-17). A metric named more than once
+in `metrics` is requested once and named at most once, in first-occurrence order.
 
 Upstream strings are published in `structuredContent` exactly as Meta sent them
 (inside the `[UNTRUSTED …]` fence where the field is free text). The text block is the

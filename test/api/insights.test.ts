@@ -1076,6 +1076,45 @@ test('every insights reader lists all requested metrics as missing on a data-les
   });
 });
 
+test('a metric named twice is requested once and listed missing once, in first-occurrence order', async () => {
+  // Joined as-is, `['reach', 'reach']` went out as `metric=reach,reach` and a
+  // metric Graph left out was listed twice in missingMetrics and its note.
+  const account = recordingReq({ data: [{ name: 'views', total_value: { value: 1 } }] });
+  const accountRes = await getAccountInsights(account.req, {
+    accountId: '123',
+    metrics: ['reach', 'views', 'reach', 'likes', 'views'],
+  });
+  assert.equal(account.calls[0]?.params?.metric, 'reach,views,likes');
+  assert.deepEqual(accountRes.missingMetrics, ['reach', 'likes']);
+  assert.deepEqual(accountRes.notes, [missingNote(['reach', 'likes'])]);
+
+  const media = recordingReq({ data: [] });
+  const mediaRes = await getMediaInsights(media.req, {
+    mediaId: 'm1',
+    metrics: ['saved', 'reach', 'saved'],
+  });
+  assert.equal(media.calls[0]?.params?.metric, 'saved,reach');
+  assert.deepEqual(mediaRes.missingMetrics, ['saved', 'reach']);
+  assert.equal(mediaRes.note, missingNote(['saved', 'reach']));
+
+  const demo = recordingReq({ data: [] });
+  const demoRes = await getAudienceDemographics(demo.req, {
+    accountId: '123',
+    metrics: ['engaged_audience_demographics', 'engaged_audience_demographics'],
+    breakdown: 'country',
+    timeframe: 'this_month',
+  });
+  assert.equal(demo.calls[0]?.params?.metric, 'engaged_audience_demographics');
+  assert.deepEqual(demoRes.missingMetrics, ['engaged_audience_demographics']);
+});
+
+test('uniqueMetrics keeps the first occurrence of each name and returns a new array', () => {
+  const input = ['b', 'a', 'b', 'c', 'a'] as const;
+  const out = insightsModule.uniqueMetrics(input);
+  assert.deepEqual(out, ['b', 'a', 'c']);
+  assert.deepEqual(insightsModule.uniqueMetrics([]), []);
+});
+
 test('getAccountInsights strips credentials from the paging URLs it hands back', async () => {
   // Graph's `paging.next`/`previous` are full request URLs rebuilt from the
   // request it received, token included. Only the credential parameters go;

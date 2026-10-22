@@ -404,6 +404,14 @@ test('a refused argv token never echoes an inline value or a token-shaped value 
       [[shaped], `instagram-mcp-ai: unknown subcommand '[REDACTED]'.`],
       [[`x${shaped}=v`], `instagram-mcp-ai: unknown subcommand 'x[REDACTED]'.`],
       [['doctor', shaped], `doctor: unknown argument '[REDACTED]'; doctor takes no arguments.`],
+      // A control character is written as a JSON escape (owner decision
+      // 2026-10-22): an ANSI sequence or a newline would repaint the terminal or
+      // forge a line beneath the refusal.
+      [['\u001b[2Jdocter'], `instagram-mcp-ai: unknown subcommand '\\u001b[2Jdocter'.`],
+      [
+        ['refresh', 'x\nOK\u009b=v'],
+        `refresh: unknown argument 'x\\u000aOK\\u009b'; refresh takes no arguments.`,
+      ],
     ];
     for (const [args, line] of cases) {
       const run = runEntry(sandbox, args);

@@ -35,7 +35,7 @@ import { MAX_GRAPH_MESSAGE_LENGTH, toInstagramError } from '../core/errors.js';
 import { createRedactor, surfaceForms } from '../core/redact.js';
 import { InstagramError } from '../core/types.js';
 import type { AuthPath } from '../core/types.js';
-import { quoteUntrusted, visibleText } from '../core/untrusted.js';
+import { escapeControls, quoteUntrusted, visibleText } from '../core/untrusted.js';
 import { DEFAULT_SCOPES } from './scopes.js';
 import { writeCredentials } from '../core/config-write.js';
 
@@ -1015,12 +1015,14 @@ const BARE_HEX_SECRET = /(?<![0-9A-Za-z])[0-9A-Fa-f]{32,}(?![0-9A-Za-z])/g;
  * `-p=`), which still shows the spelling that failed. What remains goes
  * through the token-shape redactor, as on the entry's own refusals
  * (CC-PROC-208), and then through {@link BARE_HEX_SECRET}, so a token or an
- * app secret pasted as a positional reads `[REDACTED]`.
+ * app secret pasted as a positional reads `[REDACTED]`. Last, every control
+ * character is written as a JSON escape (`\uXXXX`), so an ANSI sequence or a
+ * newline in the token cannot repaint the terminal or forge a line.
  */
 function echoedArgument(token: string): string {
   const eq = token.indexOf('=');
   const cut = token.startsWith('-') && eq !== -1 ? token.slice(0, eq + 1) : token;
-  return String(createRedactor()(cut)).replace(BARE_HEX_SECRET, '[REDACTED]');
+  return escapeControls(String(createRedactor()(cut)).replace(BARE_HEX_SECRET, '[REDACTED]'));
 }
 
 /**

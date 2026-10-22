@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  escapeControls,
   escapeInvisible,
   quoteUntrusted,
   quoteUntrustedString,
@@ -249,4 +250,22 @@ test('escapeInvisible keeps a JSON body parsing to the same value (CC-DATA-102)'
     assert.deepEqual(JSON.parse(out), value);
     assert.equal(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(out.replace(/\n/g, '')), false);
   }
+});
+
+test('escapeControls writes every C0, DEL and C1 control as a JSON escape, the line feed included', () => {
+  // An argv token echoed inside quotes on a usage refusal: an ANSI sequence
+  // repaints the terminal, a newline ends the refusal and forges a line.
+  assert.equal(escapeControls('\u001b[31mred'), '\\u001b[31mred');
+  assert.equal(escapeControls('a\nb\rc\td'), 'a\\u000ab\\u000dc\\u0009d');
+  assert.equal(
+    escapeControls('\u0000\u001f\u007f\u0080\u009f'),
+    '\\u0000\\u001f\\u007f\\u0080\\u009f',
+  );
+  assert.equal(JSON.parse(`"${escapeControls('x\u001by\n')}"`), 'x\u001by\n');
+});
+
+test('escapeControls leaves printable text, non-ASCII and format characters alone', () => {
+  assert.equal(escapeControls('--flag é \u00a0 \u{1F600} ~'), '--flag é \u00a0 \u{1F600} ~');
+  assert.equal(escapeControls('a\u200bb'), 'a\u200bb');
+  assert.equal(escapeControls(''), '');
 });

@@ -38,6 +38,7 @@ import { createIgRequest } from './core/http.js';
 import { refreshToken } from './core/refresh.js';
 import { namedEnvFile, resolveConfigHome, writeCredentials } from './core/config-write.js';
 import { quote } from './core/home-path.js';
+import { escapeControls } from './core/untrusted.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { PACKAGE_ENV_NAMES, registerTools } from './mcp/registry.js';
@@ -300,11 +301,14 @@ const USAGE_TEXT = `Usage:
  * log. The flag part is what tells the operator what was wrong; the value is
  * the one part that could be a secret. A bare token (`args: ["EAA…"]`) has no
  * `=` to cut at, so the redactor's shape patterns are what mask it — nothing is
- * registered yet at this point, so the shapes are all it can know.
+ * registered yet at this point, so the shapes are all it can know. Last, every
+ * control character is written as a JSON escape (`\uXXXX`): the token is
+ * echoed inside quotes, and an ANSI sequence or a newline in it would otherwise
+ * repaint the terminal or end the refusal early and forge a line beneath it.
  */
 function argvName(token: string): string {
   const eq = token.indexOf('=');
-  return String(createRedactor()(eq === -1 ? token : token.slice(0, eq)));
+  return escapeControls(String(createRedactor()(eq === -1 ? token : token.slice(0, eq))));
 }
 
 function assertUsage(argv: string[]): void {

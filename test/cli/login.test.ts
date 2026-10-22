@@ -2945,6 +2945,25 @@ test('a refused single-dash token is named up to its =, and a bare hex app secre
   }
 });
 
+test('a refused argument is echoed with every control character written as a JSON escape', async () => {
+  // Owner decision 2026-10-22. The token is echoed inside quotes, so an ANSI
+  // sequence in it repainted the terminal and a newline ended the refusal and
+  // forged a line of its own beneath it.
+  const help = await helpText();
+  for (const [token, named] of [
+    ['\u001b[2Jx', '\\u001b[2Jx'],
+    ['a\nlogin: ok', 'a\\u000alogin: ok'],
+    ['-x\u007f=v', '-x\\u007f='],
+    ['--bogus\u009b', '--bogus\\u009b'],
+  ] as const) {
+    const { deps, out, steps } = mustStopAtParsing();
+    const code = await runLogin(['--path', 'ig', token], deps);
+    assert.equal(code, 2, token);
+    assert.equal(out(), `login: unknown argument '${named}'.\n\n${help}`, token);
+    assert.deepEqual(steps, [], token);
+  }
+});
+
 test('an unknown long flag is refused with exit 2, the token named whole, and nothing past the parser runs', async () => {
   // Until 2026-09-19 an unknown token was skipped in silence and the command
   // carried on with whatever the rest of the line said — the shape that let

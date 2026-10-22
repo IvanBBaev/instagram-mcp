@@ -212,3 +212,22 @@ export function escapeInvisible(text: string): string {
     return escaped;
   });
 }
+
+/** Every control code point: C0 (U+0000–U+001F), DEL (U+007F) and C1 (U+0080–U+009F). */
+const CONTROL = /\p{Cc}/gu;
+
+/**
+ * The text with every control code point — C0 including the line feed, DEL and
+ * C1 — written as a JSON escape (`\uXXXX`, lowercase hex).
+ *
+ * This is the rule for an argv token echoed back inside quotes on a usage
+ * refusal (`unknown argument '…'`). The token is whatever the shell or an MCP
+ * host's `args` array passed, so it can carry an ANSI escape that repaints the
+ * operator's terminal or a newline that ends the refusal early and forges a
+ * line of its own beneath it. Unlike {@link escapeInvisible}, the line feed is
+ * escaped too: an argv token has no layout of its own to keep. It neither cuts,
+ * quotes nor redacts, and runs after the redactor, on the finished spelling.
+ */
+export function escapeControls(text: string): string {
+  return text.replace(CONTROL, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}

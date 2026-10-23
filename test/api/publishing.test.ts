@@ -401,6 +401,7 @@ test('createMediaContainer sends every supported field on one request', async ()
     igId: '4242',
     mediaType: 'CAROUSEL',
     imageUrl: 'https://cdn/i.jpg',
+    altText: 'a described image',
     videoUrl: 'https://cdn/v.mp4',
     caption: 'everything',
     locationId: 'LOC-1',
@@ -419,6 +420,7 @@ test('createMediaContainer sends every supported field on one request', async ()
       body: {
         media_type: 'CAROUSEL',
         image_url: 'https://cdn/i.jpg',
+        alt_text: 'a described image',
         video_url: 'https://cdn/v.mp4',
         caption: 'everything',
         location_id: 'LOC-1',
@@ -491,6 +493,32 @@ test('createCarouselContainer creates each child then a CAROUSEL album referenci
       },
     },
   ]);
+});
+
+test('createCarouselContainer puts each alt text on its own child and none on the album', async () => {
+  // Graph takes alt text per image: the index pairs it with its slide, and the
+  // album container must carry none (Meta refuses it on a CAROUSEL container).
+  let n = 0;
+  const { req, calls } = fakeReq((opts) => {
+    if (opts.body?.children !== undefined) return { id: 'ALBUM' };
+    n += 1;
+    return { id: `child-${n}` };
+  });
+
+  await createCarouselContainer(req, {
+    igId: '999',
+    childImageUrls: ['https://cdn/1.jpg', 'https://cdn/2.jpg'],
+    childAltTexts: ['first slide', 'second slide'],
+  });
+
+  assert.deepEqual(
+    calls.map((c) => c.body),
+    [
+      { image_url: 'https://cdn/1.jpg', alt_text: 'first slide', is_carousel_item: true },
+      { image_url: 'https://cdn/2.jpg', alt_text: 'second slide', is_carousel_item: true },
+      { media_type: 'CAROUSEL', children: 'child-1,child-2' },
+    ],
+  );
 });
 
 /**

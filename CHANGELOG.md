@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Image alt text: `instagram_create_media_container` takes `altText` (sent as
+  `alt_text`, image containers only) and `instagram_post_image` takes
+  `altTexts`, one entry per image in order — each lands on its own image or
+  carousel child, never on the album. At most 1000 characters each; the
+  preview shows them.
+
 ### Changed
 
 - A throttle whose `Retry-After` is past the 60 s cap now fails fast with an

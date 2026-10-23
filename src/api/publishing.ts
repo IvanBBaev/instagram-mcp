@@ -67,6 +67,8 @@ export interface CreateContainerParams {
   /** Omit for a feed image (sends NO `media_type`); set for Reels/Stories/Carousel. */
   mediaType?: ContainerMediaType;
   imageUrl?: string;
+  /** Image alt text (a feed image or carousel child only). */
+  altText?: string;
   videoUrl?: string;
   caption?: string;
   locationId?: string;
@@ -103,6 +105,7 @@ export async function createMediaContainer(
   // tool layer, where they show up in the preview an operator approves.
   if (params.mediaType !== undefined) p.media_type = params.mediaType;
   if (params.imageUrl !== undefined) p.image_url = params.imageUrl;
+  if (params.altText !== undefined) p.alt_text = params.altText;
   if (params.videoUrl !== undefined) p.video_url = params.videoUrl;
   if (params.caption !== undefined) p.caption = params.caption;
   if (params.locationId !== undefined) p.location_id = params.locationId;
@@ -180,6 +183,10 @@ function carouselAbortError(err: unknown, step: string, orphaned: string[]): Ins
  * On any failure the already-created children are reported by id in the thrown
  * error rather than silently abandoned — see {@link carouselAbortError}.
  *
+ * `childAltTexts`, when given, is index-aligned with `childImageUrls` and each
+ * entry goes on its own child — Graph takes alt text per image, never on the
+ * album (the tool layer checks the lengths match).
+ *
  * Each child's acknowledgement is checked HERE, not left to the tool layer the
  * way the album's is: a child id is consumed immediately, as an element of the
  * album's `children` list, so an ack without a usable id would otherwise reach
@@ -189,7 +196,13 @@ function carouselAbortError(err: unknown, step: string, orphaned: string[]): Ins
  */
 export async function createCarouselContainer(
   req: IgRequestFn,
-  params: { igId: string; childImageUrls: string[]; caption?: string; locationId?: string },
+  params: {
+    igId: string;
+    childImageUrls: string[];
+    childAltTexts?: string[];
+    caption?: string;
+    locationId?: string;
+  },
 ): Promise<{ id: string; childIds: string[] }> {
   const childIds: string[] = [];
   const total = params.childImageUrls.length;
@@ -198,6 +211,7 @@ export async function createCarouselContainer(
       const child = await createMediaContainer(req, {
         igId: params.igId,
         imageUrl,
+        altText: params.childAltTexts?.[index],
         isCarouselItem: true,
       });
       if (typeof child.id !== 'string' || child.id === '') {

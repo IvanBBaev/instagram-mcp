@@ -33,6 +33,8 @@ export const MAX_USER_TAGS = 20;
 /** Carousel album bounds (inclusive). */
 export const CAROUSEL_MIN = 2;
 export const CAROUSEL_MAX = 10;
+/** Image alt-text cap, counted in Unicode code points like the caption. */
+export const MAX_ALT_TEXT_CODEPOINTS = 1000;
 
 // --- Container media kinds --------------------------------------------------
 
@@ -113,6 +115,22 @@ export function httpsUrl(): z.ZodString {
     .string()
     .regex(HTTPS_URL_PATTERN, { message: HTTPS_URL_MESSAGE })
     .refine((v) => !HTTPS_URL_PATTERN.test(v) || isHttpsUrl(v), { message: HTTPS_URL_MESSAGE });
+}
+
+const ALT_TEXT_MESSAGE = `Alt text must contain a non-space character and be at most ${MAX_ALT_TEXT_CODEPOINTS} characters.`;
+
+/**
+ * The `alt_text` of one image (feed image or carousel child): a non-blank
+ * string of at most {@link MAX_ALT_TEXT_CODEPOINTS} code points. Graph accepts
+ * it on image containers only — never on a reel, a story or a carousel album —
+ * and the tools refuse those combinations themselves. A factory for the same
+ * reason as {@link httpsUrl}: each field publishes its own description.
+ */
+export function altText(): z.ZodString {
+  return z
+    .string()
+    .regex(/\S/, { message: ALT_TEXT_MESSAGE })
+    .refine((v) => [...v].length <= MAX_ALT_TEXT_CODEPOINTS, { message: ALT_TEXT_MESSAGE });
 }
 
 // --- Caption analysis -------------------------------------------------------

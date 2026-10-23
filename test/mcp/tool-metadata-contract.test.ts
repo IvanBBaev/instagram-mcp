@@ -70,6 +70,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 
+import { InstagramError } from '../../src/core/types.js';
 import { allTools } from '../../src/tools/index.js';
 import { accountTools } from '../../src/tools/account.js';
 import { mediaTools } from '../../src/tools/media.js';
@@ -202,11 +203,17 @@ function sampleValue(schema: z.ZodType): unknown {
  * Arguments for one spec, minus `apply` (the probe sets that itself) and minus
  * any field the synthesizer could not satisfy — omission is correct for an
  * optional field and is caught by the strict parse below for a required one.
+ *
+ * `requiredOnly` drops every optional field as well. Each field is sampled on
+ * its own, so the full bag can combine two that the handler refuses together
+ * (`altText` beside `mediaType: REELS`); the required-only bag is the fallback
+ * the probe takes for exactly that refusal.
  */
-function synthesizeArgs(spec: ToolSpec): Record<string, unknown> {
+function synthesizeArgs(spec: ToolSpec, requiredOnly = false): Record<string, unknown> {
   const args: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(spec.input)) {
     if (key === 'apply') continue;
+    if (requiredOnly && field.safeParse(undefined).success) continue;
     const value = sampleValue(field);
     if (value !== undefined) args[key] = value;
   }
@@ -307,25 +314,40 @@ async function runProbe(spec: ToolSpec, config: ProbeConfig): Promise<Observatio
     confirm,
   };
 
-  const args = synthesizeArgs(spec);
-  if (config.apply !== undefined && Object.hasOwn(spec.input, 'apply')) args.apply = config.apply;
+  const argsFor = (requiredOnly: boolean): Record<string, unknown> => {
+    const args = synthesizeArgs(spec, requiredOnly);
+    if (config.apply !== undefined && Object.hasOwn(spec.input, 'apply')) args.apply = config.apply;
+    // A synthesizer gap must fail the test, not silently produce a handler that
+    // bails out early and therefore looks read-only.
+    const parsed = z.object(spec.input).strict().safeParse(args);
+    assert.equal(
+      parsed.success,
+      true,
+      `synthesized arguments for ${spec.name} do not satisfy its own input schema: ` +
+        `${JSON.stringify(args)}`,
+    );
+    return args;
+  };
 
-  // A synthesizer gap must fail the test, not silently produce a handler that
-  // bails out early and therefore looks read-only.
-  const parsed = z.object(spec.input).strict().safeParse(args);
-  assert.equal(
-    parsed.success,
-    true,
-    `synthesized arguments for ${spec.name} do not satisfy its own input schema: ` +
-      `${JSON.stringify(args)}`,
-  );
-
+  let args = argsFor(false);
   let result: ToolResult | undefined;
   let thrown: string | undefined;
   try {
     result = await spec.handler(args, ctx);
   } catch (error) {
     thrown = error instanceof Error ? error.message : String(error);
+    // A cross-field refusal of the full bag says nothing about the gate, so
+    // the probe asks once more with the required fields alone. Any other throw,
+    // or a second refusal, stays unclassifiable.
+    if (error instanceof InstagramError && error.kind === 'validation') {
+      args = argsFor(true);
+      thrown = undefined;
+      try {
+        result = await spec.handler(args, ctx);
+      } catch (retryError) {
+        thrown = retryError instanceof Error ? retryError.message : String(retryError);
+      }
+    }
   }
 
   return {

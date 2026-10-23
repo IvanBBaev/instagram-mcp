@@ -66,6 +66,7 @@ import {
   type PublishFlowOptions,
 } from '../api/publishing.js';
 import {
+  altText,
   assertCaptionWithinLimits,
   assertCarouselSize,
   assertHttpsUrl,
@@ -451,6 +452,12 @@ const createContainerInput = {
   imageUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS image URL Instagram will fetch (feed image or carousel child).'),
+  altText: altText()
+    .optional()
+    .describe(
+      'Alt text for the image (≤ 1000 characters): a feed image or a carousel child only — it needs ' +
+        'imageUrl and no mediaType, since Instagram refuses it on REELS, STORIES and a CAROUSEL album.',
+    ),
   videoUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS video URL Instagram will fetch (Reels/Stories video).'),
@@ -515,6 +522,20 @@ const createMediaContainerTool = defineTool({
     if (args.videoUrl !== undefined) assertHttpsUrl(args.videoUrl, 'videoUrl');
     if (args.coverUrl !== undefined) assertHttpsUrl(args.coverUrl, 'coverUrl');
     if (args.children !== undefined) assertCarouselSize(args.children.length);
+    // Graph takes `alt_text` on an image container only. Refused here rather
+    // than left to Graph, which would refuse it only after the write gate — and
+    // a reel or story preview that showed the alt text would promise an
+    // accessibility label the post can never carry.
+    if (
+      args.altText !== undefined &&
+      (args.mediaType !== undefined || args.imageUrl === undefined)
+    ) {
+      throw new InstagramError(
+        'altText applies to an image container only (imageUrl, no mediaType): Instagram does not ' +
+          'accept alt text on REELS, STORIES or a CAROUSEL album — set it on each carousel child instead.',
+        { kind: 'validation' },
+      );
+    }
 
     // EVERY still-image URL this container can carry is hinted, in argument
     // order: `imageUrl` (feed image or carousel child) and `coverUrl` (a reel
@@ -541,6 +562,7 @@ const createMediaContainerTool = defineTool({
       media_type: args.mediaType ?? '(feed image — no media_type)',
     };
     if (args.children !== undefined) details.children = args.children.length;
+    if (args.altText !== undefined) details.alt_text = previewExcerpt(args.altText);
     if (warnings.length > 0) details.warnings = warnings;
 
     const intent: WriteIntent = {
@@ -554,6 +576,7 @@ const createMediaContainerTool = defineTool({
         igId: igIdOf(ctx),
         mediaType: args.mediaType,
         imageUrl: args.imageUrl,
+        altText: args.altText,
         videoUrl: args.videoUrl,
         caption: args.caption,
         locationId: args.locationId,
@@ -678,6 +701,12 @@ const postImageInput = {
         'URLs post a carousel album. Required unless resuming. Format/size/dimensions are unverifiable ' +
         'before Instagram fetches them.',
     ),
+  altTexts: boundedArray(altText(), 1, CAROUSEL_MAX)
+    .optional()
+    .describe(
+      'Alt text per image, in the same order as imageUrls — exactly one entry per URL, each ≤ 1000 ' +
+        'characters. Omit to post without alt text.',
+    ),
   caption: captionField,
   locationId: locationField,
   userTags: boundedArray(userTagSchema, 0, MAX_USER_TAGS)
@@ -732,6 +761,16 @@ export async function runPostImage(
     // future change to the lower bound would then be caught here instead of
     // slipping through a guard tuned to the old value.
     if (imageUrls.length >= CAROUSEL_MIN) assertCarouselSize(imageUrls.length);
+    // Index-aligned with imageUrls, so a length mismatch has no meaning to
+    // guess at: which image a lone extra (or missing) entry belongs to is
+    // exactly what the caller has to say.
+    if (args.altTexts !== undefined && args.altTexts.length !== imageUrls.length) {
+      throw new InstagramError(
+        `altTexts needs exactly one entry per imageUrl, in the same order (got ${args.altTexts.length} ` +
+          `for ${imageUrls.length} image(s)).`,
+        { kind: 'validation' },
+      );
+    }
     for (const url of imageUrls) {
       const w = imageUrlFormatWarning(url);
       if (w !== undefined) warnings.push(w);
@@ -761,6 +800,7 @@ export async function runPostImage(
       const album = await createCarouselContainer(ctx.req, {
         igId: igIdOf(ctx),
         childImageUrls: imageUrls,
+        childAltTexts: args.altTexts,
         caption: args.caption,
         locationId: args.locationId,
       });
@@ -784,6 +824,7 @@ export async function runPostImage(
     const container = await createMediaContainer(ctx.req, {
       igId: igIdOf(ctx),
       imageUrl,
+      altText: args.altTexts?.[0],
       caption: args.caption,
       locationId: args.locationId,
       userTags: args.userTags,
@@ -799,6 +840,8 @@ export async function runPostImage(
         media_hosts: mediaHosts(imageUrls),
       };
   if (caption !== undefined) details.caption = caption;
+  if (!resuming && args.altTexts !== undefined)
+    details.alt_texts = args.altTexts.map(previewExcerpt);
   if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {

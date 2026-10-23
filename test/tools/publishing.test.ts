@@ -2332,6 +2332,7 @@ test('the declared input and output vocabularies are exactly these fields', () =
   assert.deepEqual(Object.keys(tool('instagram_create_media_container').input), [
     'mediaType',
     'imageUrl',
+    'altText',
     'videoUrl',
     'caption',
     'locationId',
@@ -2345,6 +2346,7 @@ test('the declared input and output vocabularies are exactly these fields', () =
   ]);
   assert.deepEqual(Object.keys(tool('instagram_post_image').input), [
     'imageUrls',
+    'altTexts',
     'caption',
     'locationId',
     'userTags',
@@ -4237,6 +4239,12 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           description:
             'Public HTTPS image URL Instagram will fetch (feed image or carousel child).',
         },
+        altText: {
+          type: 'string',
+          pattern: '\\S',
+          description:
+            'Alt text for the image (≤ 1000 characters): a feed image or a carousel child only — it needs imageUrl and no mediaType, since Instagram refuses it on REELS, STORIES and a CAROUSEL album.',
+        },
         videoUrl: {
           type: 'string',
           pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
@@ -4424,6 +4432,14 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           maxItems: 10,
           description:
             'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–10 URLs post a carousel album. Required unless resuming. Format/size/dimensions are unverifiable before Instagram fetches them.',
+        },
+        altTexts: {
+          type: 'array',
+          items: { type: 'string', pattern: '\\S' },
+          minItems: 1,
+          maxItems: 10,
+          description:
+            'Alt text per image, in the same order as imageUrls — exactly one entry per URL, each ≤ 1000 characters. Omit to post without alt text.',
         },
         caption: {
           type: 'string',
@@ -4930,4 +4946,164 @@ test('an album acknowledged without an id quotes child ids that are not Graph id
       return true;
     },
   );
+});
+
+// --- alt text -----------------------------------------------------------------
+
+/** A request fake that finishes every container and publishes it as M1. */
+function publishingReq(): ReturnType<typeof fakeReq> {
+  let child = 0;
+  return fakeReq((opts) => {
+    if (opts.path === '/999/media' && opts.method === 'POST') {
+      if (opts.body?.children !== undefined) return { id: 'ALBUM' };
+      child += 1;
+      return { id: `C${child}` };
+    }
+    if (opts.method === 'GET') return { id: opts.path.slice(1), status_code: 'FINISHED' };
+    if (opts.path === '/999/media_publish') return { id: 'M1' };
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+}
+
+test('create_media_container previews alt text as an excerpt and sends it as alt_text', async () => {
+  // The preview shows the alt text the operator approves — flattened like a
+  // caption, so a newline or bidi control cannot reorder what they read — and
+  // the applied create sends it verbatim.
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+  const preview = await tool('instagram_create_media_container').handler(
+    { imageUrl: 'https://cdn/a.jpg', altText: 'A dog\non a beach' },
+    makeCtx(req),
+  );
+  assert.deepEqual(preview.structuredContent?.details, {
+    media_type: '(feed image — no media_type)',
+    alt_text: 'A dog on a beach',
+  });
+  assert.equal(calls.length, 0);
+
+  await tool('instagram_create_media_container').handler(
+    { imageUrl: 'https://cdn/a.jpg', altText: 'A dog\non a beach', apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(calls[0]?.body, {
+    image_url: 'https://cdn/a.jpg',
+    alt_text: 'A dog\non a beach',
+  });
+});
+
+test('create_media_container refuses alt text on anything but an image container', async () => {
+  // Instagram takes alt text on a feed image or carousel child only; a reel, a
+  // story, an album, or a container with no image cannot carry it, and a
+  // preview that showed it there would promise a label the post never gets.
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+  const cases: Record<string, unknown>[] = [
+    { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4' },
+    { mediaType: 'STORIES', imageUrl: 'https://cdn/a.jpg' },
+    { mediaType: 'CAROUSEL', children: ['c1', 'c2'] },
+    { videoUrl: 'https://cdn/v.mp4', isCarouselItem: true },
+  ];
+  for (const args of cases) {
+    await assert.rejects(
+      async () =>
+        tool('instagram_create_media_container').handler(
+          { ...args, altText: 'described', apply: true },
+          makeCtx(req),
+        ),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'validation' &&
+        /altText applies to an image/.test(e.message),
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('alt text is refused blank or over 1000 characters, counted in code points', () => {
+  // 1000 emoji are 2000 UTF-16 units: counting units would refuse a legal value.
+  const container = inputOf('instagram_create_media_container');
+  const post = inputOf('instagram_post_image');
+  for (const bad of ['', '   ', 'x'.repeat(1001)]) {
+    assert.equal(container.safeParse({ altText: bad }).success, false, JSON.stringify(bad));
+    assert.equal(post.safeParse({ altTexts: [bad] }).success, false, JSON.stringify(bad));
+  }
+  const emoji = '🙂'.repeat(1000);
+  assert.equal(container.safeParse({ altText: emoji }).success, true);
+  assert.equal(post.safeParse({ altTexts: [emoji] }).success, true);
+  assert.equal(post.safeParse({ altTexts: [] }).success, false, 'an empty list says nothing');
+});
+
+test('post_image puts a single alt text on the feed image and shows it in the preview', async () => {
+  const { req, calls } = publishingReq();
+  const preview = await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], altTexts: ['Sunset over the bay'] },
+    makeCtx(req),
+  );
+  assert.deepEqual(preview.structuredContent?.details, {
+    media_kind: 'image',
+    image_count: 1,
+    media_hosts: ['cdn'],
+    alt_texts: ['Sunset over the bay'],
+  });
+  assert.equal(calls.length, 0);
+
+  await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], altTexts: ['Sunset over the bay'], apply: true },
+    makeCtx(req),
+  );
+  const create = calls.find((c) => c.path === '/999/media');
+  assert.deepEqual(create?.body, {
+    image_url: 'https://cdn/a.jpg',
+    alt_text: 'Sunset over the bay',
+  });
+});
+
+test('post_image gives each carousel child its own alt text and the album none', async () => {
+  const { req, calls } = publishingReq();
+  await runPostImage(
+    {
+      imageUrls: ['https://cdn/1.jpg', 'https://cdn/2.jpg'],
+      altTexts: ['first', 'second'],
+      apply: true,
+    },
+    makeCtx(req),
+  );
+  const creates = calls.filter((c) => c.path === '/999/media').map((c) => c.body);
+  assert.deepEqual(creates, [
+    { image_url: 'https://cdn/1.jpg', alt_text: 'first', is_carousel_item: true },
+    { image_url: 'https://cdn/2.jpg', alt_text: 'second', is_carousel_item: true },
+    { media_type: 'CAROUSEL', children: 'C1,C2' },
+  ]);
+});
+
+test('post_image refuses alt texts that do not pair one-to-one with the images', async () => {
+  // Which image a lone extra or missing entry belongs to is the caller's call,
+  // so the post is refused before any container exists.
+  const { req, calls } = publishingReq();
+  await assert.rejects(
+    () =>
+      runPostImage(
+        {
+          imageUrls: ['https://cdn/1.jpg', 'https://cdn/2.jpg'],
+          altTexts: ['only one'],
+          apply: true,
+        },
+        makeCtx(req),
+      ),
+    (e: unknown) =>
+      e instanceof InstagramError &&
+      e.kind === 'validation' &&
+      e.message.includes('exactly one entry per imageUrl') &&
+      e.message.includes('got 1 for 2 image(s)'),
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('a resume handed alt texts names them as ignored and does not preview them', async () => {
+  const { req } = publishingReq();
+  const res = await runPostImage(
+    { resumeContainerId: 'C-PRIOR', altTexts: ['late'] },
+    makeCtx(req),
+  );
+  const details = res.structuredContent?.details as Record<string, unknown>;
+  assert.equal(details.alt_texts, undefined);
+  assert.match(String((details.warnings as string[])[0]), /ignored.*: altTexts\.$/);
 });

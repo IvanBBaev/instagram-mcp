@@ -411,6 +411,8 @@ test('createMediaContainer sends every supported field on one request', async ()
     thumbOffset: 250,
     shareToFeed: true,
     isCarouselItem: true,
+    // false, not true: an explicit "not AI-generated" must reach Graph too.
+    isAiGenerated: false,
   });
 
   assert.deepEqual(calls, [
@@ -428,6 +430,7 @@ test('createMediaContainer sends every supported field on one request', async ()
         thumb_offset: 250,
         share_to_feed: true,
         is_carousel_item: true,
+        is_ai_generated: false,
         children: 'c1,c2',
         user_tags: JSON.stringify(tags),
       },
@@ -517,6 +520,32 @@ test('createCarouselContainer puts each alt text on its own child and none on th
       { image_url: 'https://cdn/1.jpg', alt_text: 'first slide', is_carousel_item: true },
       { image_url: 'https://cdn/2.jpg', alt_text: 'second slide', is_carousel_item: true },
       { media_type: 'CAROUSEL', children: 'child-1,child-2' },
+    ],
+  );
+});
+
+test('createCarouselContainer puts the AI label on the album and on no child', async () => {
+  // The mirror image of alt text: Meta refuses is_ai_generated on a carousel
+  // child, so the album container is the only place a carousel carries it.
+  let n = 0;
+  const { req, calls } = fakeReq((opts) => {
+    if (opts.body?.children !== undefined) return { id: 'ALBUM' };
+    n += 1;
+    return { id: `child-${n}` };
+  });
+
+  await createCarouselContainer(req, {
+    igId: '999',
+    childImageUrls: ['https://cdn/1.jpg', 'https://cdn/2.jpg'],
+    isAiGenerated: true,
+  });
+
+  assert.deepEqual(
+    calls.map((c) => c.body),
+    [
+      { image_url: 'https://cdn/1.jpg', is_carousel_item: true },
+      { image_url: 'https://cdn/2.jpg', is_carousel_item: true },
+      { media_type: 'CAROUSEL', children: 'child-1,child-2', is_ai_generated: true },
     ],
   );
 });

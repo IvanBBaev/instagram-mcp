@@ -83,6 +83,8 @@ export interface CreateContainerParams {
   shareToFeed?: boolean;
   /** Marks a container as a carousel item during album child creation. */
   isCarouselItem?: boolean;
+  /** Self-disclosed AI usage label (never on a carousel child). */
+  isAiGenerated?: boolean;
 }
 
 /**
@@ -113,6 +115,7 @@ export async function createMediaContainer(
   if (params.thumbOffset !== undefined) p.thumb_offset = params.thumbOffset;
   if (params.shareToFeed !== undefined) p.share_to_feed = params.shareToFeed;
   if (params.isCarouselItem === true) p.is_carousel_item = true;
+  if (params.isAiGenerated !== undefined) p.is_ai_generated = params.isAiGenerated;
   if (params.children !== undefined) p.children = params.children.join(',');
   if (params.userTags !== undefined) p.user_tags = JSON.stringify(params.userTags);
 
@@ -185,7 +188,8 @@ function carouselAbortError(err: unknown, step: string, orphaned: string[]): Ins
  *
  * `childAltTexts`, when given, is index-aligned with `childImageUrls` and each
  * entry goes on its own child — Graph takes alt text per image, never on the
- * album (the tool layer checks the lengths match).
+ * album (the tool layer checks the lengths match). `isAiGenerated` is the
+ * opposite: it labels the album only, since Graph refuses it on a child.
  *
  * Each child's acknowledgement is checked HERE, not left to the tool layer the
  * way the album's is: a child id is consumed immediately, as an element of the
@@ -202,6 +206,7 @@ export async function createCarouselContainer(
     childAltTexts?: string[];
     caption?: string;
     locationId?: string;
+    isAiGenerated?: boolean;
   },
 ): Promise<{ id: string; childIds: string[] }> {
   const childIds: string[] = [];
@@ -234,6 +239,7 @@ export async function createCarouselContainer(
       children: childIds,
       caption: params.caption,
       locationId: params.locationId,
+      isAiGenerated: params.isAiGenerated,
     });
     return { id: album.id, childIds };
   } catch (err) {

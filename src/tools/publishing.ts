@@ -138,6 +138,14 @@ const locationField = graphObjectId()
   .optional()
   .describe('Instagram location Page id to tag on the post.');
 
+const aiGeneratedField = z
+  .boolean()
+  .optional()
+  .describe(
+    "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's " +
+      'default; not accepted on a carousel child.',
+  );
+
 const resumeField = graphObjectId()
   .optional()
   .describe(
@@ -483,6 +491,7 @@ const createContainerInput = {
     .boolean()
     .optional()
     .describe('Mark this container as a carousel child (when assembling an album manually).'),
+  isAiGenerated: aiGeneratedField,
   apply: applyField,
 };
 
@@ -536,6 +545,15 @@ const createMediaContainerTool = defineTool({
         { kind: 'validation' },
       );
     }
+    // Same reasoning for the AI label, which Graph refuses on a carousel child:
+    // the album container is where a carousel carries it.
+    if (args.isAiGenerated !== undefined && args.isCarouselItem === true) {
+      throw new InstagramError(
+        'isAiGenerated cannot be set on a carousel child (isCarouselItem): Instagram does not accept ' +
+          'it there — set it on the CAROUSEL album container instead.',
+        { kind: 'validation' },
+      );
+    }
 
     // EVERY still-image URL this container can carry is hinted, in argument
     // order: `imageUrl` (feed image or carousel child) and `coverUrl` (a reel
@@ -563,6 +581,7 @@ const createMediaContainerTool = defineTool({
     };
     if (args.children !== undefined) details.children = args.children.length;
     if (args.altText !== undefined) details.alt_text = previewExcerpt(args.altText);
+    if (args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
     if (warnings.length > 0) details.warnings = warnings;
 
     const intent: WriteIntent = {
@@ -586,6 +605,7 @@ const createMediaContainerTool = defineTool({
         thumbOffset: args.thumbOffset,
         shareToFeed: args.shareToFeed,
         isCarouselItem: args.isCarouselItem,
+        isAiGenerated: args.isAiGenerated,
       });
       const containerId = acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
       const payload: Record<string, unknown> = { status: 'created', container_id: containerId };
@@ -714,6 +734,7 @@ const postImageInput = {
     .describe(
       'User tags for a single feed image (not carousels), at most 20: handles without "@" (letters, digits, "." and "_") with optional 0–1 x/y.',
     ),
+  isAiGenerated: aiGeneratedField,
   resumeContainerId: resumeField,
   apply: applyField,
 };
@@ -803,6 +824,7 @@ export async function runPostImage(
         childAltTexts: args.altTexts,
         caption: args.caption,
         locationId: args.locationId,
+        isAiGenerated: args.isAiGenerated,
       });
       return acknowledgedId(
         album,
@@ -828,6 +850,7 @@ export async function runPostImage(
       caption: args.caption,
       locationId: args.locationId,
       userTags: args.userTags,
+      isAiGenerated: args.isAiGenerated,
     });
     return acknowledgedId(container, 'media container', CONTAINER_ID_MISSING);
   };
@@ -842,6 +865,7 @@ export async function runPostImage(
   if (caption !== undefined) details.caption = caption;
   if (!resuming && args.altTexts !== undefined)
     details.alt_texts = args.altTexts.map(previewExcerpt);
+  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
   if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {
@@ -901,6 +925,7 @@ const postReelInput = {
     .describe('Cover frame offset in milliseconds (used when no coverUrl is given).'),
   shareToFeed: z.boolean().optional().describe('Also show the reel in the main feed.'),
   locationId: locationField,
+  isAiGenerated: aiGeneratedField,
   resumeContainerId: resumeField,
   apply: applyField,
 };
@@ -951,6 +976,7 @@ export async function runPostReel(
       thumbOffset: args.thumbOffset,
       shareToFeed: args.shareToFeed,
       locationId: args.locationId,
+      isAiGenerated: args.isAiGenerated,
     });
     return acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
   };
@@ -970,6 +996,7 @@ export async function runPostReel(
         media_hosts: mediaHosts([args.videoUrl, args.coverUrl]),
       };
   if (caption !== undefined) details.caption = caption;
+  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
   // Same `details.warnings` channel the other publishing tools use — a list even
   // for one entry, so a caller reads warnings the same way everywhere, and
   // absent entirely when there is nothing to say (an always-present empty list
@@ -1023,6 +1050,7 @@ const postStoryInput = {
   videoUrl: httpsUrl()
     .optional()
     .describe('Public HTTPS video for a video story. Provide exactly one of imageUrl or videoUrl.'),
+  isAiGenerated: aiGeneratedField,
   resumeContainerId: resumeField,
   apply: applyField,
 };
@@ -1073,6 +1101,7 @@ export async function runPostStory(
       mediaType: 'STORIES',
       imageUrl: args.imageUrl,
       videoUrl: args.videoUrl,
+      isAiGenerated: args.isAiGenerated,
     });
     return acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
   };
@@ -1084,6 +1113,7 @@ export async function runPostStory(
         source: args.imageUrl !== undefined ? 'image' : 'video',
         media_hosts: mediaHosts([args.imageUrl, args.videoUrl]),
       };
+  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
   if (warnings.length > 0) details.warnings = warnings;
 
   const intent: WriteIntent = {

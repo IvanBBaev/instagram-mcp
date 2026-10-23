@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `altTexts`, one entry per image in order — each lands on its own image or
   carousel child, never on the album. At most 1000 characters each; the
   preview shows them.
+- AI-generated label: `instagram_create_media_container`, `instagram_post_image`,
+  `instagram_post_reel` and `instagram_post_story` take `isAiGenerated` (sent as
+  `is_ai_generated`, shown in the preview). A carousel carries it on the album
+  only; a container marked `isCarouselItem` refuses it, as Instagram does.
 
 ### Changed
 

@@ -2342,6 +2342,7 @@ test('the declared input and output vocabularies are exactly these fields', () =
     'thumbOffset',
     'shareToFeed',
     'isCarouselItem',
+    'isAiGenerated',
     'apply',
   ]);
   assert.deepEqual(Object.keys(tool('instagram_post_image').input), [
@@ -2350,6 +2351,7 @@ test('the declared input and output vocabularies are exactly these fields', () =
     'caption',
     'locationId',
     'userTags',
+    'isAiGenerated',
     'resumeContainerId',
     'apply',
   ]);
@@ -4310,6 +4312,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           description:
             'Mark this container as a carousel child (when assembling an album manually).',
         },
+        isAiGenerated: {
+          type: 'boolean',
+          description:
+            "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
+        },
         apply: {
           type: 'boolean',
           description:
@@ -4473,6 +4480,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           description:
             'User tags for a single feed image (not carousels), at most 20: handles without "@" (letters, digits, "." and "_") with optional 0–1 x/y.',
         },
+        isAiGenerated: {
+          type: 'boolean',
+          description:
+            "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
+        },
         resumeContainerId: {
           type: 'string',
           minLength: 1,
@@ -4536,6 +4548,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           pattern: '^[A-Za-z0-9_-]{1,64}$',
           description: 'Instagram location Page id to tag on the post.',
         },
+        isAiGenerated: {
+          type: 'boolean',
+          description:
+            "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
+        },
         resumeContainerId: {
           type: 'string',
           minLength: 1,
@@ -4578,6 +4595,11 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/',
           description:
             'Public HTTPS video for a video story. Provide exactly one of imageUrl or videoUrl.',
+        },
+        isAiGenerated: {
+          type: 'boolean',
+          description:
+            "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
         },
         resumeContainerId: {
           type: 'string',
@@ -5106,4 +5128,157 @@ test('a resume handed alt texts names them as ignored and does not preview them'
   const details = res.structuredContent?.details as Record<string, unknown>;
   assert.equal(details.alt_texts, undefined);
   assert.match(String((details.warnings as string[])[0]), /ignored.*: altTexts\.$/);
+});
+
+// --- AI-generated label -----------------------------------------------------
+
+test('create_media_container previews the AI label and sends it as is_ai_generated', async () => {
+  // Both values are shown and sent: an explicit false is a disclosure decision
+  // too, distinct from leaving Instagram's default in place.
+  for (const label of [true, false]) {
+    const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+    const preview = await tool('instagram_create_media_container').handler(
+      { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4', isAiGenerated: label },
+      makeCtx(req),
+    );
+    assert.deepEqual(preview.structuredContent?.details, {
+      media_type: 'REELS',
+      ai_generated: label,
+    });
+    assert.equal(calls.length, 0);
+
+    await tool('instagram_create_media_container').handler(
+      { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4', isAiGenerated: label, apply: true },
+      makeCtx(req),
+    );
+    assert.deepEqual(calls[0]?.body, {
+      media_type: 'REELS',
+      video_url: 'https://cdn/v.mp4',
+      is_ai_generated: label,
+    });
+  }
+});
+
+test('create_media_container refuses the AI label on a carousel child', async () => {
+  // Meta returns an error for is_ai_generated on a carousel child; refusing it
+  // before the write gate points the caller at the album instead. An explicit
+  // isCarouselItem:false is no child and keeps the label.
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+  for (const label of [true, false]) {
+    await assert.rejects(
+      async () =>
+        tool('instagram_create_media_container').handler(
+          {
+            imageUrl: 'https://cdn/a.jpg',
+            isCarouselItem: true,
+            isAiGenerated: label,
+            apply: true,
+          },
+          makeCtx(req),
+        ),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'validation' &&
+        /isAiGenerated cannot be set on a carousel child/.test(e.message),
+    );
+  }
+  assert.equal(calls.length, 0);
+
+  await tool('instagram_create_media_container').handler(
+    { imageUrl: 'https://cdn/a.jpg', isCarouselItem: false, isAiGenerated: true, apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(calls[0]?.body, { image_url: 'https://cdn/a.jpg', is_ai_generated: true });
+});
+
+test('post_image labels a single image, and a carousel on its album only', async () => {
+  const single = publishingReq();
+  const preview = await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], isAiGenerated: true },
+    makeCtx(single.req),
+  );
+  assert.deepEqual(preview.structuredContent?.details, {
+    media_kind: 'image',
+    image_count: 1,
+    media_hosts: ['cdn'],
+    ai_generated: true,
+  });
+  await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], isAiGenerated: true, apply: true },
+    makeCtx(single.req),
+  );
+  assert.deepEqual(single.calls.find((c) => c.path === '/999/media')?.body, {
+    image_url: 'https://cdn/a.jpg',
+    is_ai_generated: true,
+  });
+
+  const album = publishingReq();
+  await runPostImage(
+    { imageUrls: ['https://cdn/1.jpg', 'https://cdn/2.jpg'], isAiGenerated: true, apply: true },
+    makeCtx(album.req),
+  );
+  assert.deepEqual(
+    album.calls.filter((c) => c.path === '/999/media').map((c) => c.body),
+    [
+      { image_url: 'https://cdn/1.jpg', is_carousel_item: true },
+      { image_url: 'https://cdn/2.jpg', is_carousel_item: true },
+      { media_type: 'CAROUSEL', children: 'C1,C2', is_ai_generated: true },
+    ],
+  );
+});
+
+test('post_reel and post_story preview and send the AI label', async () => {
+  const reel = publishingReq();
+  const reelPreview = await runPostReel(
+    { videoUrl: 'https://cdn/v.mp4', isAiGenerated: false },
+    makeCtx(reel.req),
+  );
+  assert.equal(
+    (reelPreview.structuredContent?.details as Record<string, unknown>).ai_generated,
+    false,
+  );
+  await runPostReel(
+    { videoUrl: 'https://cdn/v.mp4', isAiGenerated: false, apply: true },
+    makeCtx(reel.req),
+  );
+  assert.deepEqual(reel.calls.find((c) => c.path === '/999/media')?.body, {
+    media_type: 'REELS',
+    video_url: 'https://cdn/v.mp4',
+    is_ai_generated: false,
+  });
+
+  const story = publishingReq();
+  const storyPreview = await runPostStory(
+    { imageUrl: 'https://cdn/s.jpg', isAiGenerated: true },
+    makeCtx(story.req),
+  );
+  assert.deepEqual(storyPreview.structuredContent?.details, {
+    media_kind: 'story',
+    source: 'image',
+    media_hosts: ['cdn'],
+    ai_generated: true,
+  });
+  await runPostStory(
+    { imageUrl: 'https://cdn/s.jpg', isAiGenerated: true, apply: true },
+    makeCtx(story.req),
+  );
+  assert.deepEqual(story.calls.find((c) => c.path === '/999/media')?.body, {
+    media_type: 'STORIES',
+    image_url: 'https://cdn/s.jpg',
+    is_ai_generated: true,
+  });
+});
+
+test('a resume handed the AI label names it as ignored and does not preview it', async () => {
+  // The label belongs to the container a resume never creates.
+  const { req } = publishingReq();
+  for (const [kind, res] of [
+    ['image', await runPostImage({ resumeContainerId: 'R-1', isAiGenerated: true }, makeCtx(req))],
+    ['reel', await runPostReel({ resumeContainerId: 'R-2', isAiGenerated: true }, makeCtx(req))],
+    ['story', await runPostStory({ resumeContainerId: 'R-3', isAiGenerated: true }, makeCtx(req))],
+  ] as const) {
+    const details = res.structuredContent?.details as Record<string, unknown>;
+    assert.equal(details.ai_generated, undefined, kind);
+    assert.match(String((details.warnings as string[])[0]), /ignored.*: isAiGenerated\.$/, kind);
+  }
 });

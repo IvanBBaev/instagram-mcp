@@ -48,6 +48,15 @@ export const CONTAINER_MEDIA_TYPES = Object.freeze(['REELS', 'STORIES', 'CAROUSE
 export type ContainerMediaType = (typeof CONTAINER_MEDIA_TYPES)[number];
 export const containerMediaTypeSchema = z.enum(CONTAINER_MEDIA_TYPES);
 
+/**
+ * `trial_params.graduation_strategy` of a trial reel (REELS only, verified
+ * 2026-10-24): `MANUAL` graduates it from the Instagram app, `SS_PERFORMANCE`
+ * graduates it automatically when it performs well with non-followers.
+ */
+export const TRIAL_GRADUATION_STRATEGIES = Object.freeze(['MANUAL', 'SS_PERFORMANCE'] as const);
+export type TrialGraduationStrategy = (typeof TRIAL_GRADUATION_STRATEGIES)[number];
+export const trialGraduationSchema = z.enum(TRIAL_GRADUATION_STRATEGIES);
+
 // --- Zod specs (reused by tool input schemas) -------------------------------
 
 /**

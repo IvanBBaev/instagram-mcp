@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `instagram_post_reel` and `instagram_post_story` take `isAiGenerated` (sent as
   `is_ai_generated`, shown in the preview). A carousel carries it on the album
   only; a container marked `isCarouselItem` refuses it, as Instagram does.
+- Trial reels: `instagram_post_reel` and a `REELS` `instagram_create_media_container`
+  take `trialGraduation` — `MANUAL` (graduate it from the app) or
+  `SS_PERFORMANCE` (graduate automatically if it performs well), sent as
+  `trial_params`. Any other container kind refuses it; the preview names it.
 
 ### Changed
 

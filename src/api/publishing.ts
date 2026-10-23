@@ -22,7 +22,7 @@ import { InstagramError, isInstagramError } from '../core/types.js';
 import type { Clock } from '../core/clock.js';
 import { mapGraphError, quoteGraphId, quoteGraphText } from '../core/errors.js';
 import { describeWireValue } from '../core/time.js';
-import type { ContainerMediaType, UserTag } from './media-spec.js';
+import type { ContainerMediaType, TrialGraduationStrategy, UserTag } from './media-spec.js';
 
 // --- Graph body guard ---------------------------------------------------------
 
@@ -85,12 +85,15 @@ export interface CreateContainerParams {
   isCarouselItem?: boolean;
   /** Self-disclosed AI usage label (never on a carousel child). */
   isAiGenerated?: boolean;
+  /** Reels: publish as a trial reel graduated by this strategy. */
+  trialGraduation?: TrialGraduationStrategy;
 }
 
 /**
  * `POST /{ig-id}/media` — create a media container. Returns its id. A feed image
- * intentionally omits `media_type`. Array-valued fields are serialized the way
- * Graph expects: `children` as a comma-separated list, `user_tags` as JSON.
+ * intentionally omits `media_type`. Structured fields are serialized the way
+ * Graph expects: `children` as a comma-separated list, `user_tags` and
+ * `trial_params` as JSON.
  */
 export async function createMediaContainer(
   req: IgRequestFn,
@@ -118,6 +121,8 @@ export async function createMediaContainer(
   if (params.isAiGenerated !== undefined) p.is_ai_generated = params.isAiGenerated;
   if (params.children !== undefined) p.children = params.children.join(',');
   if (params.userTags !== undefined) p.user_tags = JSON.stringify(params.userTags);
+  if (params.trialGraduation !== undefined)
+    p.trial_params = JSON.stringify({ graduation_strategy: params.trialGraduation });
 
   const r = graphBody(
     await req<unknown>({

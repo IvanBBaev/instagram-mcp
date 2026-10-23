@@ -2343,6 +2343,7 @@ test('the declared input and output vocabularies are exactly these fields', () =
     'shareToFeed',
     'isCarouselItem',
     'isAiGenerated',
+    'trialGraduation',
     'apply',
   ]);
   assert.deepEqual(Object.keys(tool('instagram_post_image').input), [
@@ -4317,6 +4318,12 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           description:
             "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
         },
+        trialGraduation: {
+          type: 'string',
+          enum: ['MANUAL', 'SS_PERFORMANCE'],
+          description:
+            'Reels only: publish as a trial reel, shown to non-followers first (sent as trial_params). MANUAL graduates it to followers from the Instagram app; SS_PERFORMANCE graduates it automatically if it performs well. Omit for a regular reel.',
+        },
         apply: {
           type: 'boolean',
           description:
@@ -4552,6 +4559,12 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           type: 'boolean',
           description:
             "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's default; not accepted on a carousel child.",
+        },
+        trialGraduation: {
+          type: 'string',
+          enum: ['MANUAL', 'SS_PERFORMANCE'],
+          description:
+            'Reels only: publish as a trial reel, shown to non-followers first (sent as trial_params). MANUAL graduates it to followers from the Instagram app; SS_PERFORMANCE graduates it automatically if it performs well. Omit for a regular reel.',
         },
         resumeContainerId: {
           type: 'string',
@@ -5281,4 +5294,107 @@ test('a resume handed the AI label names it as ignored and does not preview it',
     assert.equal(details.ai_generated, undefined, kind);
     assert.match(String((details.warnings as string[])[0]), /ignored.*: isAiGenerated\.$/, kind);
   }
+});
+
+// --- trial reels --------------------------------------------------------------
+
+test('create_media_container previews a trial reel and sends trial_params as JSON', async () => {
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+  const preview = await tool('instagram_create_media_container').handler(
+    { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4', trialGraduation: 'MANUAL' },
+    makeCtx(req),
+  );
+  assert.deepEqual(preview.structuredContent?.details, {
+    media_type: 'REELS',
+    trial_graduation: 'MANUAL',
+  });
+  assert.equal(calls.length, 0);
+
+  await tool('instagram_create_media_container').handler(
+    { mediaType: 'REELS', videoUrl: 'https://cdn/v.mp4', trialGraduation: 'MANUAL', apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(calls[0]?.body, {
+    media_type: 'REELS',
+    video_url: 'https://cdn/v.mp4',
+    trial_params: '{"graduation_strategy":"MANUAL"}',
+  });
+});
+
+test('create_media_container refuses a trial graduation on anything but a REELS container', async () => {
+  // Meta: "The media_type must be REELS if this parameter is included".
+  const { req, calls } = fakeReq(() => ({ id: 'C1' }));
+  const cases: Record<string, unknown>[] = [
+    { imageUrl: 'https://cdn/a.jpg' },
+    { mediaType: 'STORIES', videoUrl: 'https://cdn/v.mp4' },
+    { mediaType: 'CAROUSEL', children: ['c1', 'c2'] },
+  ];
+  for (const args of cases) {
+    await assert.rejects(
+      async () =>
+        tool('instagram_create_media_container').handler(
+          { ...args, trialGraduation: 'SS_PERFORMANCE', apply: true },
+          makeCtx(req),
+        ),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'validation' &&
+        /trialGraduation applies to a REELS container only/.test(e.message),
+      JSON.stringify(args),
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('a trial graduation is MANUAL or SS_PERFORMANCE and nothing else', () => {
+  for (const name of ['instagram_create_media_container', 'instagram_post_reel']) {
+    const input = inputOf(name);
+    for (const ok of ['MANUAL', 'SS_PERFORMANCE']) {
+      assert.equal(input.safeParse({ trialGraduation: ok }).success, true, `${name} ${ok}`);
+    }
+    for (const bad of ['manual', 'AUTO', '']) {
+      assert.equal(input.safeParse({ trialGraduation: bad }).success, false, `${name} ${bad}`);
+    }
+  }
+});
+
+test('post_reel publishes a trial reel and says so in the preview', async () => {
+  const { req, calls } = publishingReq();
+  const preview = await runPostReel(
+    { videoUrl: 'https://cdn/v.mp4', trialGraduation: 'SS_PERFORMANCE' },
+    makeCtx(req),
+  );
+  assert.equal(
+    preview.structuredContent?.summary,
+    'Create a trial reel container and publish it to non-followers',
+  );
+  assert.equal(
+    (preview.structuredContent?.details as Record<string, unknown>).trial_graduation,
+    'SS_PERFORMANCE',
+  );
+  assert.equal(calls.length, 0);
+
+  await runPostReel(
+    { videoUrl: 'https://cdn/v.mp4', trialGraduation: 'SS_PERFORMANCE', apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(calls.find((c) => c.path === '/999/media')?.body, {
+    media_type: 'REELS',
+    video_url: 'https://cdn/v.mp4',
+    trial_params: '{"graduation_strategy":"SS_PERFORMANCE"}',
+  });
+});
+
+test('a resumed reel handed a trial graduation names it as ignored', async () => {
+  // A resume publishes a container that already exists: whether it is a trial
+  // reel was decided when it was created and cannot change now.
+  const { req } = publishingReq();
+  const res = await runPostReel(
+    { resumeContainerId: 'R-1', trialGraduation: 'MANUAL' },
+    makeCtx(req),
+  );
+  const details = res.structuredContent?.details as Record<string, unknown>;
+  assert.equal(details.trial_graduation, undefined);
+  assert.match(String((details.warnings as string[])[0]), /ignored.*: trialGraduation\.$/);
+  assert.equal(res.structuredContent?.summary, 'Resume publishing container R-1');
 });

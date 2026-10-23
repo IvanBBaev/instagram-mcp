@@ -413,6 +413,7 @@ test('createMediaContainer sends every supported field on one request', async ()
     isCarouselItem: true,
     // false, not true: an explicit "not AI-generated" must reach Graph too.
     isAiGenerated: false,
+    trialGraduation: 'SS_PERFORMANCE',
   });
 
   assert.deepEqual(calls, [
@@ -433,6 +434,7 @@ test('createMediaContainer sends every supported field on one request', async ()
         is_ai_generated: false,
         children: 'c1,c2',
         user_tags: JSON.stringify(tags),
+        trial_params: '{"graduation_strategy":"SS_PERFORMANCE"}',
       },
     },
   ]);

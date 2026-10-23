@@ -73,6 +73,7 @@ import {
   containerMediaTypeSchema,
   httpsUrl,
   imageUrlFormatWarning,
+  trialGraduationSchema,
   userTagSchema,
   MAX_USER_TAGS,
   CAROUSEL_MAX,
@@ -144,6 +145,14 @@ const aiGeneratedField = z
   .describe(
     "Label the post as made or edited with AI (sent as is_ai_generated). Omit to leave Instagram's " +
       'default; not accepted on a carousel child.',
+  );
+
+const trialGraduationField = trialGraduationSchema
+  .optional()
+  .describe(
+    'Reels only: publish as a trial reel, shown to non-followers first (sent as trial_params). ' +
+      'MANUAL graduates it to followers from the Instagram app; SS_PERFORMANCE graduates it ' +
+      'automatically if it performs well. Omit for a regular reel.',
   );
 
 const resumeField = graphObjectId()
@@ -492,6 +501,7 @@ const createContainerInput = {
     .optional()
     .describe('Mark this container as a carousel child (when assembling an album manually).'),
   isAiGenerated: aiGeneratedField,
+  trialGraduation: trialGraduationField,
   apply: applyField,
 };
 
@@ -554,6 +564,13 @@ const createMediaContainerTool = defineTool({
         { kind: 'validation' },
       );
     }
+    if (args.trialGraduation !== undefined && args.mediaType !== 'REELS') {
+      throw new InstagramError(
+        'trialGraduation applies to a REELS container only: Instagram accepts trial_params with ' +
+          'media_type REELS and nothing else.',
+        { kind: 'validation' },
+      );
+    }
 
     // EVERY still-image URL this container can carry is hinted, in argument
     // order: `imageUrl` (feed image or carousel child) and `coverUrl` (a reel
@@ -582,6 +599,7 @@ const createMediaContainerTool = defineTool({
     if (args.children !== undefined) details.children = args.children.length;
     if (args.altText !== undefined) details.alt_text = previewExcerpt(args.altText);
     if (args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
+    if (args.trialGraduation !== undefined) details.trial_graduation = args.trialGraduation;
     if (warnings.length > 0) details.warnings = warnings;
 
     const intent: WriteIntent = {
@@ -606,6 +624,7 @@ const createMediaContainerTool = defineTool({
         shareToFeed: args.shareToFeed,
         isCarouselItem: args.isCarouselItem,
         isAiGenerated: args.isAiGenerated,
+        trialGraduation: args.trialGraduation,
       });
       const containerId = acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
       const payload: Record<string, unknown> = { status: 'created', container_id: containerId };
@@ -926,6 +945,7 @@ const postReelInput = {
   shareToFeed: z.boolean().optional().describe('Also show the reel in the main feed.'),
   locationId: locationField,
   isAiGenerated: aiGeneratedField,
+  trialGraduation: trialGraduationField,
   resumeContainerId: resumeField,
   apply: applyField,
 };
@@ -977,6 +997,7 @@ export async function runPostReel(
       shareToFeed: args.shareToFeed,
       locationId: args.locationId,
       isAiGenerated: args.isAiGenerated,
+      trialGraduation: args.trialGraduation,
     });
     return acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
   };
@@ -997,6 +1018,8 @@ export async function runPostReel(
       };
   if (caption !== undefined) details.caption = caption;
   if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
+  if (!resuming && args.trialGraduation !== undefined)
+    details.trial_graduation = args.trialGraduation;
   // Same `details.warnings` channel the other publishing tools use — a list even
   // for one entry, so a caller reads warnings the same way everywhere, and
   // absent entirely when there is nothing to say (an always-present empty list
@@ -1007,7 +1030,9 @@ export async function runPostReel(
     action: 'post_reel',
     summary: resuming
       ? `Resume publishing container ${args.resumeContainerId}`
-      : 'Create a reel container and publish it',
+      : args.trialGraduation !== undefined
+        ? 'Create a trial reel container and publish it to non-followers'
+        : 'Create a reel container and publish it',
     details,
   };
 

@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON `false` are reported as declined instead of done, and a `null` answer no
   longer fails with a raw `TypeError` (CC-COM-21).
 
+### Security
+
+- `zod` goes from `^4.2.0` (4.6.5) to `^4.6.7` (GHSA-mrhx-c7xc-m3w5, high:
+  validating an oversized constrained collection could exhaust memory).
+
 ## [0.8.0] — 2026-10-13
 
 ### Added

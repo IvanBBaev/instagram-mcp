@@ -140,6 +140,8 @@ function hostileResponse(opts: IgRequestOptions): unknown {
     media: { ...hostileRecord(), data: [hostileRecord()] },
     children: { data: [hostileRecord()] },
     business_discovery: { ...hostileRecord(), media: { data: [hostileRecord()] } },
+    mentioned_media: hostileRecord(),
+    mentioned_comment: { ...hostileRecord(), media: hostileRecord() },
   };
 }
 

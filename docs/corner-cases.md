@@ -32,7 +32,7 @@ advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 69 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1936 citation sites across the
+Nothing downstream resolves a case by section number; 1938 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 

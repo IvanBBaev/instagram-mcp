@@ -116,7 +116,9 @@ detail ends `…"` followed by its full length (CC-DATA-95).
 | `instagram_unhide_comment` | I | `POST /{comment-id}?hide=false` |
 | `instagram_delete_comment` | **D** | `DELETE /{comment-id}` — irreversible; double-gated (apply + `IG_ALLOW_DESTRUCTIVE`) |
 | `instagram_set_comments_enabled` | I | Toggle commenting on a media object: `POST /{media-id}?comment_enabled=true\|false`. Tagged `comments`, so the `comments` package controls reach it (CC-PROC-9) |
-| `instagram_list_tagged_media` | RO | Media the account is **tagged in**: `GET /{ig-id}/tags` (both auth paths). Note *[verified 2026-07-21]*: tags ≠ @mentions — pull-based @mention lookup (`mentioned_media`/`mentioned_comment`) is **Path B only**; Path A can only *reply* to mentions (`POST /{ig-id}/mentions`); story @mentions unsupported on Path A |
+| `instagram_list_tagged_media` | RO | Media the account is **tagged in**: `GET /{ig-id}/tags` (both auth paths). Note *[verified 2026-07-21]*: tags ≠ @mentions — @mention lookup by id is the two tools below, **Path B only**; Path A can only *reply* to mentions (`POST /{ig-id}/mentions`); story @mentions unsupported on Path A |
+| `instagram_get_mentioned_media` | RO | **Path B only.** A media whose caption @mentions the account, by media id: `GET /{ig-id}?fields=mentioned_media.media_id({id}){id,caption,media_type,media_url,timestamp,username,like_count,comments_count}`. No listing exists — the id comes from a mention webhook or a link. Story mentions unsupported. Caption and username fenced |
+| `instagram_get_mentioned_comment` | RO | **Path B only.** A comment that @mentions the account, by comment id: `GET /{ig-id}?fields=mentioned_comment.comment_id({id}){id,text,timestamp,like_count,media{id}}`. Meta answers with an error when comments are off on the media. Text fenced |
 
 ## Package `insights`
 
@@ -246,7 +248,7 @@ it; the v2 client skips that check, but v1 clients are still in the field
 
 ## Tool-count budget
 
-Surface: **30 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies` added since) — deliberately compact; every tool
+Surface: **32 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media` and `instagram_get_mentioned_comment` added since) — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

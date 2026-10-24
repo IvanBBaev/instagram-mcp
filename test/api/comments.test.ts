@@ -16,6 +16,8 @@ import {
   createComment,
   deleteComment,
   getComment,
+  getMentionedComment,
+  getMentionedMedia,
   listCommentReplies,
   listComments,
   listTaggedMedia,
@@ -915,6 +917,14 @@ test('each read sends exactly the parameters it declares — nothing rides along
     limit: undefined,
     after: undefined,
   });
+
+  const { req: r5, calls: c5 } = fakeReq(() => ({ mentioned_media: { id: 'M1' } }));
+  await getMentionedMedia(r5, { igId: '999', mediaId: 'M1' });
+  assert.deepEqual(Object.keys(c5[0]?.params ?? {}), ['fields']);
+
+  const { req: r6, calls: c6 } = fakeReq(() => ({ mentioned_comment: { id: 'C1' } }));
+  await getMentionedComment(r6, { igId: '999', commentId: 'C1' });
+  assert.deepEqual(Object.keys(c6[0]?.params ?? {}), ['fields']);
 });
 
 // --- reply envelope: the third shape Graph can send ------------------------
@@ -1040,4 +1050,122 @@ test('listComments reads the example fixtures by `paging.next`: cursors without 
   const page = await listComments(fakeReq(() => more).req, { mediaId: 'M1', maxItems: 200 });
   assert.equal(page.truncated, false);
   assert.equal(page.after, 'SYNTHETIC_OPAQUE_2');
+});
+
+// --- @mention lookups (Path B) ---------------------------------------------
+
+/**
+ * The @mention lookups are the module's only Path-B calls: they pin the
+ * Facebook Graph host, as the discovery calls do, because `mentioned_media` and
+ * `mentioned_comment` are fields of the IG user node that Instagram Login's
+ * graph.instagram.com does not serve. Every other transport invariant holds.
+ */
+function assertMentionCall(opts: IgRequestOptions | undefined, path: string): void {
+  assert.ok(opts, 'expected a request to have been issued');
+  assert.equal(opts.method, 'GET');
+  assert.equal(opts.path, path);
+  assert.equal(opts.host, 'graph.facebook.com', 'a mention lookup is Path B only');
+  assert.equal(opts.idempotent, undefined, 'idempotency must be derived from the method');
+  assert.equal(opts.body, undefined, 'a read sends no request body');
+  assert.equal(opts.signal, undefined, 'the abort deadline belongs to the transport');
+}
+
+test('getMentionedMedia expands mentioned_media off the account node and returns the nested object', async () => {
+  const { req, calls } = fakeReq(() => ({
+    id: '999',
+    mentioned_media: { id: 'M1', caption: 'hi @us', like_count: 3 },
+  }));
+
+  const media = await getMentionedMedia(req, { igId: '999', mediaId: 'M1' });
+
+  assert.equal(calls.length, 1);
+  assertMentionCall(calls[0], '/999');
+  assert.deepEqual(calls[0]?.params, {
+    fields:
+      'mentioned_media.media_id(M1){id,caption,media_type,media_url,timestamp,username,' +
+      'like_count,comments_count}',
+  });
+  assert.deepEqual(media, { id: 'M1', caption: 'hi @us', like_count: 3 });
+});
+
+test('getMentionedComment expands mentioned_comment off the account node, with the media id', async () => {
+  const { req, calls } = fakeReq(() => ({
+    id: '999',
+    mentioned_comment: { id: 'C1', text: '@us look', media: { id: 'M1' } },
+  }));
+
+  const comment = await getMentionedComment(req, { igId: '999', commentId: 'C1' });
+
+  assert.equal(calls.length, 1);
+  assertMentionCall(calls[0], '/999');
+  assert.deepEqual(calls[0]?.params, {
+    fields: 'mentioned_comment.comment_id(C1){id,text,timestamp,like_count,media{id}}',
+  });
+  assert.deepEqual(comment, { id: 'C1', text: '@us look', media: { id: 'M1' } });
+});
+
+test('the mention lookups encode the account id into the path', async () => {
+  const { req, calls } = fakeReq(() => ({ mentioned_media: { id: 'M1' } }));
+  await getMentionedMedia(req, { igId: 'me', mediaId: 'M1' });
+  assert.equal(calls[0]?.path, '/me');
+
+  const { req: r2, calls: c2 } = fakeReq(() => ({ mentioned_comment: { id: 'C1' } }));
+  await getMentionedComment(r2, { igId: 'a/b', commentId: 'C1' });
+  assert.equal(c2[0]?.path, '/a%2Fb');
+});
+
+test('an id that could rewrite the field expression is refused before any request', async () => {
+  // Graph field expressions have no escaping: `M1){id},access_token{` would end
+  // the modifier and splice new fields into the call.
+  for (const bad of ['M1){id}', 'M1,x', '', 'a'.repeat(65), 'M 1']) {
+    const { req, calls } = fakeReq(() => ({}));
+    await assert.rejects(
+      getMentionedMedia(req, { igId: '999', mediaId: bad }),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'validation' &&
+        e.message === 'Invalid media id: expected 1-64 characters, letters/digits/"_"/"-" only.',
+      `media id ${JSON.stringify(bad)}`,
+    );
+    await assert.rejects(
+      getMentionedComment(req, { igId: '999', commentId: bad }),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'validation' &&
+        e.message === 'Invalid comment id: expected 1-64 characters, letters/digits/"_"/"-" only.',
+      `comment id ${JSON.stringify(bad)}`,
+    );
+    assert.equal(calls.length, 0, 'nothing reaches the transport');
+  }
+});
+
+test('an answer without the nested mention object is an upstream error, not an empty mention', async () => {
+  const shapes: unknown[] = [
+    {},
+    { id: '999' },
+    { mentioned_media: null, mentioned_comment: null },
+    { mentioned_media: 'x', mentioned_comment: 7 },
+    { mentioned_media: [], mentioned_comment: [] },
+    null,
+    'text',
+  ];
+  for (const shape of shapes) {
+    const { req } = fakeReq(() => shape);
+    await assert.rejects(
+      getMentionedMedia(req, { igId: '999', mediaId: 'M1' }),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'upstream' &&
+        e.message === 'Instagram returned no mentioned media for this id. Retry later.',
+      `media: ${JSON.stringify(shape)}`,
+    );
+    await assert.rejects(
+      getMentionedComment(req, { igId: '999', commentId: 'C1' }),
+      (e: unknown) =>
+        e instanceof InstagramError &&
+        e.kind === 'upstream' &&
+        e.message === 'Instagram returned no mentioned comment for this id. Retry later.',
+      `comment: ${JSON.stringify(shape)}`,
+    );
+  }
 });

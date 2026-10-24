@@ -196,6 +196,16 @@ const CASES: LogCase[] = [
     expect: { limit: undefined, fetchAll: true, hasCursor: true },
   },
   {
+    name: 'instagram_get_mentioned_media',
+    args: { mediaId: 'M1' },
+    expect: { mediaId: 'M1' },
+  },
+  {
+    name: 'instagram_get_mentioned_comment',
+    args: { commentId: 'C1' },
+    expect: { commentId: 'C1' },
+  },
+  {
     name: 'instagram_reply_to_comment',
     args: { commentId: 'C1', message: CANARIES.message, apply: true },
     expect: { commentId: 'C1', apply: true },

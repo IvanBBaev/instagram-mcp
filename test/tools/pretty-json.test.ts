@@ -104,6 +104,10 @@ const RESPONSE = {
     followers_count: 2,
     media: { data: [{ id: 'm1' }] },
   },
+  // The two @mention lookups read their object out of a nested field and
+  // refuse an answer without it.
+  mentioned_media: { id: 'MM1', caption: 'c' },
+  mentioned_comment: { id: 'MC1', text: 't' },
 };
 
 const req = (() => Promise.resolve(RESPONSE)) as unknown as IgRequestFn;

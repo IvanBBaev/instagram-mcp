@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-30-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-32-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -47,7 +47,7 @@ _Built and maintained in my own time — a
 
 ## What it does
 
-The server exposes an Instagram professional account through **30 MCP tools**
+The server exposes an Instagram professional account through **32 MCP tools**
 grouped into six packages:
 
 - **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
@@ -158,12 +158,12 @@ and how it is signed:
 | Path | `IG_AUTH_MODE` | Host | Also needs | Notes |
 | ---- | -------------- | ---- | ---------- | ----- |
 | **A — Instagram Login** | `ig-login` | `graph.instagram.com` | — | `IG_ACCESS_TOKEN` holds a long-lived IG-login token. `appsecret_proof` is **not** supported and never sent. The simplest path. |
-| **B — Facebook Login** | `fb-login` | `graph.facebook.com` | `IG_APP_ID` + `IG_APP_SECRET` | `IG_ACCESS_TOKEN` holds a Page / system-user token; requests carry an `appsecret_proof` HMAC. **Required for the discovery tools** (hashtag search, business discovery). |
+| **B — Facebook Login** | `fb-login` | `graph.facebook.com` | `IG_APP_ID` + `IG_APP_SECRET` | `IG_ACCESS_TOKEN` holds a Page / system-user token; requests carry an `appsecret_proof` HMAC. **Required for the discovery tools** (hashtag search, business discovery) and the @mention lookups. |
 
 With `IG_AUTH_MODE` unset the path is inferred: `fb-login` when both
 `IG_APP_ID` and `IG_APP_SECRET` are set, otherwise `ig-login`. Set it explicitly
-to override (`IG_AUTH_PATH` is accepted as an alias). Discovery tools are
-capability-filtered to Path B, so on Path A they are not registered at all.
+to override (`IG_AUTH_PATH` is accepted as an alias). Discovery tools and the
+@mention lookups are capability-filtered to Path B, so on Path A they are not registered at all.
 
 ### `login` — obtain a long-lived token
 
@@ -236,10 +236,10 @@ explicit comma list of packages:
 
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
-| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 27 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 17 |
-| `publisher` | `account, media, publishing, comments` | publish and moderate | 23 |
-| `all` | every package | the full surface | 30 |
+| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 29 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 19 |
+| `publisher` | `account, media, publishing, comments` | publish and moderate | 25 |
+| `all` | every package | the full surface | 32 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
@@ -291,6 +291,8 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_create_comment` | comments | both | Write | Post a new top-level comment on a media object (POST /{media-id}/comments). |
 | `instagram_delete_comment` | comments | both | Write | Permanently delete a comment (DELETE /{comment-id}). |
 | `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies (repliesTruncated=true when Instagram returned only the first page of them; instagram_list_comment_replies reads the rest). |
+| `instagram_get_mentioned_comment` | comments | fb-login | Read | Fetch a comment that @mentions the operated account, by its comment id (GET /{ig-id}?fields=mentioned_comment.comment_id(&lt;id&gt;){…}), with the id of the media it was made on. |
+| `instagram_get_mentioned_media` | comments | fb-login | Read | Fetch a media object whose caption @mentions the operated account, by its media id (GET /{ig-id}?fields=mentioned_media.media_id(&lt;id&gt;){…}). |
 | `instagram_hide_comment` | comments | both | Write | Hide a comment (POST /{comment-id}?hide=true) — reversible moderation, preferred over delete. |
 | `instagram_list_comment_replies` | comments | both | Read | List the replies to one comment, cursor-paginated, in the order Instagram returns them. |
 | `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies; instagram_list_comment_replies reads the rest). |

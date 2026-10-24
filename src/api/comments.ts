@@ -7,7 +7,8 @@
  *
  * Reads: list a media's comments (cursor-paginated, replies expanded inline),
  * page through one comment's replies, fetch a single comment with parent/media
- * context, and list media the account is tagged in. Writes: reply, create, hide/unhide, delete, and toggle whether
+ * context, list media the account is tagged in, and look up one @mention of the
+ * account (Path B only). Writes: reply, create, hide/unhide, delete, and toggle whether
  * a media accepts comments. The write GATE (apply/destructive resolution and
  * journaling) is a Layer-2 concern (`mcp/write-mode.ts`) — this layer only
  * issues the Graph call.
@@ -17,6 +18,7 @@
  * but `id` is optional), CC-DATA-4 (`fetchAll` cap / off-by-one). A deleted
  * comment / media surfaces as a propagated InstagramError (CC-DATA-5).
  */
+import { GRAPH_ID_PATTERN } from '../core/errors.js';
 import { InstagramError, type IgRequestFn } from '../core/types.js';
 import { fetchPagedEdge, type PagedResult, type PageParams } from './media.js';
 
@@ -40,6 +42,17 @@ const COMMENT_DETAIL_FIELDS =
 
 /** Fields requested for each media object returned by the `/tags` edge. */
 const TAGGED_MEDIA_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
+
+/**
+ * Fields requested for media whose caption @mentions the account. Meta serves
+ * no `permalink` here, and `owner` only on the account's own media, so neither
+ * is asked; `username` names the author when it is someone else.
+ */
+const MENTIONED_MEDIA_FIELDS =
+  'id,caption,media_type,media_url,timestamp,username,like_count,comments_count';
+
+/** Fields requested for a comment that @mentions the account; `media{id}` is its post. */
+const MENTIONED_COMMENT_FIELDS = 'id,text,timestamp,like_count,media{id}';
 
 // --- Domain shapes ---------------------------------------------------------
 
@@ -86,6 +99,31 @@ export interface TaggedMedia {
   permalink?: string;
   timestamp?: string;
   username?: string;
+}
+
+/**
+ * A media object whose caption @mentions the account. `caption`/`username` are
+ * untrusted third-party text; `media_type` is an open enum (CC-DATA-6).
+ */
+export interface MentionedMedia {
+  id: string;
+  caption?: string;
+  media_type?: string;
+  media_url?: string;
+  timestamp?: string;
+  username?: string;
+  like_count?: number;
+  comments_count?: number;
+}
+
+/** A comment that @mentions the account. `text` is untrusted third-party text. */
+export interface MentionedComment {
+  id: string;
+  text?: string;
+  timestamp?: string;
+  like_count?: number;
+  /** The media the comment was made on. */
+  media?: { id: string };
 }
 
 export type PagedComments = PagedResult<Comment>;
@@ -312,6 +350,94 @@ export async function listTaggedMedia(
     params,
     (m) => m,
   );
+}
+
+export interface MentionLookupParams {
+  /** Operated IG account id — the node the `mentioned_*` field hangs off. */
+  igId: string;
+}
+
+/**
+ * Refuse an object id that would rewrite the field expression it is placed in.
+ *
+ * The id goes inside `mentioned_media.media_id(<id>)`, a Graph field
+ * expression with no escaping mechanism, so percent-encoding is no defence
+ * there: a `)`, `{` or `,` would ask Graph for something else. The tool input
+ * carries the same pattern; this is defence in depth, and the message does not
+ * echo the value.
+ */
+function assertFieldExpressionId(id: string, what: string): void {
+  if (!GRAPH_ID_PATTERN.test(id)) {
+    throw new InstagramError(
+      `Invalid ${what}: expected 1-64 characters, letters/digits/"_"/"-" only.`,
+      { kind: 'validation' },
+    );
+  }
+}
+
+/**
+ * The object a `mentioned_*` field expansion answered with, or a refusal.
+ *
+ * The answer is the account node with the looked-up object nested under the
+ * field. A 200 without it — or a body that is no object at all — names no
+ * mention, and an empty result would read as one that discloses nothing.
+ */
+function mentionedObject(wire: unknown, field: string, what: string): Record<string, unknown> {
+  const nested: unknown =
+    typeof wire === 'object' && wire !== null
+      ? (wire as Record<string, unknown>)[field]
+      : undefined;
+  if (typeof nested !== 'object' || nested === null || Array.isArray(nested)) {
+    throw new InstagramError(`Instagram returned no ${what} for this id. Retry later.`, {
+      kind: 'upstream',
+    });
+  }
+  return nested as Record<string, unknown>;
+}
+
+/**
+ * Look up the media whose caption @mentions the account
+ * (`GET /{ig-id}?fields=mentioned_media.media_id(<id>){…}`). Path B only.
+ * Instagram offers no listing of mentions: the id comes from a mention webhook
+ * or a link. Story mentions are not supported by Meta.
+ */
+export async function getMentionedMedia(
+  req: IgRequestFn,
+  params: MentionLookupParams & { mediaId: string },
+): Promise<MentionedMedia> {
+  assertFieldExpressionId(params.mediaId, 'media id');
+  const wire = await req<unknown>({
+    method: 'GET',
+    path: `/${encodeURIComponent(params.igId)}`,
+    params: { fields: `mentioned_media.media_id(${params.mediaId}){${MENTIONED_MEDIA_FIELDS}}` },
+    host: 'graph.facebook.com',
+  });
+  return mentionedObject(wire, 'mentioned_media', 'mentioned media') as unknown as MentionedMedia;
+}
+
+/**
+ * Look up a comment that @mentions the account
+ * (`GET /{ig-id}?fields=mentioned_comment.comment_id(<id>){…}`). Path B only.
+ * Meta answers with an error when comments are off on the media it sits on.
+ */
+export async function getMentionedComment(
+  req: IgRequestFn,
+  params: MentionLookupParams & { commentId: string },
+): Promise<MentionedComment> {
+  assertFieldExpressionId(params.commentId, 'comment id');
+  const wire = await req<unknown>({
+    method: 'GET',
+    path: `/${encodeURIComponent(params.igId)}`,
+    params: {
+      fields: `mentioned_comment.comment_id(${params.commentId}){${MENTIONED_COMMENT_FIELDS}}`,
+    },
+    host: 'graph.facebook.com',
+  });
+  return mentionedObject(
+    wire,
+    'mentioned_comment',
+    'mentioned comment',
+  ) as unknown as MentionedComment;
 }
 
 // --- Writes ----------------------------------------------------------------

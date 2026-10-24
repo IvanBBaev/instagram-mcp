@@ -117,6 +117,14 @@
       "description": "List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated."
     },
     {
+      "name": "instagram_get_mentioned_media",
+      "description": "Fetch a media object whose caption @mentions the operated account, by its media id (GET /{ig-id}?fields=mentioned_media.media_id(<id>){…})."
+    },
+    {
+      "name": "instagram_get_mentioned_comment",
+      "description": "Fetch a comment that @mentions the operated account, by its comment id (GET /{ig-id}?fields=mentioned_comment.comment_id(<id>){…}), with the id of the media it was made on."
+    },
+    {
       "name": "instagram_reply_to_comment",
       "description": "Post a threaded reply under an existing comment (POST /{comment-id}/replies)."
     },

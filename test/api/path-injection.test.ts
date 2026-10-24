@@ -45,6 +45,8 @@ import {
   createComment,
   deleteComment,
   getComment,
+  getMentionedComment,
+  getMentionedMedia,
   listCommentReplies,
   listComments,
   listTaggedMedia,
@@ -106,7 +108,15 @@ const settings: Settings = { ...DEFAULT_SETTINGS };
  * A real request seam over a recording transport. `body` is whatever Graph
  * should answer; every api function under test only needs a well-formed shell.
  */
-function harness(body: unknown = { id: '1', data: [] }): {
+function harness(
+  body: unknown = {
+    id: '1',
+    data: [],
+    // The @mention lookups refuse an answer without their nested object.
+    mentioned_media: { id: '1' },
+    mentioned_comment: { id: '1' },
+  },
+): {
   req: IgRequestFn;
   urls: string[];
   bodies: (string | undefined)[];
@@ -200,6 +210,16 @@ const PATH_CALLS: {
     source: 'comments.ts:listTaggedMedia',
     label: 'listTaggedMedia(igId)',
     call: (req, id) => listTaggedMedia(req, { igId: id, maxItems: 10 }),
+  },
+  {
+    source: 'comments.ts:getMentionedMedia',
+    label: 'getMentionedMedia(igId)',
+    call: (req, id) => getMentionedMedia(req, { igId: id, mediaId: '17895695668004550' }),
+  },
+  {
+    source: 'comments.ts:getMentionedComment',
+    label: 'getMentionedComment(igId)',
+    call: (req, id) => getMentionedComment(req, { igId: id, commentId: '17895695668004550' }),
   },
   {
     source: 'comments.ts:replyToComment',

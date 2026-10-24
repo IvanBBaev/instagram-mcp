@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replies (`GET /{comment-id}/replies`, `limit`/`after`/`fetchAll`), so a thread
   marked `repliesTruncated: true` (CC-COM-15) can be read past its inline first
   page. Text and usernames are fenced; id-less replies are counted, not failed.
+- Mentions: `instagram_get_mentioned_media` and `instagram_get_mentioned_comment`
+  look up a post or comment that @mentions the account, by its id (the
+  `mentioned_media` / `mentioned_comment` fields; Instagram has no listing, so
+  the id comes from a mention webhook or a link). Path B (`fb-login`) only;
+  story mentions are not supported. Captions, usernames and comment text are
+  fenced.
 
 ### Changed
 

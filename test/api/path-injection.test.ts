@@ -45,6 +45,7 @@ import {
   createComment,
   deleteComment,
   getComment,
+  listCommentReplies,
   listComments,
   listTaggedMedia,
   replyToComment,
@@ -184,6 +185,11 @@ const PATH_CALLS: {
     source: 'comments.ts:listComments',
     label: 'listComments(mediaId)',
     call: (req, id) => listComments(req, { mediaId: id, maxItems: 10 }),
+  },
+  {
+    source: 'comments.ts:listCommentReplies',
+    label: 'listCommentReplies(commentId)',
+    call: (req, id) => listCommentReplies(req, { commentId: id, maxItems: 10 }),
   },
   {
     source: 'comments.ts:getComment',

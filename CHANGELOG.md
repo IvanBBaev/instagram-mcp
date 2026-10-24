@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   take `trialGraduation` — `MANUAL` (graduate it from the app) or
   `SS_PERFORMANCE` (graduate automatically if it performs well), sent as
   `trial_params`. Any other container kind refuses it; the preview names it.
+- Comment replies: `instagram_list_comment_replies` pages through one comment's
+  replies (`GET /{comment-id}/replies`, `limit`/`after`/`fetchAll`), so a thread
+  marked `repliesTruncated: true` (CC-COM-15) can be read past its inline first
+  page. Text and usernames are fenced; id-less replies are counted, not failed.
 
 ### Changed
 

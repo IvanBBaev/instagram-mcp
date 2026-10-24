@@ -71,8 +71,9 @@ const V1_SURFACE: readonly string[] = [
   'instagram_post_image',
   'instagram_post_reel',
   'instagram_post_story',
-  // comments (9, the comment switch included since CC-PROC-9)
+  // comments (10, the comment switch included since CC-PROC-9)
   'instagram_list_comments',
+  'instagram_list_comment_replies',
   'instagram_get_comment',
   'instagram_list_tagged_media',
   'instagram_reply_to_comment',
@@ -99,7 +100,7 @@ const V1_PACKAGE_TAGS: readonly string[] = [
   ...Array<string>(3).fill('media'),
   ...Array<string>(4).fill('insights'),
   ...Array<string>(7).fill('publishing'),
-  ...Array<string>(9).fill('comments'),
+  ...Array<string>(10).fill('comments'),
   ...Array<string>(3).fill('discovery'),
 ];
 
@@ -119,7 +120,7 @@ test('allTools is exactly the v1 surface, in registration order', () => {
     [...V1_SURFACE],
     'the exposed tool surface changed — update V1_SURFACE only if the change is intended',
   );
-  assert.equal(allTools.length, 29, 'the v1 surface is 29 tools');
+  assert.equal(allTools.length, 30, 'the v1 surface is 30 tools');
 });
 
 test('allTools carries the pinned package tag for every position', () => {
@@ -259,7 +260,7 @@ test('the published surface is frozen: allTools cannot be grown, shrunk or reord
 });
 
 test('every published spec is frozen, with its annotations and its input/output shapes', () => {
-  assert.equal(allTools.length, 29, 'guard: an empty surface would pass this test vacuously');
+  assert.equal(allTools.length, 30, 'guard: an empty surface would pass this test vacuously');
   for (const spec of allTools) {
     assert.throws(
       () => {

@@ -499,7 +499,7 @@ test('§4 states the item cap DEFAULT_SETTINGS actually applies', () => {
       `src/tools/${name}.ts substitutes a page size for an omitted limit`,
     );
   }
-  assert.equal(limitInputs, 5, 'the five list tools each take a `limit` input');
+  assert.equal(limitInputs, 6, 'the six list tools each take a `limit` input');
   assert.equal(
     spanBetween(
       section('docs/operations.md', 'Pagination'),

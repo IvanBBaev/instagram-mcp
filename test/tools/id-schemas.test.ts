@@ -79,6 +79,7 @@ const ID_FIELDS: readonly (readonly [string, string])[] = [
   ['instagram_post_reel', 'resumeContainerId'],
   ['instagram_post_story', 'resumeContainerId'],
   ['instagram_list_comments', 'mediaId'],
+  ['instagram_list_comment_replies', 'commentId'],
   ['instagram_get_comment', 'commentId'],
   ['instagram_reply_to_comment', 'commentId'],
   ['instagram_create_comment', 'mediaId'],

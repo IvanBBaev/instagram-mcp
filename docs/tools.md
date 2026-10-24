@@ -108,6 +108,7 @@ detail ends `…"` followed by its full length (CC-DATA-95).
 | Tool | Ann. | Purpose / Graph call |
 |---|---|---|
 | `instagram_list_comments` | RO | `GET /{media-id}/comments?fields=id,text,username,timestamp,like_count,replies{...}`, cursor-paginated |
+| `instagram_list_comment_replies` | RO | `GET /{comment-id}/replies?fields=id,text,username,timestamp,like_count`, cursor-paginated (`limit`, `after`, `fetchAll` as in `list_comments`) — reads a thread past the inline first page that `repliesTruncated: true` marks |
 | `instagram_get_comment` | RO | `GET /{comment-id}?fields=...` incl. parent/media context |
 | `instagram_reply_to_comment` | — | `POST /{comment-id}/replies?message=...` (threaded reply); an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18); the preview and the confirm prompt show `details.message` — `excerpt` (flattened, cut after 200 code points with `…`, as a caption excerpt) and `characters` (CC-PUB-60) |
 | `instagram_create_comment` | — | Top-level comment on own media: `POST /{media-id}/comments?message=...`; an empty, whitespace-only or blank-rendering (zero-width/invisible only) `message` is refused before any call (CC-COM-18); the preview and the confirm prompt show `details.message` — `excerpt` (flattened, cut after 200 code points with `…`, as a caption excerpt) and `characters` (CC-PUB-60) |
@@ -202,7 +203,7 @@ A comment or tagged-media field of the wrong type is dropped from its record
 rather than failing the call — `get_comment`'s nested `media` context included
 (CC-COM-19). A
 comment whose inline reply thread Instagram cut at its first page carries
-`repliesTruncated: true` (CC-COM-15). An insights row that lost unreadable
+`repliesTruncated: true` (CC-COM-15), and `list_comment_replies` reads the rest. An insights row that lost unreadable
 intervals says how many in `omittedValues` (CC-INS-18) — an interval whose `value` is
 neither a finite number nor an object is one of them (CC-INS-19), as is one whose `value`
 map holds a member that is not a finite number (CC-INS-23), and a `values` that is not
@@ -245,7 +246,7 @@ it; the v2 client skips that check, but v1 clients are still in the field
 
 ## Tool-count budget
 
-Initial surface: **29 tools** across 6 packages — deliberately compact; every tool
+Surface: **30 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies` added since) — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

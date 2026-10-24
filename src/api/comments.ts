@@ -6,8 +6,8 @@
  * imports; policy (auth, retries, SSRF, usage headers) lives behind `req`.
  *
  * Reads: list a media's comments (cursor-paginated, replies expanded inline),
- * fetch a single comment with parent/media context, and list media the account
- * is tagged in. Writes: reply, create, hide/unhide, delete, and toggle whether
+ * page through one comment's replies, fetch a single comment with parent/media
+ * context, and list media the account is tagged in. Writes: reply, create, hide/unhide, delete, and toggle whether
  * a media accepts comments. The write GATE (apply/destructive resolution and
  * journaling) is a Layer-2 concern (`mcp/write-mode.ts`) — this layer only
  * issues the Graph call.
@@ -27,9 +27,11 @@ export type { PagedResult, PageParams };
 
 // --- Field sets ------------------------------------------------------------
 
-/** Fields requested for a comment (and, recursively, for each reply). */
-const COMMENT_FIELDS =
-  'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
+/** Fields requested for a reply, inline or from the `/replies` edge. */
+const REPLY_FIELDS = 'id,text,username,timestamp,like_count';
+
+/** Fields requested for a comment, with its first page of replies inline. */
+const COMMENT_FIELDS = `${REPLY_FIELDS},replies{${REPLY_FIELDS}}`;
 
 /** `get_comment` additionally pulls moderation state and parent/media context. */
 const COMMENT_DETAIL_FIELDS =
@@ -57,7 +59,8 @@ export interface Comment {
   /**
    * True when the inline `replies` edge announced a further page. That edge is
    * paged like any other and nothing here follows it, so `replies` then holds
-   * only the first page (CC-COM-15). Absent when the edge said nothing more.
+   * only the first page (CC-COM-15); {@link listCommentReplies} reads the rest.
+   * Absent when the edge said nothing more.
    */
   repliesTruncated?: true;
 }
@@ -255,6 +258,35 @@ export async function getComment(
     });
   }
   return normalizeCommentDetail(raw as RawCommentDetail);
+}
+
+export interface ListCommentRepliesParams extends PageParams {
+  /** The comment whose replies to list. */
+  commentId: string;
+}
+
+/**
+ * List one comment's replies (`GET /{comment-id}/replies`), cursor-paginated.
+ *
+ * The inline `replies` edge of {@link listComments} and {@link getComment}
+ * stops at its first page and only says so (`repliesTruncated`, CC-COM-15);
+ * this walks the same edge on its own, so a long thread can be read whole.
+ * Instagram threads one level deep, so a reply carries no `replies` of its own.
+ */
+export async function listCommentReplies(
+  req: IgRequestFn,
+  params: ListCommentRepliesParams,
+): Promise<PagedComments> {
+  return fetchPagedEdge<RawComment, Comment>(
+    req,
+    (after) => ({
+      method: 'GET',
+      path: `/${encodeURIComponent(params.commentId)}/replies`,
+      params: { fields: REPLY_FIELDS, limit: params.limit, after },
+    }),
+    params,
+    normalizeComment,
+  );
 }
 
 export interface ListTaggedMediaParams extends PageParams {

@@ -181,6 +181,11 @@ const CASES: LogCase[] = [
     expect: { mediaId: 'M1', limit: 10, fetchAll: false, hasCursor: false },
   },
   {
+    name: 'instagram_list_comment_replies',
+    args: { commentId: 'C1', fetchAll: true, after: 'CURSOR' },
+    expect: { commentId: 'C1', limit: undefined, fetchAll: true, hasCursor: true },
+  },
+  {
     name: 'instagram_get_comment',
     args: { commentId: 'C1' },
     expect: { commentId: 'C1' },

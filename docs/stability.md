@@ -153,7 +153,7 @@ review records what the promise covers on the current tree (`0.8.0` plus
 the release: see [release-checklist.md](release-checklist.md) §"1.0.0 cut
 readiness".
 
-**Covered by §1 today, and ready to bind.** The tool names (29 tools in the
+**Covered by §1 today, and ready to bind.** The tool names (30 tools in the
 PACKAGES manifest, snapshot-tested), their `.strict()` input schemas, the
 structured output of each tool, and the error line with its `kind`. No tool is
 in a dual-registration window, so `1.0.0` carries no deprecated name.

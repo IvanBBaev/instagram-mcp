@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-29-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-30-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -47,7 +47,7 @@ _Built and maintained in my own time — a
 
 ## What it does
 
-The server exposes an Instagram professional account through **29 MCP tools**
+The server exposes an Instagram professional account through **30 MCP tools**
 grouped into six packages:
 
 - **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
@@ -236,10 +236,10 @@ explicit comma list of packages:
 
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
-| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 26 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 16 |
-| `publisher` | `account, media, publishing, comments` | publish and moderate | 22 |
-| `all` | every package | the full surface | 29 |
+| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 27 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 17 |
+| `publisher` | `account, media, publishing, comments` | publish and moderate | 23 |
+| `all` | every package | the full surface | 30 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
@@ -250,7 +250,7 @@ package's write tools off (its read tools stay).
 does contain write tools, so selecting it forces every package it resolves
 to read-only, exactly as if `IG_PACKAGES_READONLY` had listed them all. No tool
 that posts, hides, deletes or toggles anything is ever registered under `reader`
-— that is why it exposes 16 tools and not 22. A hand-written package list is not
+— that is why it exposes 17 tools and not 23. A hand-written package list is not
 a read-only boundary; only the profile name (or `IG_PACKAGES_READONLY`) is.
 
 Auth-path capability filtering runs on top: a tool restricted to one login path
@@ -290,9 +290,10 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_publish_media` | publishing | both | Write | Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. |
 | `instagram_create_comment` | comments | both | Write | Post a new top-level comment on a media object (POST /{media-id}/comments). |
 | `instagram_delete_comment` | comments | both | Write | Permanently delete a comment (DELETE /{comment-id}). |
-| `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies (repliesTruncated=true when Instagram returned only the first page of them). |
+| `instagram_get_comment` | comments | both | Read | Fetch a single comment by id, including its moderation state (hidden), parent/media context, and inline replies (repliesTruncated=true when Instagram returned only the first page of them; instagram_list_comment_replies reads the rest). |
 | `instagram_hide_comment` | comments | both | Write | Hide a comment (POST /{comment-id}?hide=true) — reversible moderation, preferred over delete. |
-| `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies). |
+| `instagram_list_comment_replies` | comments | both | Read | List the replies to one comment, cursor-paginated, in the order Instagram returns them. |
+| `instagram_list_comments` | comments | both | Read | List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies; instagram_list_comment_replies reads the rest). |
 | `instagram_list_tagged_media` | comments | both | Read | List media the operated account has been TAGGED IN (the /tags edge), newest first, cursor-paginated. |
 | `instagram_reply_to_comment` | comments | both | Write | Post a threaded reply under an existing comment (POST /{comment-id}/replies). |
 | `instagram_set_comments_enabled` | comments | both | Write | Toggle whether a media object accepts new comments (POST /{media-id}?comment_enabled=true\|false). |

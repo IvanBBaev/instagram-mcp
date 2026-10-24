@@ -16,6 +16,7 @@ import {
   createComment,
   deleteComment,
   getComment,
+  listCommentReplies,
   listComments,
   listTaggedMedia,
   replyToComment,
@@ -114,6 +115,68 @@ const EXPECTED_DETAIL_FIELDS =
   'id,text,username,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
   'replies{id,text,username,timestamp,like_count}';
 const EXPECTED_TAGGED_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
+
+// --- listCommentReplies ----------------------------------------------------
+
+/** The reply field set: a comment's own fields, with no nested expansion. */
+const EXPECTED_REPLY_FIELDS = 'id,text,username,timestamp,like_count';
+
+test('listCommentReplies pages the /replies edge of one comment with the reply field set', async () => {
+  // Instagram threads one level deep, so a reply carries no `replies{...}`
+  // expansion: asking for one would be a field Graph does not serve on a reply.
+  const { req, calls } = fakeReq(() => ({
+    data: [
+      {
+        id: 'r1',
+        text: 'thanks',
+        username: 'me',
+        timestamp: '2026-01-02T03:04:05+0000',
+        like_count: 1,
+      },
+      { id: 'r2', text: 'ok' },
+    ],
+    paging: { cursors: { after: 'CUR' }, next: 'https://graph.facebook.com/next' },
+  }));
+
+  const res = await listCommentReplies(req, { commentId: 'C/1', maxItems: 50, limit: 10 });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, 'GET');
+  assert.equal(calls[0]?.path, '/C%2F1/replies');
+  assert.equal(calls[0]?.params?.fields, EXPECTED_REPLY_FIELDS);
+  assert.equal(calls[0]?.params?.limit, 10);
+  assertPlainGraphCall(calls[0]);
+  assert.deepEqual(res.items, [
+    {
+      id: 'r1',
+      text: 'thanks',
+      username: 'me',
+      timestamp: '2026-01-02T03:04:05+0000',
+      like_count: 1,
+    },
+    { id: 'r2', text: 'ok' },
+  ]);
+  assert.equal(res.after, 'CUR');
+  assert.equal(res.truncated, false);
+});
+
+test('listCommentReplies fetchAll follows the cursor and stops at the item cap', async () => {
+  const { req, calls } = fakeReq((opts) =>
+    opts.params?.after === undefined
+      ? { data: [{ id: 'r1' }, { id: 'r2' }], paging: { cursors: { after: 'P2' }, next: 'n' } }
+      : { data: [{ id: 'r3' }, { id: 'r4' }], paging: { cursors: { after: 'P3' }, next: 'n' } },
+  );
+
+  const res = await listCommentReplies(req, { commentId: 'C1', maxItems: 3, fetchAll: true });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.params?.after, 'P2');
+  assert.deepEqual(
+    res.items.map((c) => c.id),
+    ['r1', 'r2', 'r3'],
+  );
+  assert.equal(res.truncated, true);
+});
 
 // --- listComments ----------------------------------------------------------
 
@@ -843,6 +906,14 @@ test('each read sends exactly the parameters it declares — nothing rides along
     fields: EXPECTED_TAGGED_FIELDS,
     limit: 25,
     after: 'CUR',
+  });
+
+  const { req: r4, calls: c4 } = fakeReq(() => ({ data: [], paging: {} }));
+  await listCommentReplies(r4, { commentId: 'C1', maxItems: 50 });
+  assert.deepEqual(c4[0]?.params, {
+    fields: EXPECTED_REPLY_FIELDS,
+    limit: undefined,
+    after: undefined,
   });
 });
 

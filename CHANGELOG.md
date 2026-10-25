@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_comments` and `get_comment` resolve an author Graph discloses only
+  inside `from: { id, username }` into `username`; an explicitly disclosed
+  `username` still wins and `from` itself is never published (CC-COM-22).
+- `list_comments` no longer lists one reply twice when the edge returns it both
+  inline under its parent and as its own top-level comment: the top-level
+  duplicate is dropped and its resolved `username` handed down to the inline
+  reply (CC-COM-23).
 - `login --profile <name>` no longer stores the default profile's `IG_ACCOUNT_ID`
   as the named profile's account id; it falls back to
   `IG_PROFILE_<NAME>_ACCOUNT_ID`, then the returned `user_id` (CC-CFG-84).

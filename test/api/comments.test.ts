@@ -109,10 +109,10 @@ function assertPlainGraphCall(opts: IgRequestOptions | undefined): void {
 // timestamps or like counts. These are pinned byte-for-byte and asserted by
 // equality, not by substring: a substring check passes on a set with holes in it.
 const EXPECTED_COMMENT_FIELDS =
-  'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,replies{id,text,username,from,timestamp,like_count}';
 const EXPECTED_DETAIL_FIELDS =
-  'id,text,username,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
-  'replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
+  'replies{id,text,username,from,timestamp,like_count}';
 const EXPECTED_TAGGED_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
 
 // --- listComments ----------------------------------------------------------
@@ -969,4 +969,216 @@ test('listComments reads the example fixtures by `paging.next`: cursors without 
   const page = await listComments(fakeReq(() => more).req, { mediaId: 'M1', maxItems: 200 });
   assert.equal(page.truncated, false);
   assert.equal(page.after, 'SYNTHETIC_OPAQUE_2');
+});
+
+// --- author resolution & reply de-duplication (CC-COM-22, CC-COM-23) -------
+
+test('listComments resolves an author Graph disclosed only inside from (CC-COM-22)', async () => {
+  // Live Graph answers some comments — observed on replies — with the author
+  // ONLY inside `from: { id, username }` and no top-level `username`. The model
+  // then saw a real, named author as author-unknown and could not address them.
+  // The fold fills the hole from `from` and nothing else: an explicit
+  // `username` wins over a disagreeing `from`, a `from` that is absent, null,
+  // or carries no string username leaves the field undisclosed (CC-DATA-2 —
+  // invented authors are worse than unknown ones), and `from` itself never
+  // reaches the domain object: its `id` is unpublished and its `username` must
+  // land in the field the output schema and the [UNTRUSTED] fence already
+  // cover. `deepEqual` pins the removal: a surviving `from` key fails it.
+  const { req } = fakeReq(() => ({
+    data: [
+      { id: 'c1', text: 'hi', from: { id: 'u1', username: 'alice' } },
+      { id: 'c2', username: 'carol', from: { username: 'not-carol' } },
+      { id: 'c3', from: { id: 'u3' } },
+      { id: 'c4', from: { username: null } },
+      { id: 'c5', from: null },
+      { id: 'c6' },
+      {
+        id: 'c7',
+        replies: { data: [{ id: 'r7', text: 'thanks', from: { username: 'bob' } }] },
+      },
+    ],
+    paging: {},
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200 });
+
+  assert.deepEqual(res.items, [
+    { id: 'c1', text: 'hi', username: 'alice' },
+    { id: 'c2', username: 'carol' },
+    { id: 'c3' },
+    { id: 'c4' },
+    { id: 'c5' },
+    { id: 'c6' },
+    { id: 'c7', replies: [{ id: 'r7', text: 'thanks', username: 'bob' }] },
+  ]);
+});
+
+test('getComment resolves the same from author on the detail and on its replies (CC-COM-22)', async () => {
+  // The second normalizer, same fold — the two bodies are documented as
+  // identical up to their types, and a drift here would mean the moderation
+  // read of one comment names a different author than the listing of it.
+  const { req } = fakeReq(() => ({
+    id: 'C1',
+    text: 'root',
+    hidden: false,
+    from: { id: 'u1', username: 'alice' },
+    replies: {
+      data: [
+        { id: 'R1', text: 'thanks', username: 'keep', from: { username: 'not-this' } },
+        { id: 'R2', from: { username: 'bob' } },
+      ],
+    },
+  }));
+
+  const detail = await getComment(req, { commentId: 'C1' });
+
+  assert.deepEqual(detail, {
+    id: 'C1',
+    text: 'root',
+    hidden: false,
+    username: 'alice',
+    replies: [
+      { id: 'R1', text: 'thanks', username: 'keep' },
+      { id: 'R2', username: 'bob' },
+    ],
+  });
+});
+
+test('listComments drops the top-level copy of an inline reply and hands its username down (CC-COM-23)', async () => {
+  // The same reply arrived twice on one page: once inline under its parent,
+  // disclosing only its text (no `username`, no `from` — CC-COM-22 at its
+  // worst), and once as its own top-level entry, which carries the username.
+  // The model read the thread as two more comments than it had, judged the
+  // duplicated copy as an unrelated top-level voice, and saw the inline reply
+  // as author-unknown. The inline copy keeps its place in the thread and
+  // inherits the duplicate's username; the surrounding comments keep their
+  // relative order.
+  const { req } = fakeReq(() => ({
+    data: [
+      {
+        id: 'c1',
+        text: 'parent',
+        username: 'alice',
+        replies: { data: [{ id: 'r1', text: 'thanks' }] },
+      },
+      { id: 'r1', text: 'thanks', username: 'bob' },
+      { id: 'c2', text: 'other', username: 'carol' },
+    ],
+    paging: {},
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200 });
+
+  assert.deepEqual(res.items, [
+    {
+      id: 'c1',
+      text: 'parent',
+      username: 'alice',
+      replies: [{ id: 'r1', text: 'thanks', username: 'bob' }],
+    },
+    { id: 'c2', text: 'other', username: 'carol' },
+  ]);
+  assert.equal(res.truncated, false);
+});
+
+test('reply de-duplication walks nested threads and spans fetchAll pages, leaving paging intact (CC-COM-23)', async () => {
+  // Threads duplicate at any depth and, under `fetchAll`, across pages: the
+  // inline reply is read on page one, its top-level twin arrives on page two.
+  // The walk descends the whole thread (a grandchild reply gets its username
+  // from its twin two levels away) and the id set spans the aggregated items,
+  // so a cross-page twin is removed too. A twin that discloses no username
+  // backfills nothing — the reply stays honestly author-unknown rather than
+  // gaining an invented name. Cursors, `truncated` and the next-URL token rule
+  // (CC-COM-15) are untouched by a pass that only shrinks `items`.
+  const { req, calls } = fakeReq((opts) => {
+    if (opts.params?.after === undefined)
+      return {
+        data: [
+          {
+            id: 'c1',
+            text: 'q',
+            username: 'alice',
+            replies: {
+              data: [{ id: 'r1', text: 'a1', replies: { data: [{ id: 'r1a', text: 'a1a' }] } }],
+            },
+          },
+          { id: 'c2', replies: { data: [{ id: 'r2', text: 'a2' }] } },
+          { id: 'c3', replies: { data: [{ id: 'r3', text: 'a3' }] } },
+        ],
+        paging: {
+          cursors: { after: 'A1' },
+          next: 'https://graph.instagram.com/v25.0/M1/comments?after=A1&access_token=IGQ_SECRET',
+        },
+      };
+    return {
+      data: [
+        { id: 'r1', text: 'a1', username: 'bob' },
+        { id: 'r1a', text: 'a1a', username: 'carol' },
+        { id: 'r2', text: 'a2', username: 'dan' },
+        { id: 'r3', text: 'a3' },
+      ],
+      paging: {},
+    };
+  });
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200, fetchAll: true });
+
+  assert.equal(calls.length, 2, 'the walk still stops at the end of the edge');
+  assert.deepEqual(
+    res.items.map((c) => c.id),
+    ['c1', 'c2', 'c3'],
+    'every top-level twin is gone; the threads keep their place',
+  );
+  assert.deepEqual(
+    res.items[0]?.replies?.[0],
+    {
+      id: 'r1',
+      text: 'a1',
+      replies: [{ id: 'r1a', text: 'a1a', username: 'carol' }],
+      username: 'bob',
+    },
+    'a thread deduplicates at every depth, and the grandchild gets its author across pages',
+  );
+  assert.equal(res.items[1]?.replies?.[0]?.username, 'dan');
+  const r3 = res.items[2]?.replies?.[0] ?? {};
+  assert.equal('username' in r3, false, 'a twin with no username invents nothing');
+  assert.equal(res.truncated, false);
+  assert.equal('after' in res, false, 'the dedup pass does not touch paging');
+  assert.equal(JSON.stringify(res).includes('IGQ_SECRET'), false, 'the next URL is never kept');
+});
+
+test('reply de-duplication leaves id-less entries, wrong types and distinct replies untouched (CC-COM-23)', async () => {
+  // The pass runs over the same cast body as the rest of the layer (CC-COM-16):
+  // `data` can hold `null`, a scalar, a numeric `id`, or a reply without one.
+  // None of them may match a twin (matching is by string id only) and none may
+  // be removed or crash the walk. A reply that already carries its own
+  // username keeps it even when its twin disagrees, and a reply whose id has
+  // no twin at all stays exactly where it is.
+  const { req } = fakeReq(() => ({
+    data: [
+      null,
+      'junk',
+      { id: 7 },
+      {
+        id: 'c1',
+        replies: { data: [null, { text: 'no id' }, { id: 'r1', username: 'keep' }] },
+      },
+      { id: 'r1', username: 'other' },
+      { id: 'c2', replies: 'not an envelope' },
+    ],
+    paging: {},
+  }));
+
+  const res = await listComments(req, { mediaId: 'M1', maxItems: 200 });
+
+  assert.deepEqual(res.items, [
+    null,
+    'junk',
+    { id: 7 },
+    {
+      id: 'c1',
+      replies: [null, { text: 'no id' }, { id: 'r1', username: 'keep' }],
+    },
+    { id: 'c2' },
+  ]);
 });

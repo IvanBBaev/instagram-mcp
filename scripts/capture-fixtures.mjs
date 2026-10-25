@@ -72,11 +72,11 @@ const CHILD_FIELDS = 'id,media_type,media_url,thumbnail_url,permalink,timestamp'
 const MEDIA_DETAIL_FIELDS = `${MEDIA_FIELDS},children{${CHILD_FIELDS}}`;
 
 const COMMENT_FIELDS =
-  'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,replies{id,text,username,from,timestamp,like_count}';
 
 const COMMENT_DETAIL_FIELDS =
-  'id,text,username,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
-  'replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
+  'replies{id,text,username,from,timestamp,like_count}';
 
 const TAGGED_MEDIA_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
 

@@ -27,14 +27,19 @@ export type { PagedResult, PageParams };
 
 // --- Field sets ------------------------------------------------------------
 
-/** Fields requested for a comment (and, recursively, for each reply). */
+/**
+ * Fields requested for a comment (and, recursively, for each reply). `from` is
+ * requested beside `username` because Graph answers some comments with the
+ * author only inside `from: { id, username }` and no top-level `username` at
+ * all (CC-COM-22); the normalizers fold the two together below.
+ */
 const COMMENT_FIELDS =
-  'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,replies{id,text,username,from,timestamp,like_count}';
 
 /** `get_comment` additionally pulls moderation state and parent/media context. */
 const COMMENT_DETAIL_FIELDS =
-  'id,text,username,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
-  'replies{id,text,username,timestamp,like_count}';
+  'id,text,username,from,timestamp,like_count,hidden,parent_id,media{id,media_type,permalink},' +
+  'replies{id,text,username,from,timestamp,like_count}';
 
 /** Fields requested for each media object returned by the `/tags` edge. */
 const TAGGED_MEDIA_FIELDS = 'id,caption,media_type,media_url,permalink,timestamp,username';
@@ -104,6 +109,14 @@ interface RawComment {
   id: string;
   text?: string;
   username?: string;
+  /**
+   * Graph's author object. Some comments arrive with the author ONLY here and
+   * no top-level `username` (CC-COM-22) — typically replies, whose `username`
+   * Graph has been observed to omit while `from.username` carries the handle.
+   * `from` itself is omitted rather than nulled (CC-DATA-2), and its `username`
+   * is untrusted third-party text exactly like the top-level field.
+   */
+  from?: { id?: string; username?: string };
   timestamp?: string;
   like_count?: number;
   replies?: { data?: RawComment[]; paging?: { next?: unknown } };
@@ -137,8 +150,15 @@ function normalizeComment(raw: RawComment): Comment {
   // entry is handed through untouched: it has no usable id, so the tool layer
   // leaves it out and counts it (CC-COM-16) instead of this layer hiding it.
   if (raw === null || typeof raw !== 'object') return raw;
-  const { replies, ...rest } = raw;
+  const { replies, from, ...rest } = raw;
   const comment: Comment = { ...rest };
+  // An author Graph disclosed only inside `from` is still a known author
+  // (CC-COM-22). `from` is consumed here and never reaches the domain object:
+  // its `id` is another opaque identifier the tools never ask for, and its
+  // `username` lands in the field the output schema and the [UNTRUSTED] fence
+  // already cover. An explicit top-level `username` wins — `from` only fills
+  // the hole, never overwrites what Graph disclosed directly.
+  if (typeof from?.username === 'string' && !comment.username) comment.username = from.username;
   if (Array.isArray(replies?.data)) comment.replies = replies.data.map(normalizeComment);
   if (repliesContinue(replies)) comment.repliesTruncated = true;
   return comment;
@@ -188,8 +208,11 @@ function repliesContinue(replies: RawComment['replies']): boolean {
  * narrow the detail read back down to a plain comment.
  */
 function normalizeCommentDetail(raw: RawCommentDetail): CommentDetail {
-  const { replies, ...rest } = raw;
+  const { replies, from, ...rest } = raw;
   const detail: CommentDetail = { ...rest };
+  // The same author fold as {@link normalizeComment} (CC-COM-22), so the two
+  // bodies stay identical up to their declared types, as documented above.
+  if (typeof from?.username === 'string' && !detail.username) detail.username = from.username;
   if (Array.isArray(replies?.data)) detail.replies = replies.data.map(normalizeComment);
   if (repliesContinue(replies)) detail.repliesTruncated = true;
   return detail;
@@ -203,6 +226,56 @@ export interface ListCommentsParams extends PageParams {
 }
 
 /**
+ * Drop replies that Graph ALSO returned as top-level comments, and finish the
+ * author information those duplicates carry.
+ *
+ * The `/{media-id}/comments` edge is observed (CC-COM-23) returning a reply
+ * twice on one listing: once inline under its parent's `replies` array, where
+ * Graph often discloses only `text` and `from` (CC-COM-22), and once as its own
+ * top-level entry, where `username` is disclosed. Before this pass the model
+ * read the same reply twice per thread and saw the inline copy as
+ * author-unknown; moderation counts and reply decisions were inflated by the
+ * duplicates.
+ *
+ * The inline copy is the one that keeps its place: the top-level duplicate is
+ * removed, and its resolved `username` is handed DOWN to the inline reply, so
+ * dedup never loses the author. Matching is by comment id only; an entry with
+ * no usable id (CC-COM-16) can neither match nor be removed, and passes
+ * through for the tool layer to count. Ids are Graph-global, so an id equal to
+ * an inline reply's is that reply and nothing else.
+ *
+ * Ordering, cursors and `truncated` are untouched — this only shrinks `items`,
+ * which can leave a `fetchAll` run a little under its cap: the duplicates were
+ * occupying cap slots. `get_comment` needs no pass: it reads one object, there
+ * is no top-level list beside it.
+ */
+function dropTopLevelReplyDuplicates(items: Comment[]): Comment[] {
+  const byId = new Map<string, Comment>();
+  for (const comment of items) {
+    if (comment && typeof comment.id === 'string') byId.set(comment.id, comment);
+  }
+  const nestedIds = new Set<string>();
+
+  function reconcile(comment: Comment): void {
+    if (!comment || !Array.isArray(comment.replies)) return;
+    for (const reply of comment.replies) {
+      if (!reply || typeof reply.id !== 'string') continue;
+      nestedIds.add(reply.id);
+      const duplicate = byId.get(reply.id);
+      if (typeof reply.username !== 'string' && typeof duplicate?.username === 'string') {
+        reply.username = duplicate.username;
+      }
+      // A reply can itself be a parent, and Graph duplicates threads at any
+      // depth, so the walk descends the whole thread it just cleaned.
+      reconcile(reply);
+    }
+  }
+
+  for (const comment of items) reconcile(comment);
+  return items.filter((c) => !nestedIds.has(c?.id));
+}
+
+/**
  * List a media's comments, cursor-paginated, with replies expanded inline.
  * Single page by default; `fetchAll` aggregates up to `maxItems`.
  */
@@ -210,7 +283,7 @@ export async function listComments(
   req: IgRequestFn,
   params: ListCommentsParams,
 ): Promise<PagedComments> {
-  return fetchPagedEdge<RawComment, Comment>(
+  const page = await fetchPagedEdge<RawComment, Comment>(
     req,
     (after) => ({
       method: 'GET',
@@ -220,6 +293,8 @@ export async function listComments(
     params,
     normalizeComment,
   );
+  page.items = dropTopLevelReplyDuplicates(page.items);
+  return page;
 }
 
 /**

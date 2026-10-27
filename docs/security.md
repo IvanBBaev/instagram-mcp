@@ -255,13 +255,13 @@ exactly where a caller may paste a token by mistake.
   `IG_PACKAGES_READONLY` / `IG_TOOL_PACKAGES=reader` filter on `readOnlyHint`, so a
   tool mis-annotated as read-only would be both advertised as safe *and* survive
   the filter. Since 2026-08-27 the annotation is bound to real behaviour rather
-  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 32
+  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 33
   handlers against an instrumented write-gate context and derives read-vs-write
   from what each one actually does, under four `IG_WRITE_MODE` ×
   `IG_ALLOW_DESTRUCTIVE` configurations that must all agree. A handler whose
   behaviour cannot be classified fails the test rather than defaulting to "read".
-  Current surface: 21 read, 11 write, all axes agreeing. Since 2026-08-29 the hint
-  is also **present on all 32** — the six `comments` writes previously omitted it
+  Current surface: 22 read, 11 write, all axes agreeing. Since 2026-08-29 the hint
+  is also **present on all 33** — the six `comments` writes previously omitted it
   and leaned on the MCP default — and its presence is enforced by the same test, so
   a new tool cannot ship with the annotation silently absent. Behaviour did not
   change (the filter tests `!== true`); what changed is that "absent" is no longer

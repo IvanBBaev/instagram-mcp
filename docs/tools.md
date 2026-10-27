@@ -142,6 +142,7 @@ empirical probe decides whether this package ships or stays dark (see roadmap).
 |---|---|---|
 | `instagram_search_hashtag` | RO | `GET /ig_hashtag_search?user_id={ig-id}&q=nofilter` → hashtag ID. Budget: **30 unique hashtags / 7 days** per account — tracked locally and surfaced in results |
 | `instagram_get_hashtag_media` | RO | `GET /{hashtag-id}/top_media` or `/recent_media` (`user_id` required; public media only) |
+| `instagram_list_recently_searched_hashtags` | RO | Meta's own record of the hashtag budget: `GET /{ig-id}/recently_searched_hashtags?fields=id,name`, every page walked up to the item cap. Returns the hashtags (names fenced), `uniqueHashtagsUsed`, `remaining` (30 minus used, never below 0) and `truncated` — when set, used is a lower bound. Unlike the local counter it survives restarts and sees every process on the account; the two are not reconciled. The `name` field and the edge's paging are *[verify]* |
 | `instagram_discover_business` | RO | Public profile + media of another business/creator: `GET /{ig-id}?fields=business_discovery.username(<handle>){followers_count,media_count,media{...}}`. The media edge publishes `mediaPaging`: `truncated: true` with `after` when Instagram returned a media cursor — pass it back as `mediaAfter` (sent as `media.after(<cursor>)`) to read further — and without `after`, plus a `note`, when the cursor is unusable (CC-DATA-116) or is the `mediaAfter` it was just sent (CC-DATA-134) |
 
 ## Package `messaging` (phase 2 — design TBD)
@@ -278,7 +279,7 @@ bound is rejected with `InvalidParams` before the template renders.
 
 ## Tool-count budget
 
-Surface: **32 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media` and `instagram_get_mentioned_comment` added since) — deliberately compact; every tool
+Surface: **33 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment` and `instagram_list_recently_searched_hashtags` added since) — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

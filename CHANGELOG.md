@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists the same icon at its GitHub Pages URL, and the MCPB bundle ships it as
   `icon.png` (`icon` / `icons` in `manifest.json`). Server-level only; tools
   carry no icons.
+- Hashtag budget: `instagram_list_recently_searched_hashtags` reads Meta's own
+  record of the 30-unique-hashtags-per-7-days budget
+  (`GET /{ig-id}/recently_searched_hashtags`) and returns the hashtags,
+  `uniqueHashtagsUsed` and `remaining`. Unlike the advisory local counter it
+  survives restarts and counts every process on the account. Path B
+  (`fb-login`) only, in the dark `discovery` package; names are fenced.
 
 ### Changed
 

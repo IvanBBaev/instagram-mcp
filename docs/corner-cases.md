@@ -32,7 +32,7 @@ advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 69 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1937 citation sites across the
+Nothing downstream resolves a case by section number; 1938 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -815,7 +815,7 @@ the citations):
 Plus the M1 hashtag/PCA probe from [auth.md](auth.md) §5. Note that the hashtag
 **budget** side of that probe no longer needs guessing:
 `GET /{ig-user-id}/recently_searched_hashtags` reports the real 7-day usage
-server-side (see [operations.md](operations.md) §1).
+server-side (see [operations.md](operations.md) §1); `instagram_list_recently_searched_hashtags` reads it. Still to confirm live: that `name` is served and how the edge pages.
 
 ## 10. Open owner decisions — consolidated register
 

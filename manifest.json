@@ -159,6 +159,10 @@
       "description": "List PUBLIC media under a hashtag id via GET /{hashtag-id}/top_media or /{hashtag-id}/recent_media (choose via `edge`), which require the operated account's id as user_id."
     },
     {
+      "name": "instagram_list_recently_searched_hashtags",
+      "description": "List the hashtags the operated account searched in the last 7 days via GET /{ig-id}/recently_searched_hashtags — Meta's own record of the 30-unique-hashtags per rolling 7 days budget that instagram_search_hashtag spends."
+    },
+    {
       "name": "instagram_discover_business",
       "description": "Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(<handle>){followers_count,media_count,media{...}}."
     }

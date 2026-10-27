@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-32-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-33-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -47,7 +47,7 @@ _Built and maintained in my own time — a
 
 ## What it does
 
-The server exposes an Instagram professional account through **32 MCP tools**
+The server exposes an Instagram professional account through **33 MCP tools**
 grouped into six packages:
 
 - **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
@@ -237,9 +237,9 @@ explicit comma list of packages:
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
 | `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 29 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 19 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 20 |
 | `publisher` | `account, media, publishing, comments` | publish and moderate | 25 |
-| `all` | every package | the full surface | 32 |
+| `all` | every package | the full surface | 33 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
@@ -302,6 +302,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_unhide_comment` | comments | both | Write | Unhide a previously hidden comment (POST /{comment-id}?hide=false). |
 | `instagram_discover_business` | discovery | fb-login | Read | Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(&lt;handle&gt;){followers_count,media_count,media{...}}. |
 | `instagram_get_hashtag_media` | discovery | fb-login | Read | List PUBLIC media under a hashtag id via GET /{hashtag-id}/top_media or /{hashtag-id}/recent_media (choose via `edge`), which require the operated account's id as user_id. |
+| `instagram_list_recently_searched_hashtags` | discovery | fb-login | Read | List the hashtags the operated account searched in the last 7 days via GET /{ig-id}/recently_searched_hashtags — Meta's own record of the 30-unique-hashtags per rolling 7 days budget that instagram_search_hashtag spends. |
 | `instagram_search_hashtag` | discovery | fb-login | Read | Resolve a hashtag name to its Instagram hashtag id(s) via GET /ig_hashtag_search?user_id={ig-id}&amp;q=&lt;hashtag&gt; (the returned id feeds instagram_get_hashtag_media). |
 <!-- END AUTOGEN:tools -->
 

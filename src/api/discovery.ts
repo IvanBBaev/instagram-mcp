@@ -1,7 +1,8 @@
 /**
  * Discovery domain functions (Layer 1). Read-only Graph calls that reach beyond
  * the operated account into Instagram's PUBLIC content graph: hashtag search,
- * a hashtag's top/recent media, and business/creator profile discovery.
+ * a hashtag's top/recent media, the hashtags the account searched recently, and
+ * business/creator profile discovery.
  *
  * These are Facebook-Graph endpoints — **Path B (`fb-login`) only** — so every
  * call pins `host: 'graph.facebook.com'` and carries the operated account's IG
@@ -21,7 +22,9 @@ import { InstagramError } from '../core/types.js';
 import type { GraphListResponse, IgRequestFn } from '../core/types.js';
 import {
   CAP_MID_PAGE_NOTE,
+  fetchPagedEdge,
   nextPageCursor,
+  type PagedResult,
   SAME_CURSOR_NOTE,
   UNREADABLE_PAGE_NOTE,
   UNUSABLE_CURSOR_NOTE,
@@ -62,6 +65,56 @@ export async function searchHashtag(
   const data: unknown = res.data;
   if (data === undefined) return [];
   return Array.isArray(data) ? (data as HashtagRef[]) : null;
+}
+
+// --- recently_searched_hashtags --------------------------------------------
+
+/**
+ * One hashtag the account searched in the rolling 7-day window. Both fields are
+ * optional because the entry is a CAST of the Graph body, not a validated one:
+ * the tool layer drops an entry without a usable id and counts it.
+ */
+export interface SearchedHashtag {
+  id?: string;
+  name?: string;
+}
+
+/**
+ * The fields requested per entry. `name` is in Meta's reference for the edge,
+ * but whether it is served on every entry is unconfirmed live [verify].
+ */
+export const SEARCHED_HASHTAG_FIELDS = 'id,name';
+
+/**
+ * `GET /{ig-user-id}/recently_searched_hashtags?fields=id,name` on
+ * graph.facebook.com — the hashtags the account searched through
+ * `ig_hashtag_search` in the last 7 days, i.e. Meta's own record of the
+ * 30-unique-hashtags budget (CC-RATE-4). Unlike the tool layer's in-process
+ * counter it survives restarts and sees every process and app on the account.
+ *
+ * Read whole (`fetchAll`) up to `maxItems`: a count read off the first page
+ * alone would understate the budget spent. No `limit` is sent — Meta documents
+ * at most 30 entries, but the edge's page size and paging shape are
+ * unconfirmed live [verify], so the walk follows whatever cursor it is handed
+ * instead of trusting one page to hold them all. Unreadable pages, unusable cursors
+ * and the item cap are decided by {@link fetchPagedEdge}, exactly as for every
+ * other paged edge.
+ */
+export async function recentlySearchedHashtags(
+  req: IgRequestFn,
+  params: { igId: string; maxItems: number },
+): Promise<PagedResult<SearchedHashtag>> {
+  return fetchPagedEdge<SearchedHashtag, SearchedHashtag>(
+    req,
+    (after) => ({
+      method: 'GET',
+      path: `/${encodeURIComponent(params.igId)}/recently_searched_hashtags`,
+      params: { fields: SEARCHED_HASHTAG_FIELDS, after },
+      host: 'graph.facebook.com',
+    }),
+    { maxItems: params.maxItems, fetchAll: true },
+    (raw) => raw,
+  );
 }
 
 // --- get_hashtag_media -----------------------------------------------------

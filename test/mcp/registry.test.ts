@@ -192,6 +192,7 @@ test('buildManifest snapshot: package -> sorted tool names', () => {
     discovery: [
       'instagram_discover_business',
       'instagram_get_hashtag_media',
+      'instagram_list_recently_searched_hashtags',
       'instagram_search_hashtag',
     ],
     insights: [
@@ -550,7 +551,7 @@ test('selectPackages: the read-only profile check is case-insensitive (IG_TOOL_P
 
 test("IG_TOOL_PACKAGES=Reader registers the same write-free surface as 'reader'", () => {
   // The end-to-end half of the case above: the capitalised spelling must reach
-  // the same 19-tool read-only surface, not a 25-tool one with write tools.
+  // the same 20-tool read-only surface, not a 25-tool one with write tools.
   const { deps } = makeDeps({
     tools: allTools,
     profiles: [fbProfile],
@@ -559,7 +560,7 @@ test("IG_TOOL_PACKAGES=Reader registers the same write-free surface as 'reader'"
   const { registered } = registerTools(deps);
   const byName = new Map(allTools.map((t) => [t.name, t]));
 
-  assert.equal(registered.length, 19, 'reader exposes 19 read-only tools (README table)');
+  assert.equal(registered.length, 20, 'reader exposes 20 read-only tools (README table)');
   for (const name of registered) {
     assert.equal(byName.get(name)?.annotations.readOnlyHint, true, `'${name}' is not read-only`);
   }
@@ -620,11 +621,12 @@ test('IG_TOOL_PACKAGES=reader registers a write-free surface (no write/destructi
     'instagram_list_stories',
     'instagram_get_media',
     'instagram_discover_business',
+    'instagram_list_recently_searched_hashtags',
   ]) {
     assert.ok(registered.includes(name), `reader must still expose '${name}'`);
   }
 
-  assert.equal(registered.length, 19, 'reader exposes 19 read-only tools (README table)');
+  assert.equal(registered.length, 20, 'reader exposes 20 read-only tools (README table)');
 });
 
 // --- D1 capability filtering ----------------------------------------------
@@ -713,7 +715,7 @@ test('D1: a tool that declares BOTH paths registers when only one of them is con
 
 test('registerTools fails fast when the default profile does not exist', () => {
   // `IG_ACTIVE_PROFILE=brnad` (a typo) otherwise produces a server that starts
-  // clean, advertises all 32 tools, and fails EVERY call — the misconfiguration
+  // clean, advertises all 33 tools, and fails EVERY call — the misconfiguration
   // surfaces once per tool call as a validation error instead of once at boot.
   // The check belongs at registration because that is where it is still cheap
   // to abort; the message has to name the bad value and the real ones.
@@ -1065,14 +1067,14 @@ test('the wrapper fallback labels a root-level failure `(root)` rather than an e
 
 test('real McpServer: the whole v1 surface registers, lists and stays closed', async () => {
   // `all` + a Path-B profile keeps every tool past D1 filtering, so this is the
-  // full 32-tool surface end to end on a real server.
+  // full 33-tool surface end to end on a real server.
   const live = await liveServer(allTools, {
     profiles: [fbProfile],
     env: { IG_TOOL_PACKAGES: 'all' },
   });
   try {
     assert.equal(live.registered.length, allTools.length, 'every v1 tool registers');
-    assert.equal(allTools.length, 32, 'the v1 surface is 32 tools');
+    assert.equal(allTools.length, 33, 'the v1 surface is 33 tools');
 
     const { tools } = await live.client.listTools();
     assert.deepEqual([...tools.map((t) => t.name)].sort(), [...live.registered].sort());
@@ -1827,6 +1829,7 @@ test('IG_TOOL_PACKAGES=publisher registers exactly the documented 25-tool surfac
     'instagram_discover_business',
     'instagram_search_hashtag',
     'instagram_get_hashtag_media',
+    'instagram_list_recently_searched_hashtags',
   ]) {
     assert.equal(registered.includes(name), false, `publisher must not expose '${name}'`);
   }

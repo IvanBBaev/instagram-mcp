@@ -217,10 +217,11 @@ function assertRequiredKeys(
 
 // --- surface ---------------------------------------------------------------
 
-test('discoveryTools exposes exactly the three read-only Path-B specs', () => {
+test('discoveryTools exposes exactly the four read-only Path-B specs', () => {
   assert.deepEqual(discoveryTools.map((t) => t.name).sort(), [
     'instagram_discover_business',
     'instagram_get_hashtag_media',
+    'instagram_list_recently_searched_hashtags',
     'instagram_search_hashtag',
   ]);
   for (const t of discoveryTools) {
@@ -230,7 +231,7 @@ test('discoveryTools exposes exactly the three read-only Path-B specs', () => {
     assert.equal(t.annotations.openWorldHint, true);
     assert.notEqual(t.annotations.destructiveHint, true);
     // Pinned exactly, not just field by field. `readOnlyHint` is the single flag
-    // `--read-only` consults, so losing it silently drops all three tools from a
+    // `--read-only` consults, so losing it silently drops all four tools from a
     // read-only surface; gaining `destructiveHint`/`idempotentHint` sends a
     // client's permission UI a confirmation prompt (or a retry licence) that
     // nothing about a read-only Graph GET justifies.
@@ -239,7 +240,7 @@ test('discoveryTools exposes exactly the three read-only Path-B specs', () => {
 });
 
 test('every discovery description carries the package honesty note', () => {
-  // These three tools depend on a Meta feature most apps do not have, and they
+  // These four tools depend on a Meta feature most apps do not have, and they
   // ship dark. The description is the ONLY place a model or an operator learns
   // that before spending a call: claiming Path A support, "generally available"
   // access, or default-on packaging turns an App-Review wall into a mystery
@@ -909,7 +910,7 @@ test('search_hashtag describes the endpoint and the ADVISORY nature of the budge
  * (`PUBLISHED_CONTRACT` in test/tools/comments.test.ts). This package pins by
  * fragment, so the gaps between the fragments have to be pinned by hand.
  */
-test('search_hashtag pins its resolve direction, and all three share one honesty note', () => {
+test('search_hashtag pins its resolve direction, and all four share one honesty note', () => {
   // Restated here rather than read off the spec: a test that derives its
   // expectation from the object under test pins nothing.
   const RESOLVE_SENTENCE =
@@ -923,7 +924,7 @@ test('search_hashtag pins its resolve direction, and all three share one honesty
     'the description opens with the whole name -> id sentence, from the first character',
   );
 
-  // One constant is appended to all three descriptions, so the suffix has to be
+  // One constant is appended to all four descriptions, so the suffix has to be
   // byte-identical on every one of them: a correction applied to a single tool is
   // then visibly missing from the other two.
   const HONESTY_SUFFIX =
@@ -932,8 +933,8 @@ test('search_hashtag pins its resolve direction, and all three share one honesty
     'Part of the `discovery` package, which ships dark by default (not in the default `core` selection).';
   assert.equal(
     discoveryTools.length,
-    3,
-    'all three discovery tools are covered by the suffix check',
+    4,
+    'all four discovery tools are covered by the suffix check',
   );
   for (const spec of discoveryTools) {
     assert.equal(
@@ -1370,7 +1371,7 @@ test('discover_business output pins the discovered profile shape', () => {
 });
 
 /**
- * One live `McpServer` carrying the three discovery tools, reachable through a
+ * One live `McpServer` carrying the four discovery tools, reachable through a
  * real `Client` over an in-memory transport. Every test that uses it asserts on
  * the PUBLISHED contract — what an MCP host is actually handed — rather than on
  * the zod shapes in the source file, and the published form only exists after
@@ -1511,7 +1512,7 @@ const PUBLISHED_MEDIA_ITEM = {
 };
 
 /**
- * The exact contract the three discovery tools publish, transcribed by hand from
+ * The exact contract the four discovery tools publish, transcribed by hand from
  * src/tools/discovery.ts rather than captured from the running server: an
  * expectation derived from the object under test pins nothing.
  *
@@ -1526,8 +1527,9 @@ const PUBLISHED_MEDIA_ITEM = {
  *
  * Why a model reading worse wording acts differently FOR THIS PACKAGE:
  *
- *   - These three tools are the only ones in the server that read the PUBLIC
- *     graph — other people's accounts. The honesty note is the sole place that
+ *   - These are the only tools in the server that read the PUBLIC graph —
+ *     other people's accounts — or the account's own record of the hashtag
+ *     budget that reading it spends. The honesty note is the sole place that
  *     says the whole package needs an App-Review-gated Meta feature and is
  *     `fb-login`-only, so text rot here turns a hard "your profile can never do
  *     this" into an invitation to retry forever.
@@ -1703,6 +1705,58 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
     },
   },
 
+  instagram_list_recently_searched_hashtags: {
+    name: 'instagram_list_recently_searched_hashtags',
+    title: 'List recently searched Instagram hashtags',
+    description:
+      'List the hashtags the operated account searched in the last 7 days via ' +
+      "GET /{ig-id}/recently_searched_hashtags — Meta's own record of the 30-unique-hashtags " +
+      'per rolling 7 days budget that instagram_search_hashtag spends. Unlike the advisory ' +
+      'in-process counter instagram_search_hashtag returns, it survives restarts and counts ' +
+      'searches made by any process or app on the account. uniqueHashtagsUsed counts every ' +
+      'hashtag listed and remaining is 30 minus it (never below 0). Hashtag names are ' +
+      'returned as fenced, untrusted text. truncated=true means the listing may be incomplete ' +
+      '(note says why), so uniqueHashtagsUsed is then a lower bound. A hashtag returned ' +
+      'without an id is left out of hashtags but still counted, and omittedWithoutId plus note ' +
+      'say how many were.' +
+      ' Requires Meta\'s "Instagram Public Content Access" feature, which may be ' +
+      'App-Review-gated. Path B (fb-login) only. Part of the `discovery` package, which ships ' +
+      'dark by default (not in the default `core` selection).',
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        hashtags: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, name: { type: 'string' } },
+            required: ['id'],
+            additionalProperties: false,
+          },
+        },
+        uniqueHashtagsUsed: { type: 'number' },
+        limit: { type: 'number' },
+        windowDays: { type: 'number' },
+        remaining: { type: 'number' },
+        truncated: { type: 'boolean' },
+        omittedWithoutId: {
+          type: 'integer',
+          minimum: Number.MIN_SAFE_INTEGER,
+          maximum: Number.MAX_SAFE_INTEGER,
+        },
+        note: { type: 'string' },
+      },
+      required: ['hashtags', 'uniqueHashtagsUsed', 'limit', 'windowDays', 'remaining', 'truncated'],
+      additionalProperties: false,
+    },
+  },
+
   instagram_discover_business: {
     name: 'instagram_discover_business',
     title: 'Discover Instagram business',
@@ -1847,6 +1901,10 @@ test('discovery logFields log the operation without the payload or the cursor', 
   assert.deepEqual(
     tool('instagram_discover_business').logFields?.({ username: 'competitor', mediaLimit: 5 }),
     { username: 'competitor', mediaLimit: 5 },
+  );
+  assert.deepEqual(
+    tool('instagram_list_recently_searched_hashtags').logFields?.({ account: 'brand' }),
+    { account: 'brand' },
   );
 });
 
@@ -3040,6 +3098,170 @@ test('real McpServer: discover_business publishes the media edge paging and resu
         JSON.stringify(media),
       );
     }
+  } finally {
+    await live.close();
+  }
+});
+
+// --- instagram_list_recently_searched_hashtags ------------------------------
+
+const SEARCHED_INCOMPLETE_NOTE =
+  'the listing may be incomplete, so uniqueHashtagsUsed is a lower bound and remaining an ' +
+  'upper bound';
+
+test('list_recently_searched_hashtags reads the edge off the operated account on graph.facebook.com', async () => {
+  const { req, calls } = fakeReq(() => ({
+    data: [
+      { id: 'h1', name: 'coffee' },
+      { id: 'h2', name: 'tea' },
+    ],
+  }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler({}, makeCtx(req));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, 'GET');
+  assert.equal(calls[0]?.path, '/999/recently_searched_hashtags');
+  assert.equal(calls[0]?.host, 'graph.facebook.com');
+  assert.deepEqual(calls[0]?.params, { fields: 'id,name', after: undefined });
+  assert.deepEqual(res.structuredContent, {
+    hashtags: [
+      { id: 'h1', name: fence('coffee') },
+      { id: 'h2', name: fence('tea') },
+    ],
+    uniqueHashtagsUsed: 2,
+    limit: 30,
+    windowDays: 7,
+    remaining: 28,
+    truncated: false,
+  });
+});
+
+test('list_recently_searched_hashtags falls back to /me when the profile has no account id', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [] }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler(
+    {},
+    makeCtx(req, { profile: { accountId: undefined } }),
+  );
+  assert.equal(calls[0]?.path, '/me/recently_searched_hashtags');
+  assert.deepEqual(res.structuredContent, {
+    hashtags: [],
+    uniqueHashtagsUsed: 0,
+    limit: 30,
+    windowDays: 7,
+    remaining: 30,
+    truncated: false,
+  });
+});
+
+test('list_recently_searched_hashtags copies only id + name and drops a name that is not text', async () => {
+  const { req } = fakeReq(() => ({
+    data: [
+      { id: 'h1', name: 42, media_count: 7 },
+      { id: 'h2', name: '' },
+    ],
+  }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler({}, makeCtx(req));
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.deepEqual(sc.hashtags, [{ id: 'h1' }, { id: 'h2', name: fence('') }]);
+});
+
+test('list_recently_searched_hashtags never reports a negative remaining budget', async () => {
+  // Meta documents at most 30, but a listing longer than the budget must read as
+  // "nothing left", not as a negative allowance.
+  const data = Array.from({ length: 32 }, (_, i) => ({ id: `h${i}`, name: `t${i}` }));
+  const { req } = fakeReq(() => ({ data }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler(
+    {},
+    makeCtx(req, { settings: { maxItems: 100 } }),
+  );
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.equal(sc.uniqueHashtagsUsed, 32);
+  assert.equal(sc.remaining, 0);
+  assert.equal(sc.truncated, false);
+});
+
+test('list_recently_searched_hashtags reports exactly 0 remaining at exactly 30 used', async () => {
+  const data = Array.from({ length: 30 }, (_, i) => ({ id: `h${i}` }));
+  const { req } = fakeReq(() => ({ data }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler(
+    {},
+    makeCtx(req, { settings: { maxItems: 100 } }),
+  );
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.equal(sc.remaining, 0);
+  assert.equal(sc.uniqueHashtagsUsed, 30);
+});
+
+test('list_recently_searched_hashtags counts an id-less hashtag but leaves it out of hashtags', async () => {
+  const { req } = fakeReq(() => ({ data: [{ name: 'orphan' }, { id: '' }, { id: 'h3' }] }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler({}, makeCtx(req));
+  assert.deepEqual(res.structuredContent, {
+    hashtags: [{ id: 'h3' }],
+    uniqueHashtagsUsed: 3,
+    limit: 30,
+    windowDays: 7,
+    remaining: 27,
+    truncated: false,
+    omittedWithoutId: 2,
+    note:
+      'omitted 2 items Instagram returned without a usable id (nothing can address an object ' +
+      'with no id), so Instagram listed more hashtags than hashtags holds',
+  });
+});
+
+test('list_recently_searched_hashtags walks every page Instagram hands back', async () => {
+  const { req, calls } = fakeReq((opts) =>
+    (opts.params as Record<string, unknown>).after === 'NEXT'
+      ? { data: [{ id: 'h3' }] }
+      : {
+          data: [{ id: 'h1' }, { id: 'h2' }],
+          paging: { cursors: { after: 'NEXT' }, next: 'https://graph.facebook.com/next' },
+        },
+  );
+  const res = await tool('instagram_list_recently_searched_hashtags').handler({}, makeCtx(req));
+  assert.equal(calls.length, 2);
+  assert.equal((calls[1]?.params as Record<string, unknown>).after, 'NEXT');
+  const sc = res.structuredContent as Record<string, unknown>;
+  assert.deepEqual(sc.hashtags, [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }]);
+  assert.equal(sc.uniqueHashtagsUsed, 3);
+  assert.equal(sc.truncated, false);
+  assert.equal(Object.hasOwn(sc, 'note'), false);
+});
+
+test('list_recently_searched_hashtags flags a listing the item cap cut as a lower bound', async () => {
+  const { req } = fakeReq(() => ({
+    data: [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }],
+    paging: { cursors: { after: 'NEXT' }, next: 'https://graph.facebook.com/next' },
+  }));
+  const res = await tool('instagram_list_recently_searched_hashtags').handler(
+    {},
+    makeCtx(req, { settings: { maxItems: 2 } }),
+  );
+  assert.deepEqual(res.structuredContent, {
+    hashtags: [{ id: 'h1' }, { id: 'h2' }],
+    uniqueHashtagsUsed: 2,
+    limit: 30,
+    windowDays: 7,
+    remaining: 28,
+    truncated: true,
+    note: `${CAP_MID_PAGE_NOTE}; ${SEARCHED_INCOMPLETE_NOTE}`,
+  });
+});
+
+test('real McpServer: list_recently_searched_hashtags survives an unreadable listing', async () => {
+  const live = await liveDiscoveryServer(fakeReq(() => ({ data: null })).req);
+  try {
+    const res = await live.client.callTool({
+      name: 'instagram_list_recently_searched_hashtags',
+      arguments: {},
+    });
+    assert.notEqual(res.isError, true, JSON.stringify(res));
+    const sc = res.structuredContent as Record<string, unknown>;
+    assert.deepEqual(sc.hashtags, []);
+    assert.equal(sc.truncated, true);
+    assert.equal(sc.remaining, 30);
+    assert.match(String(sc.note), /unreadable page/);
+    assert.ok(String(sc.note).endsWith(SEARCHED_INCOMPLETE_NOTE));
   } finally {
     await live.close();
   }

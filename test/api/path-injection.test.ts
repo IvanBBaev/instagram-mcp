@@ -67,7 +67,11 @@ import {
   getPublishingLimit,
   publishMedia,
 } from '../../src/api/publishing.js';
-import { discoverBusiness, getHashtagMedia } from '../../src/api/discovery.js';
+import {
+  discoverBusiness,
+  getHashtagMedia,
+  recentlySearchedHashtags,
+} from '../../src/api/discovery.js';
 
 /**
  * Nothing in this file may reach the network. Every request runs through an
@@ -251,6 +255,11 @@ const PATH_CALLS: {
     label: 'getHashtagMedia(hashtagId)',
     call: (req, id) =>
       getHashtagMedia(req, { hashtagId: id, igId: '17841400000000001', edge: 'top', maxItems: 10 }),
+  },
+  {
+    source: 'discovery.ts:recentlySearchedHashtags',
+    label: 'recentlySearchedHashtags(igId)',
+    call: (req, id) => recentlySearchedHashtags(req, { igId: id, maxItems: 10 }),
   },
   {
     source: 'discovery.ts:discoverBusiness',

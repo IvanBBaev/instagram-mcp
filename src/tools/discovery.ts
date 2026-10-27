@@ -1,8 +1,9 @@
 /**
  * Discovery tool specs (Layer 3) — read-only surface of the `discovery` package.
  *
- * Three tools per docs/tools.md: `instagram_search_hashtag`,
- * `instagram_get_hashtag_media`, and `instagram_discover_business`. All read the
+ * Four tools per docs/tools.md: `instagram_search_hashtag`,
+ * `instagram_get_hashtag_media`, `instagram_list_recently_searched_hashtags`,
+ * and `instagram_discover_business`. All read the
  * Instagram PUBLIC content graph via Facebook-Graph endpoints, so every spec is
  * **Path B (`fb-login`) only** (`paths: ['fb-login']`) and tagged
  * `package: 'discovery'`.
@@ -26,6 +27,7 @@ import { fence, json } from '../mcp/result.js';
 import {
   discoverBusiness,
   getHashtagMedia,
+  recentlySearchedHashtags,
   searchHashtag,
   BUSINESS_MEDIA_CURSOR_PATTERN,
   INSTAGRAM_USERNAME_PATTERN,
@@ -615,6 +617,94 @@ const getHashtagMediaTool = defineTool({
   },
 });
 
+/**
+ * Note for a recently-searched listing that may be incomplete. The count is then
+ * a floor and `remaining` a ceiling: a caller pacing its searches on them must
+ * not read either as exact.
+ */
+const SEARCHED_INCOMPLETE_NOTE =
+  'the listing may be incomplete, so uniqueHashtagsUsed is a lower bound and remaining an ' +
+  'upper bound';
+
+const searchedHashtagOutput = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+});
+
+/**
+ * One searched-hashtag entry -> a publishable record. Only `id` and `name` are
+ * copied: `name` is text this server did not write (a search made by any app on
+ * the account), so it is fenced, and an additive Meta field is not carried
+ * because nothing could fence it.
+ */
+function searchedHashtagToRecord(h: Record<string, unknown>): Record<string, unknown> {
+  const rec: Record<string, unknown> = { id: h.id, name: h.name };
+  fenceField(rec, 'name');
+  return rec;
+}
+
+const listRecentlySearchedHashtagsTool = defineTool({
+  name: 'instagram_list_recently_searched_hashtags',
+  title: 'List recently searched Instagram hashtags',
+  description:
+    'List the hashtags the operated account searched in the last 7 days via ' +
+    "GET /{ig-id}/recently_searched_hashtags — Meta's own record of the 30-unique-hashtags " +
+    'per rolling 7 days budget that instagram_search_hashtag spends. Unlike the advisory ' +
+    'in-process counter instagram_search_hashtag returns, it survives restarts and counts ' +
+    'searches made by any process or app on the account. uniqueHashtagsUsed counts every ' +
+    'hashtag listed and remaining is 30 minus it (never below 0). Hashtag names are returned ' +
+    'as fenced, untrusted text. truncated=true means the listing may be incomplete (note says ' +
+    'why), so uniqueHashtagsUsed is then a lower bound. A hashtag returned without an id is ' +
+    'left out of hashtags but still counted, and omittedWithoutId plus note say how many were.' +
+    DISCOVERY_HONESTY,
+  package: 'discovery',
+  paths: ['fb-login'],
+  annotations: { readOnlyHint: true, openWorldHint: true },
+  input: {},
+  output: {
+    hashtags: z.array(searchedHashtagOutput),
+    uniqueHashtagsUsed: z.number(),
+    limit: z.number(),
+    windowDays: z.number(),
+    remaining: z.number(),
+    truncated: z.boolean(),
+    omittedWithoutId: z.number().int().optional(),
+    note: z.string().optional(),
+  },
+  logFields: (args) => ({ account: args.account }),
+  handler: async (_args, ctx) => {
+    const igId = ctx.profile.accountId ?? 'me';
+    const page = await recentlySearchedHashtags(ctx.req, {
+      igId,
+      maxItems: ctx.settings.maxItems,
+    });
+    // Every entry Instagram listed is a slot spent, an id-less one included:
+    // the id is what a caller would spend, not what makes the search count.
+    const used = page.items.length;
+    const usable = page.items.filter(hasUsableId);
+    const payload: Record<string, unknown> = {
+      hashtags: usable.map(searchedHashtagToRecord),
+      uniqueHashtagsUsed: used,
+      limit: HASHTAG_BUDGET_LIMIT,
+      windowDays: HASHTAG_BUDGET_WINDOW_DAYS,
+      remaining: Math.max(0, HASHTAG_BUDGET_LIMIT - used),
+      truncated: page.truncated,
+    };
+    const notes: string[] = [];
+    if (typeof page.note === 'string') notes.push(page.note);
+    if (page.truncated) notes.push(SEARCHED_INCOMPLETE_NOTE);
+    const omitted = used - usable.length;
+    if (omitted > 0) {
+      payload.omittedWithoutId = omitted;
+      notes.push(
+        omittedWithoutIdNote(omitted, 'Instagram listed more hashtags than hashtags holds'),
+      );
+    }
+    if (notes.length > 0) payload.note = notes.join('; ');
+    return json(payload, { pretty: ctx.settings.prettyJson });
+  },
+});
+
 const discoverBusinessTool = defineTool({
   name: 'instagram_discover_business',
   title: 'Discover Instagram business',
@@ -718,5 +808,6 @@ const discoverBusinessTool = defineTool({
 export const discoveryTools: readonly ToolSpec[] = Object.freeze([
   searchHashtagTool,
   getHashtagMediaTool,
+  listRecentlySearchedHashtagsTool,
   discoverBusinessTool,
 ] as unknown as ToolSpec[]);

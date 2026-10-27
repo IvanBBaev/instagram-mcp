@@ -18,6 +18,7 @@ import {
   discoverBusiness,
   NO_PROFILE_NOTE,
   getHashtagMedia,
+  recentlySearchedHashtags,
   searchHashtag,
 } from '../../src/api/discovery.js';
 import { CAP_MID_PAGE_NOTE, SAME_CURSOR_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
@@ -1139,4 +1140,50 @@ test('getHashtagMedia flags a page that hands back the cursor it was sent (CC-DA
   assert.equal(res.truncated, true);
   assert.equal(res.after, 'CURSOR_FOR_PAGE_2');
   assert.equal(res.note, SAME_CURSOR_NOTE);
+});
+
+test('recentlySearchedHashtags reads /{ig-id}/recently_searched_hashtags on graph.facebook.com', async () => {
+  const { req, calls } = fakeReq(() => ({ data: [{ id: 'h1', name: 'coffee' }] }));
+
+  const page = await recentlySearchedHashtags(req, { igId: '999', maxItems: 50 });
+
+  assert.deepEqual(page, { items: [{ id: 'h1', name: 'coffee' }], truncated: false });
+  // Pinned whole, like searchHashtag: this read spends nothing, but a stray
+  // option (a body, idempotent:false) would still change how core/http sends it.
+  assert.deepEqual(calls, [
+    {
+      method: 'GET',
+      path: '/999/recently_searched_hashtags',
+      params: { fields: 'id,name', after: undefined },
+      host: 'graph.facebook.com',
+    },
+  ]);
+});
+
+test('recentlySearchedHashtags walks every page and stops at the item cap', async () => {
+  const pages: Record<string, unknown> = {
+    first: {
+      data: [{ id: 'h1' }, { id: 'h2' }],
+      paging: { cursors: { after: 'P2' }, next: 'https://graph.facebook.com/next' },
+    },
+    P2: { data: [{ id: 'h3' }] },
+  };
+  const walk = fakeReq((opts) => pages[String(opts.params?.after ?? 'first')]);
+  const all = await recentlySearchedHashtags(walk.req, { igId: '999', maxItems: 50 });
+  assert.deepEqual(all, { items: [{ id: 'h1' }, { id: 'h2' }, { id: 'h3' }], truncated: false });
+  assert.deepEqual(
+    walk.calls.map((c) => c.params?.after),
+    [undefined, 'P2'],
+  );
+
+  const capped = fakeReq((opts) => pages[String(opts.params?.after ?? 'first')]);
+  const cut = await recentlySearchedHashtags(capped.req, { igId: '999', maxItems: 1 });
+  assert.deepEqual(cut, { items: [{ id: 'h1' }], truncated: true, note: CAP_MID_PAGE_NOTE });
+  assert.equal(capped.calls.length, 1);
+});
+
+test('recentlySearchedHashtags reports a non-list listing as an unreadable page', async () => {
+  const { req } = fakeReq(() => ({ data: 'nope' }));
+  const page = await recentlySearchedHashtags(req, { igId: '999', maxItems: 50 });
+  assert.deepEqual(page, { items: [], truncated: true, note: UNREADABLE_PAGE_NOTE });
 });

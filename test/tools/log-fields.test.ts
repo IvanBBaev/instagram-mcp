@@ -248,6 +248,11 @@ const CASES: LogCase[] = [
     expect: { hashtagId: 'H1', edge: 'recent', limit: 50 },
   },
   {
+    name: 'instagram_list_recently_searched_hashtags',
+    args: { account: 'brand' },
+    expect: { account: 'brand' },
+  },
+  {
     name: 'instagram_discover_business',
     args: { username: 'competitor', mediaLimit: 5 },
     expect: { username: 'competitor', mediaLimit: 5 },

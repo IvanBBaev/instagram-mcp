@@ -1027,7 +1027,7 @@ test('real McpServer: omitting arguments entirely keeps zod default wording', as
 });
 
 test('the wrapper fallback renders a non-unknown-key validation failure with its path', async () => {
-  // Reachable through the `ToolRegistrar` seam (a stub registrar or a direct
+  // Reachable through the `deps.server` seam (a stub registrar or a direct
   // callback caller), where the SDK's own validation never ran.
   const t = spec({ name: 'instagram_get_media', input: { mediaId: z.string() } });
   const { deps, calls } = makeDeps({ tools: [t] });
@@ -1046,7 +1046,7 @@ test('the wrapper fallback renders a non-unknown-key validation failure with its
 });
 
 test('the wrapper fallback labels a root-level failure `(root)` rather than an empty path', async () => {
-  // Same `ToolRegistrar` seam: an embedder that hands the callback a scalar
+  // Same `deps.server` seam: an embedder that hands the callback a scalar
   // instead of an arguments object produces a zod issue whose `path` is empty.
   // Joining it yields "", so the message would read ": Expected object,
   // received number" — a stray colon that names nothing. `(root)` says where.

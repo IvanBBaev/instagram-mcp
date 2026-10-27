@@ -61,7 +61,7 @@ import { toInstagramError } from '../core/errors.js';
 import { createRedactor } from '../core/redact.js';
 import { escapeInvisible } from '../core/untrusted.js';
 import type { Clock } from '../core/clock.js';
-import type { McpServer, Server } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer, Server } from '@modelcontextprotocol/server';
 
 // --- PACKAGES manifest ------------------------------------------------------
 
@@ -357,34 +357,6 @@ export function serverConfirmer(server: McpServer): WriteConfirmer {
       );
     },
   };
-}
-
-/**
- * Structural view of the one `McpServer` method the registry drives. The tool
- * callback is re-validated internally, so its args are `unknown` here and the
- * result is our {@link ToolResult} (a subset of the SDK `CallToolResult`).
- * `deps.server` is reached through this shape so tests can pass a small stub.
- *
- * `inputSchema` is deliberately a built strict **`ZodObject`**, never a raw
- * `z.ZodRawShape` — see {@link strictInputSchema} for why that distinction is
- * the whole of CC-CFG-6. SDK v2 still accepts a raw shape for `inputSchema`
- * (a deprecated overload that wraps it in a plain, non-strict `z.object()`),
- * and only the built object form preserves the strictness. `outputSchema` must
- * be a Standard Schema object in v2, so the spec's raw output shape is wrapped
- * with `z.object()` before registration.
- */
-interface ToolRegistrar {
-  registerTool(
-    name: string,
-    config: {
-      title?: string;
-      description?: string;
-      inputSchema?: z.ZodObject;
-      outputSchema?: z.ZodObject;
-      annotations?: ToolAnnotationSet;
-    },
-    cb: (args: Record<string, unknown>, extra?: unknown) => Promise<ToolResult>,
-  ): unknown;
 }
 
 /**
@@ -703,8 +675,12 @@ function redactJsonBodies(
  *
  * A block whose `text` is not a string (only an injected redactor can produce
  * one) is passed on untouched rather than stringified.
+ *
+ * Typed as the SDK's `CallToolResult` because this is the last step before the
+ * result reaches `registerTool`'s callback contract: the fresh object literal
+ * satisfies its index signature, which the `ToolResult` interface does not.
  */
-function escapeTextBlocks(result: ToolResult): ToolResult {
+function escapeTextBlocks(result: ToolResult): CallToolResult {
   return {
     ...result,
     content: result.content.map((block) =>
@@ -715,7 +691,7 @@ function escapeTextBlocks(result: ToolResult): ToolResult {
 
 /** Register one surviving tool on the server with its strict per-call wrapper. */
 function registerOne(
-  registrar: ToolRegistrar,
+  server: McpServer,
   deps: RegisterToolsDeps,
   spec: ToolSpec,
   confirm: WriteConfirmer,
@@ -725,10 +701,13 @@ function registerOne(
   const strictSchema = strictInputSchema(shape);
   const validKeys = Object.keys(shape);
 
+  // Typed with built `ZodObject`s only, so `server.registerTool` below resolves
+  // to the SDK v2 Standard Schema overload — never the deprecated raw-shape one
+  // (which would also wrap `inputSchema` non-strictly; see strictInputSchema).
   const config: {
     title?: string;
     description?: string;
-    inputSchema?: z.ZodObject;
+    inputSchema: z.ZodObject;
     outputSchema?: z.ZodObject;
     annotations?: ToolAnnotationSet;
   } = {
@@ -748,7 +727,7 @@ function registerOne(
     // 1. Strict parse. Against a real McpServer this is a second line of
     //    defense — the SDK has already parsed with this exact schema and
     //    rejected unknown keys (strictInputSchema). It stays because
-    //    `ToolRegistrar` is a seam: a stub registrar, an embedder calling the
+    //    `deps.server` is a seam: a stub server, an embedder calling the
     //    callback directly, or a future SDK that stops validating would
     //    otherwise leave the invariant unenforced. It also keeps the richer
     //    `errorResult()` envelope on the paths where it *can* fire.
@@ -847,10 +826,10 @@ function registerOne(
   //    client except through here.
   // 8. Then escape the invisible characters in every text block — CC-DATA-102,
   //    see escapeTextBlocks. After the redactor, never before it.
-  const cb = async (rawArgs: Record<string, unknown>): Promise<ToolResult> =>
+  const cb = async (rawArgs: Record<string, unknown>): Promise<CallToolResult> =>
     escapeTextBlocks(redactResult(await invoke(rawArgs), redact));
 
-  registrar.registerTool(spec.name, config, cb);
+  server.registerTool(spec.name, config, cb);
 }
 
 /**
@@ -879,7 +858,6 @@ export function registerTools(deps: RegisterToolsDeps): {
   // then filter against every path any configured profile can reach.
   resolveProfile(deps.profiles, deps.defaultProfileName);
   const authPaths = new Set(deps.profiles.map((p) => p.authPath));
-  const registrar = deps.server as unknown as ToolRegistrar;
   const confirm = deps.confirm ?? serverConfirmer(deps.server);
   // Built once and shared by every registration: `createRedactor` reads the
   // global secret registry live on each call, so a redactor made here still
@@ -896,7 +874,7 @@ export function registerTools(deps: RegisterToolsDeps): {
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      registerOne(registrar, deps, spec, confirm, redact);
+      registerOne(deps.server, deps, spec, confirm, redact);
       registered.push(spec.name);
     }
   }

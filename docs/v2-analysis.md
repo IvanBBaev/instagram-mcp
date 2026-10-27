@@ -151,7 +151,7 @@ version move is **minor** unless Meta removes something an output promised.
 | Split `src/cli/login.ts` (1333 lines) by Path A / Path B / redirect capture | Largest file. The two paths share little. | M |
 | Split `src/core/config-write.ts` (1303 lines) into lock / atomic write / env parser | Three concerns in one module | M |
 | Factor the image / reel / story composites in `src/tools/publishing.ts` | Repeated flow shape, and `thumbOffset` is declared twice. Trial reels, alt text, AI labels and tasks will all touch this file. | M |
-| Move CLI dispatch out of `src/index.ts` | The composition root and the CLI are mixed together | S |
+| Move CLI dispatch out of `src/index.ts` | The composition root and the CLI are mixed together. **Done 2026-10-27** (`src/cli/argv.ts`, `src/cli/refresh.ts`). | S |
 | Drop the deprecated raw-shape `registerTool` workaround in `src/mcp/registry.ts` | SDK debt. Must happen before the SDK removes the overload. | S |
 | Make the diagnostics/status tool undeniable (architecture-review finding F-19) | A deny list can currently switch off the tool used to diagnose the deny list. **Done 2026-10-27** (`ALWAYS_ON_TOOLS`). | S |
 | Review the cost of the corner-case catalogue | 650+ rows and citation-count gates add friction to every change. Consider freezing closed rows into an archive file. | M |

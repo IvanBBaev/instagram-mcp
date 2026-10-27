@@ -11,7 +11,8 @@
  *   4. Construct the `McpServer`, register the tool surface (packages resolved
  *      from env, D1 capability-filtered per the active profile), and inject the
  *      per-profile network seam `createIgRequest(createAuthProvider(profile))`.
- *   5. Route CLI subcommands, else start the configured transport.
+ *   5. Route CLI subcommands (argv discipline in `cli/argv.ts`, each command in
+ *      its own `cli/<name>.ts`), else start the configured transport.
  *
  * stdout is the stdio protocol channel: nothing here may write to it. All
  * diagnostics go through the logger (stderr); `no-console` is lint-enforced.
@@ -21,7 +22,6 @@ import path from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import { McpServer } from '@modelcontextprotocol/server';
 import { systemClock } from './core/clock.js';
-import { expiryLabel } from './core/time.js';
 import { SETTINGS_ENV_NAMES, loadSettings } from './core/settings.js';
 import {
   blankKeys,
@@ -35,10 +35,8 @@ import { createAuthProvider } from './core/auth.js';
 import { createLogger } from './core/log.js';
 import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
-import { refreshToken } from './core/refresh.js';
-import { namedEnvFile, resolveConfigHome, writeCredentials } from './core/config-write.js';
+import { namedEnvFile, resolveConfigHome } from './core/config-write.js';
 import { quote } from './core/home-path.js';
-import { escapeControls } from './core/untrusted.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { PACKAGE_ENV_NAMES, registerTools } from './mcp/registry.js';
@@ -46,6 +44,8 @@ import { registerPrompts } from './mcp/prompts.js';
 import { closeOnSignal, startHttp, startStdio } from './mcp/transport.js';
 import { runLogin } from './cli/login.js';
 import { runDoctor } from './cli/doctor.js';
+import { runRefresh } from './cli/refresh.js';
+import { assertUsage } from './cli/argv.js';
 import { allTools } from './tools/index.js';
 import { SERVER_ICONS } from './mcp/icon.js';
 
@@ -268,77 +268,6 @@ function activeProfile(profiles: ResolvedProfile[], defaultName: string): Resolv
   return resolveProfile(profiles, defaultName);
 }
 
-/** The subcommands the entry routes; anything else on argv[2] is refused. */
-const SUBCOMMANDS = ['login', 'doctor', 'refresh'] as const;
-
-const USAGE_TEXT = `Usage:
-  instagram-mcp-ai                        Start the MCP server (transport from IG_TRANSPORT).
-  instagram-mcp-ai login --path <ig|fb>   Obtain and persist a long-lived token (login --help).
-  instagram-mcp-ai doctor                 Health-check the active profile (exit 0 when healthy).
-  instagram-mcp-ai refresh                Refresh the active profile's long-lived token.
-`;
-
-/**
- * Argv discipline for the entry, before anything else runs: a usage error must
- * be reported as one, not as whatever the misread line happens to do next.
- *
- * Without this, `instagram-mcp-ai docter` (a typo) fell through to "no
- * subcommand" and started the stdio server — a process that sits on stdin
- * waiting for JSON-RPC, which from a terminal looks like a hang — and
- * `doctor --bogus` ran the doctor with the stray token dropped, so a
- * mistyped flag was indistinguishable from a clean run. Both are refused with
- * exit 2 (the usage code the `login` parser already uses for its own unknown
- * arguments), naming the offending token. `--help`/`-h` on their own print the
- * usage and exit 0. Returns only when the line is one of the routed shapes.
- */
-/**
- * How a refused argv token is named on stderr: cut at its first `=` and passed
- * through the token-shape backstop of the redactor (CC-PROC-208).
- *
- * Both refusals below echo a token the operator did not mean to pass, and a
- * launcher's stderr is not the operator's terminal: an MCP host writes it to
- * its own log file. The stray-argument refusal already dropped the value after
- * an `=`; the unknown-subcommand refusal echoed the whole token, so a client
- * config carrying `"args": ["--access-token=EAA…"]` copied the token into that
- * log. The flag part is what tells the operator what was wrong; the value is
- * the one part that could be a secret. A bare token (`args: ["EAA…"]`) has no
- * `=` to cut at, so the redactor's shape patterns are what mask it — nothing is
- * registered yet at this point, so the shapes are all it can know. Last, every
- * control character is written as a JSON escape (`\uXXXX`): the token is
- * echoed inside quotes, and an ANSI sequence or a newline in it would otherwise
- * repaint the terminal or end the refusal early and forge a line beneath it.
- */
-function argvName(token: string): string {
-  const eq = token.indexOf('=');
-  return escapeControls(String(createRedactor()(eq === -1 ? token : token.slice(0, eq))));
-}
-
-function assertUsage(argv: string[]): void {
-  const [subcommand, ...rest] = argv;
-  if (subcommand === undefined) return;
-  if (subcommand === '--help' || subcommand === '-h') {
-    process.stderr.write(USAGE_TEXT);
-    process.exit(0);
-  }
-  if (!(SUBCOMMANDS as readonly string[]).includes(subcommand)) {
-    process.stderr.write(
-      `instagram-mcp-ai: unknown subcommand '${argvName(subcommand)}'.\n\n${USAGE_TEXT}`,
-    );
-    process.exit(2);
-  }
-  // `login` parses its own line; `doctor` and `refresh` take nothing at all.
-  // Only the first stray token is named, and only as `argvName` shows it: a
-  // `--flag=value` typed here is a flag no command takes, and the value after
-  // the `=` is the one part of the line that could be a secret.
-  const stray = rest[0];
-  if (subcommand !== 'login' && stray !== undefined) {
-    process.stderr.write(
-      `${subcommand}: unknown argument '${argvName(stray)}'; ${subcommand} takes no arguments.\n\n${USAGE_TEXT}`,
-    );
-    process.exit(2);
-  }
-}
-
 async function main(): Promise<void> {
   assertNodeVersion();
   assertUsage(process.argv.slice(2));
@@ -442,62 +371,13 @@ async function main(): Promise<void> {
   }
 
   if (subcommand === 'refresh') {
-    const profile = activeProfile(profiles, defaultName);
-    // No Graph seam here on purpose: the token-exchange endpoints authenticate
-    // themselves, and the seam would append `access_token`/`appsecret_proof` on
-    // top of that — see the transport note in core/refresh.ts.
-    const refreshed = await refreshToken({
-      authPath: profile.authPath,
-      accessToken: profile.accessToken,
-      appId: profile.appId,
-      appSecret: profile.appSecret,
-      // Equivalent-mutant note: dropping `nowMs` cannot be separated by any
-      // input — `core/refresh.ts` defaults it to `Date.now()`, which is what
-      // `systemClock.now()` returns, so the only difference is the sub-
-      // millisecond gap between the two reads and the rendered expiry is floored
-      // to whole seconds. It stays because the composition root is the one place
-      // that injects the clock: every other timestamp in a run comes from
-      // `clock`, and a `refresh` that quietly read the wall clock instead is how
-      // a substituted clock would stop applying to precisely the path that mints
-      // credentials.
-      nowMs: clock.now(),
-    });
-    // F-4 (docs/security.md §2, core/redact.ts): the exchange has just minted a
-    // LIVE long-lived credential, and it is a value the redactor cannot know on
-    // sight — a Page token or a rotated secret routinely looks like nothing in
-    // particular, and the `EAA…`/`IG…` shape backstop is best-effort only. Until
-    // it is registered, every string built from here to process exit carries it
-    // in the clear: the persist below (whose fs errors quote the file it was
-    // rewriting), any log line added to this path, an unhandled rejection Node
-    // prints itself. So it is registered HERE — between the mint and the first
-    // thing that can touch it — not after the write, which would leave a failed
-    // rotation as the one case where the new token is still unmasked.
-    // `createRedactor` reads the registry live, so the logger built above starts
-    // masking it without being rebuilt.
-    //
-    // `login` mints at the same point in its own flow and deliberately does NOT
-    // register (CC-AUTH-24). It is dispatched at the `subcommand === 'login'`
-    // branch above and exits from there, before this logger exists, so nothing
-    // in that process ever builds a redactor for a registration to reach. Its
-    // guarantee is local instead: it prints no token at all, and its only
-    // unbounded output — `login failed: <message>` — carries a Graph
-    // `error.message`, never the request URL or the raw response body, and is
-    // passed through a redactor built there from the app secret, the code and
-    // every token that run minted.
-    registerSecret(refreshed.accessToken);
-    const written = await writeCredentials(profile.name, {
-      accessToken: refreshed.accessToken,
-      authPath: profile.authPath,
-      accountId: profile.accountId,
-      appId: profile.appId,
-      appSecret: profile.appSecret,
-      expiresAtSec: refreshed.expiresAtSec,
-    });
-    process.stderr.write(
-      `Refreshed ${profile.authPath} token for profile '${profile.name}' -> ${written.path} ` +
-        `(expires: ${expiryLabel(refreshed.expiresAtSec)}).\n`,
+    process.exit(
+      await runRefresh({
+        profile: activeProfile(profiles, defaultName),
+        // Equivalent-mutant note: see the one in `cli/refresh.ts`.
+        nowMs: clock.now(),
+      }),
     );
-    process.exit(0);
   }
 
   // Build one fully-registered server instance. stdio keeps this single instance

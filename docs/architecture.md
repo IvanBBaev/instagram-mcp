@@ -281,7 +281,9 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
 
 ## 9. Entry point & CLI subcommands
 
-`index.ts` handles subcommands before starting the server:
+`index.ts` handles subcommands before starting the server. The argv discipline
+(`assertUsage`) lives in `src/cli/argv.ts`, and each subcommand in its own
+`src/cli/<name>.ts` module; the entry only resolves the profile and dispatches:
 
 - `login` — interactive browser OAuth to obtain and persist a long-lived token
   (both auth paths; see [auth.md](auth.md)).

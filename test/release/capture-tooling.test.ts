@@ -46,6 +46,7 @@ const MIRRORED_FIELD_SETS: ReadonlyArray<readonly [name: string, owner: string]>
   ['MEDIA_FIELDS', 'src/api/media.ts'],
   ['CHILD_FIELDS', 'src/api/media.ts'],
   ['MEDIA_DETAIL_FIELDS', 'src/api/media.ts'],
+  ['FB_LOGIN_MEDIA_FIELDS', 'src/api/media.ts'],
   ['COMMENT_FIELDS', 'src/api/comments.ts'],
   ['COMMENT_DETAIL_FIELDS', 'src/api/comments.ts'],
   ['TAGGED_MEDIA_FIELDS', 'src/api/comments.ts'],

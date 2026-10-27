@@ -58,6 +58,13 @@ const mediaFieldsShape = {
   timestamp: z.string().optional(),
   like_count: z.number().optional(),
   comments_count: z.number().optional(),
+  // Path B (`fb-login`) only: `api/media` requests these four on that path
+  // alone, so on Path A they are simply absent. Counts are whole and never
+  // negative; `media_audio_type` is open Meta vocabulary (CC-DATA-6).
+  reposts_count: z.number().int().nonnegative().optional(),
+  saved_count: z.number().int().nonnegative().optional(),
+  shares_count: z.number().int().nonnegative().optional(),
+  media_audio_type: z.string().optional(),
 } as const;
 
 const mediaItemOutput = z.object(mediaFieldsShape).passthrough();
@@ -119,6 +126,33 @@ function typedField(rec: Record<string, unknown>, key: string, type: 'string' | 
   if (typeof rec[key] !== type) delete rec[key];
 }
 
+/** The Path B counters (`mediaFieldsShape`), each a whole, non-negative number. */
+const FB_LOGIN_COUNT_FIELDS = ['reposts_count', 'saved_count', 'shares_count'] as const;
+
+/**
+ * Keep a counter only when it is a whole, non-negative, exactly representable
+ * number — what its output schema declares. A fraction or a negative would
+ * otherwise fail validation for the whole listing over one field of one post.
+ */
+function countField(rec: Record<string, unknown>, key: string): void {
+  const value = rec[key];
+  if (!(typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)) delete rec[key];
+}
+
+/**
+ * Shape of a Meta vocabulary token (`ORIGINAL`, `LICENSED_MUSIC`, …). Open
+ * enums are published unfenced, so `media_audio_type` is kept only when it IS
+ * such a token: whether Meta ever puts free text (a track title) in it is
+ * *[verify]*, and free text must never reach the model unfenced.
+ */
+const VOCABULARY_TOKEN = /^[A-Za-z0-9_]{1,64}$/;
+
+/** Keep an open-enum field only when it is a vocabulary token. */
+function tokenField(rec: Record<string, unknown>, key: string): void {
+  const value = rec[key];
+  if (!(typeof value === 'string' && VOCABULARY_TOKEN.test(value))) delete rec[key];
+}
+
 /** Keys a carousel child publishes as strings (`childOutput`). */
 const CHILD_STRING_FIELDS = [
   'media_type',
@@ -141,6 +175,8 @@ function publishMediaFields(rec: Record<string, unknown>): Record<string, unknow
   for (const key of MEDIA_STRING_FIELDS) typedField(rec, key, 'string');
   typedField(rec, 'like_count', 'number');
   typedField(rec, 'comments_count', 'number');
+  for (const key of FB_LOGIN_COUNT_FIELDS) countField(rec, key);
+  tokenField(rec, 'media_audio_type');
   return rec;
 }
 
@@ -270,6 +306,12 @@ function childrenFallbackNote(kind: string): string {
 
 // --- Tools -----------------------------------------------------------------
 
+/** The Path-B-only fields, in the words every media tool description uses. */
+const FB_LOGIN_FIELDS_NOTE =
+  'On a Facebook Login (fb-login) profile the media also carries reposts_count, saved_count, ' +
+  'shares_count and media_audio_type when Instagram discloses them; an Instagram Login ' +
+  '(ig-login) profile never requests them.';
+
 const listMediaTool = defineTool({
   name: 'instagram_list_media',
   title: 'List Instagram media',
@@ -282,7 +324,8 @@ const listMediaTool = defineTool({
     "server's item cap (IG_MAX_ITEMS), in which case paging.truncated is true if more media remained. " +
     'Captions are returned as fenced, untrusted text. Some fields (like_count, media_url) may be ' +
     'absent when Instagram does not disclose them. An item Instagram returns without ' +
-    'an id is left out, and omittedWithoutId plus note say how many were.',
+    'an id is left out, and omittedWithoutId plus note say how many were. ' +
+    FB_LOGIN_FIELDS_NOTE,
   package: 'media',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: {
@@ -333,6 +376,7 @@ const listMediaTool = defineTool({
   handler: async (args, ctx) => {
     const page = await listMedia(ctx.req, {
       igAccountId: ctx.profile.accountId ?? 'me',
+      authPath: ctx.profile.authPath,
       maxItems: ctx.settings.maxItems,
       limit: args.limit,
       after: args.after,
@@ -364,7 +408,8 @@ const listStoriesTool = defineTool({
     'Captions are returned as fenced, untrusted text. Stories carry no like_count or ' +
     'comments_count, and other fields (media_url) may be absent when Instagram does not disclose ' +
     'them. An item Instagram returns without an id is left out, and omittedWithoutId plus note ' +
-    'say how many were.',
+    'say how many were. ' +
+    FB_LOGIN_FIELDS_NOTE,
   package: 'media',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: {
@@ -405,6 +450,7 @@ const listStoriesTool = defineTool({
   handler: async (args, ctx) => {
     const page = await listStories(ctx.req, {
       igAccountId: ctx.profile.accountId ?? 'me',
+      authPath: ctx.profile.authPath,
       maxItems: ctx.settings.maxItems,
       limit: args.limit,
       after: args.after,
@@ -423,7 +469,8 @@ const getMediaTool = defineTool({
     'rather than nulled; a deleted object or an expired story (stories last 24h) returns an error. ' +
     'A carousel child Instagram returns without an id is left out, and omittedWithoutId plus note ' +
     "say how many were. If an album's items cannot be read, the detail is still returned with " +
-    'children omitted and a note naming the error.',
+    'children omitted and a note naming the error. ' +
+    FB_LOGIN_FIELDS_NOTE,
   package: 'media',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: {
@@ -439,7 +486,10 @@ const getMediaTool = defineTool({
   },
   logFields: (args) => ({ mediaId: args.mediaId }),
   handler: async (args, ctx) => {
-    const media = await getMedia(ctx.req, { mediaId: args.mediaId });
+    const media = await getMedia(ctx.req, {
+      mediaId: args.mediaId,
+      authPath: ctx.profile.authPath,
+    });
 
     // Fallback: some responses omit inline children on carousels — fetch the
     // `/children` edge so albums always resolve their items.

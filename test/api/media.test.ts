@@ -1933,3 +1933,35 @@ test('a single page that advances past the cursor it was sent is left alone (CC-
   assert.equal(res.after, 'Y');
   assert.equal(res.note, undefined);
 });
+
+// --- Path B media fields (docs/v2-analysis.md §4.1) -------------------------
+
+/** What `fb-login` adds to the media field set, duplicated as above. */
+const EXPECTED_FB_LOGIN_MEDIA_FIELDS = `${EXPECTED_MEDIA_FIELDS},reposts_count,saved_count,shares_count,media_audio_type`;
+
+test('the media reads ask for the Path B fields on fb-login and only there', async () => {
+  // A field graph.instagram.com does not know fails the WHOLE read, so Path A —
+  // and a caller that names no path — must keep the base set byte for byte.
+  const cases = [
+    { authPath: undefined, list: EXPECTED_MEDIA_FIELDS, detail: EXPECTED_MEDIA_DETAIL_FIELDS },
+    { authPath: 'ig-login', list: EXPECTED_MEDIA_FIELDS, detail: EXPECTED_MEDIA_DETAIL_FIELDS },
+    {
+      authPath: 'fb-login',
+      list: EXPECTED_FB_LOGIN_MEDIA_FIELDS,
+      detail: `${EXPECTED_FB_LOGIN_MEDIA_FIELDS},children{${EXPECTED_CHILD_FIELDS}}`,
+    },
+  ] as const;
+  for (const c of cases) {
+    const { req, calls } = fakeReq((opts) =>
+      opts.path === '/M1' ? { id: 'M1' } : { data: [], paging: {} },
+    );
+    await listMedia(req, { igAccountId: '1', maxItems: 10, authPath: c.authPath });
+    await listStories(req, { igAccountId: '1', maxItems: 10, authPath: c.authPath });
+    await getMedia(req, { mediaId: 'M1', authPath: c.authPath });
+    assert.deepEqual(
+      calls.map((call) => call.params?.fields),
+      [c.list, c.list, c.detail],
+      `field sets for ${String(c.authPath)}`,
+    );
+  }
+});

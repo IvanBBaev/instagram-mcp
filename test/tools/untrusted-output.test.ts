@@ -103,6 +103,10 @@ function hostileRecord(): Record<string, unknown> {
     followers_count: 1,
     follows_count: 1,
     media_count: 1,
+    reposts_count: 1,
+    saved_count: 1,
+    shares_count: 1,
+    media_audio_type: HOSTILE,
     hidden: false,
     // Insights metric rows.
     title: HOSTILE,

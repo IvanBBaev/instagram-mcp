@@ -26,6 +26,7 @@
 import {
   InstagramError,
   isInstagramError,
+  type AuthPath,
   type GraphListResponse,
   type IgRequestFn,
   type IgRequestOptions,
@@ -59,6 +60,40 @@ const CHILD_FIELDS = [
 const MEDIA_DETAIL_FIELDS = `${MEDIA_FIELDS},children{${CHILD_FIELDS}}`;
 
 /**
+ * Media fields requested on top of {@link MEDIA_FIELDS} on the Facebook-Login
+ * path (`fb-login`, graph.facebook.com) only.
+ *
+ * Meta documents these on the Path B IG Media node (docs/v2-analysis.md §4.1),
+ * not on graph.instagram.com. A field Graph does not know fails the WHOLE read
+ * with an error, not just that field, so sending them on Path A would trade a
+ * working listing for four optional numbers. They are therefore requested by
+ * auth path ({@link mediaFieldsFor}) rather than unconditionally. Both halves
+ * are *[verify]*: that Path B serves all four on `/media`, `/stories` and
+ * `/{media-id}`, and that Path A really refuses them.
+ */
+const FB_LOGIN_MEDIA_FIELDS = [
+  'reposts_count',
+  'saved_count',
+  'shares_count',
+  'media_audio_type',
+].join(',');
+
+/**
+ * The media field set for one auth path. An omitted path is Path A's set: the
+ * smaller request is the one every token can answer.
+ */
+function mediaFieldsFor(authPath: AuthPath | undefined): string {
+  return authPath === 'fb-login' ? `${MEDIA_FIELDS},${FB_LOGIN_MEDIA_FIELDS}` : MEDIA_FIELDS;
+}
+
+/** {@link MEDIA_DETAIL_FIELDS} for one auth path, children edge unchanged. */
+function mediaDetailFieldsFor(authPath: AuthPath | undefined): string {
+  return authPath === 'fb-login'
+    ? `${MEDIA_FIELDS},${FB_LOGIN_MEDIA_FIELDS},children{${CHILD_FIELDS}}`
+    : MEDIA_DETAIL_FIELDS;
+}
+
+/**
  * A single child of a carousel album. `media_type` is an **open** enum — Meta
  * may add values (CC-DATA-6), so it stays a plain string.
  */
@@ -88,6 +123,12 @@ export interface MediaItem {
   timestamp?: string;
   like_count?: number;
   comments_count?: number;
+  /** Path B only (`fb-login`), like the three fields below; see {@link FB_LOGIN_MEDIA_FIELDS}. */
+  reposts_count?: number;
+  saved_count?: number;
+  shares_count?: number;
+  /** Open Meta vocabulary (CC-DATA-6), kept a plain string. */
+  media_audio_type?: string;
 }
 
 /** A media object plus its carousel children (present only for albums). */
@@ -733,6 +774,12 @@ export async function fetchPagedEdge<TRaw, T>(
 export interface ListMediaParams extends PageParams {
   /** IG account whose media to list — the numeric IG-user id or `me`. */
   igAccountId: string;
+  /**
+   * Auth path of the profile making the read. `fb-login` adds the Path B media
+   * fields ({@link FB_LOGIN_MEDIA_FIELDS}); anything else, omission included,
+   * requests the base set only.
+   */
+  authPath?: AuthPath;
 }
 
 /**
@@ -746,7 +793,7 @@ export async function listMedia(req: IgRequestFn, params: ListMediaParams): Prom
     (after) => ({
       method: 'GET',
       path: `/${encodeURIComponent(params.igAccountId)}/media`,
-      params: { fields: MEDIA_FIELDS, limit: params.limit, after },
+      params: { fields: mediaFieldsFor(params.authPath), limit: params.limit, after },
     }),
     params,
     (m) => m,
@@ -769,7 +816,7 @@ export async function listStories(req: IgRequestFn, params: ListMediaParams): Pr
     (after) => ({
       method: 'GET',
       path: `/${encodeURIComponent(params.igAccountId)}/stories`,
-      params: { fields: MEDIA_FIELDS, limit: params.limit, after },
+      params: { fields: mediaFieldsFor(params.authPath), limit: params.limit, after },
     }),
     params,
     (m) => m,
@@ -779,6 +826,8 @@ export async function listStories(req: IgRequestFn, params: ListMediaParams): Pr
 export interface GetMediaParams {
   /** The IG media object id to fetch. */
   mediaId: string;
+  /** Auth path of the reading profile, as on {@link ListMediaParams.authPath}. */
+  authPath?: AuthPath;
 }
 
 /**
@@ -790,7 +839,7 @@ export async function getMedia(req: IgRequestFn, params: GetMediaParams): Promis
   const raw = await req<unknown>({
     method: 'GET',
     path: `/${encodeURIComponent(params.mediaId)}`,
-    params: { fields: MEDIA_DETAIL_FIELDS },
+    params: { fields: mediaDetailFieldsFor(params.authPath) },
   });
   return normalizeDetail(raw);
 }

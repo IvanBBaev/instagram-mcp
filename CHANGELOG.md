@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uniqueHashtagsUsed` and `remaining`. Unlike the advisory local counter it
   survives restarts and counts every process on the account. Path B
   (`fb-login`) only, in the dark `discovery` package; names are fenced.
+- Media fields on Path B: on an `fb-login` profile `instagram_list_media`,
+  `instagram_list_stories` and `instagram_get_media` also request
+  `reposts_count`, `saved_count`, `shares_count` and `media_audio_type`, and
+  publish them as optional output fields. An `ig-login` profile never requests
+  them, so Path A reads are unchanged. A count that is not a non-negative safe
+  integer, or an audio type that is not a plain vocabulary token, is dropped
+  rather than failing the read. Graph behaviour on each edge is *[verify]*.
 
 ### Changed
 

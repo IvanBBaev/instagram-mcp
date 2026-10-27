@@ -14,7 +14,12 @@
     "url": "https://github.com/IvanBBaev/instagram-mcp"
   },
   "icon": "icon.png",
-  "icons": [{ "src": "icon.png", "size": "128x128" }],
+  "icons": [
+    {
+      "src": "icon.png",
+      "size": "128x128"
+    }
+  ],
   "keywords": ["instagram", "mcp", "meta", "graph-api", "social"],
   "server": {
     "type": "node",

@@ -71,6 +71,13 @@ const CHILD_FIELDS = 'id,media_type,media_url,thumbnail_url,permalink,timestamp'
 
 const MEDIA_DETAIL_FIELDS = `${MEDIA_FIELDS},children{${CHILD_FIELDS}}`;
 
+/** Requested on top of MEDIA_FIELDS on the fb-login path only, as src/api/media.ts does. */
+const FB_LOGIN_MEDIA_FIELDS = 'reposts_count,saved_count,shares_count,media_audio_type';
+
+/** The media field set the server sends for one auth path. */
+const mediaFieldsFor = (authPath) =>
+  authPath === 'fb-login' ? `${MEDIA_FIELDS},${FB_LOGIN_MEDIA_FIELDS}` : MEDIA_FIELDS;
+
 const COMMENT_FIELDS =
   'id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}';
 
@@ -191,7 +198,7 @@ const CAPTURES = [
     build: (ctx) => ({
       method: 'GET',
       path: `/${ctx.igId}/media`,
-      params: { fields: MEDIA_FIELDS, limit: PAGE_LIMIT },
+      params: { fields: mediaFieldsFor(ctx.authPath), limit: PAGE_LIMIT },
     }),
     // Everything below hangs off the first media object this page returns.
     collect: (raw, ctx) => {
@@ -207,7 +214,12 @@ const CAPTURES = [
     build: (ctx) => ({
       method: 'GET',
       path: `/${ctx.mediaId}`,
-      params: { fields: MEDIA_DETAIL_FIELDS },
+      params: {
+        fields:
+          ctx.authPath === 'fb-login'
+            ? `${mediaFieldsFor(ctx.authPath)},children{${CHILD_FIELDS}}`
+            : MEDIA_DETAIL_FIELDS,
+      },
     }),
   },
   {

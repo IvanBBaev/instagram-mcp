@@ -32,7 +32,7 @@ advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 69 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1938 citation sites across the
+Nothing downstream resolves a case by section number; 1940 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -810,6 +810,7 @@ the citations):
 | CC-COM-6 | `POST /{comment-id}/replies` bisecting the message length |
 | CC-INS-4 | `GET /{ig-id}/insights?metric=reach&period=day&metric_type=time_series` across a UTC midnight boundary |
 | CC-DATA-119 | `GET /{ig-user-id}/stories` on the Instagram-Login host, its paging shape and fields (see CC-DATA-132) |
+| CC-DATA-6 | `GET /{ig-id}/media`, `GET /{ig-id}/stories` and `GET /{media-id}` on the Facebook-Login host with `reposts_count,saved_count,shares_count,media_audio_type` added, recording that each is served and what `media_audio_type` values look like; and that the Instagram-Login host refuses the same set |
 | CC-PROC-25 | Every write (`POST /{ig-id}/media`, `/media_publish`, `/{media-id}/comments`, `/{comment-id}/replies`, `/{comment-id}` hide, `/{media-id}` `comment_enabled`) on **both** hosts with `access_token` (and, on Path B, `appsecret_proof` + `appsecret_time`) in the form-encoded body only, recording that each is accepted |
 
 Plus the M1 hashtag/PCA probe from [auth.md](auth.md) §5. Note that the hashtag

@@ -583,6 +583,91 @@ test('the unrecognised-name warning reaches the operator whose typo stops the st
   }
 });
 
+test('IG_PORT is reported as deprecated once, on stderr, and the run is otherwise unchanged (CC-CFG-85)', async () => {
+  const sandbox = await makeSandbox();
+  try {
+    const env = {
+      IG_ACCESS_TOKEN: TOKEN,
+      IG_ACCOUNT_ID: '17841400000000000',
+      IG_PORT: '4200',
+    };
+    const routes = [{ match: '/17841400000000000', body: { id: '17841400000000000' } }];
+    const run = runEntry(sandbox, ['doctor'], { env, routes });
+    assert.equal(run.status, 0, `doctor must still pass, stderr: ${run.stderr}`);
+    const records = logRecords(run.stderr);
+    const notices = records.filter((r) => r.level === 'warn');
+    assert.equal(notices.length, 1, `exactly one warning, stderr: ${run.stderr}`);
+    const notice = { ...notices[0] };
+    delete notice.time;
+    assert.deepEqual(notice, {
+      level: 'warn',
+      msg: 'IG_PORT is deprecated; rename it to IG_HTTP_PORT',
+      hint: 'IG_PORT still works in 1.x and is removed in 2.0',
+    });
+    assert.equal(run.stdout.includes('IG_PORT'), false, 'never on stdout, the MCP channel');
+
+    // Both names, disagreeing: the notice says which one won.
+    const both = runEntry(sandbox, ['doctor'], {
+      env: { ...env, IG_HTTP_PORT: '4100' },
+      routes,
+    });
+    assert.equal(both.status, 0, `stderr: ${both.stderr}`);
+    const bothNotices = logRecords(both.stderr).filter((r) => r.level === 'warn');
+    assert.equal(bothNotices.length, 1, `stderr: ${both.stderr}`);
+    assert.equal(
+      bothNotices[0]?.msg,
+      'IG_PORT and IG_HTTP_PORT disagree; IG_HTTP_PORT wins and IG_PORT is ignored',
+    );
+    assert.equal(bothNotices[0]?.IG_HTTP_PORT, 4100);
+    assert.equal(bothNotices[0]?.IG_PORT, 4200);
+
+    // The canonical name alone is silent.
+    const canonical = runEntry(sandbox, ['doctor'], {
+      env: { IG_ACCESS_TOKEN: TOKEN, IG_ACCOUNT_ID: '17841400000000000', IG_HTTP_PORT: '4100' },
+      routes,
+    });
+    assert.equal(canonical.status, 0, `stderr: ${canonical.stderr}`);
+    assert.deepEqual(
+      logRecords(canonical.stderr).filter((r) => r.level === 'warn'),
+      [],
+      `stderr: ${canonical.stderr}`,
+    );
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
+test('a profile name a shell cannot export still loads and is warned about once (CC-CFG-86)', async () => {
+  const sandbox = await makeSandbox();
+  try {
+    const run = runEntry(sandbox, ['doctor'], {
+      env: {
+        IG_ACCESS_TOKEN: TOKEN,
+        IG_ACCOUNT_ID: '17841400000000000',
+        'IG_PROFILE_MY-SHOP_ACCESS_TOKEN': TOKEN,
+        IG_PROFILE_BRAND_ACCESS_TOKEN: TOKEN,
+      },
+      routes: [{ match: '/17841400000000000', body: { id: '17841400000000000' } }],
+    });
+    assert.equal(run.status, 0, `doctor must still pass, stderr: ${run.stderr}`);
+    const notices = logRecords(run.stderr).filter((r) => r.level === 'warn');
+    assert.equal(notices.length, 1, `exactly one warning, stderr: ${run.stderr}`);
+    const notice = { ...notices[0] };
+    delete notice.time;
+    assert.deepEqual(notice, {
+      level: 'warn',
+      msg: 'profile names outside [A-Z0-9_] are deprecated',
+      names: ['my-shop'],
+      hint:
+        'a shell export cannot set IG_PROFILE_<NAME>_* for these names; ' +
+        'they still work in 1.x and are refused in 2.0',
+    });
+    assert.equal(run.stderr.includes(TOKEN), false, 'the token is never echoed');
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
 // --- Harness contract -------------------------------------------------------
 
 test('an unrouted call fails fast and loud instead of quietly burning the retry budget', async () => {

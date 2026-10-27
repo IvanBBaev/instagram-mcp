@@ -81,12 +81,6 @@ const NOT_ENV_VARS: ReadonlyMap<string, string> = new Map([
   ['IG_GRAPH_BASE', 'local const in src/cli/login.ts — the graph.instagram.com base URL'],
   ['IG_HOST', 'local const in src/core/auth.ts — the Path A Graph host'],
   [
-    'IG_HTTP_PORT',
-    'named only to be denied: a comment in src/core/settings.ts states the port ' +
-      'variable is IG_PORT, not IG_HTTP_PORT. Documenting it would create the ' +
-      'very variable the comment warns does not exist.',
-  ],
-  [
     'IG_PROFILE__ACCESS_TOKEN',
     'named only as a counter-example: an equivalent-mutant note in src/core/config.ts ' +
       'cites it as the malformed key the empty-name guard rejects. It is the spelling of ' +
@@ -182,6 +176,7 @@ const NUMERIC_KNOBS = [
   { env: 'IG_MAX_ITEMS', field: 'maxItems' },
   { env: 'IG_REFRESH_AFTER_DAYS', field: 'refreshAfterDays' },
   { env: 'IG_TIMEOUT_MS', field: 'timeoutMs' },
+  { env: 'IG_HTTP_PORT', field: 'httpPort' },
   { env: 'IG_PORT', field: 'httpPort' },
 ] as const;
 

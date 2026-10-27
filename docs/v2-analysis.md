@@ -131,8 +131,8 @@ over becomes the single 2.0 "tightening" batch below, so 1.x stays additive.
 
 | Item | Today | 2.0 proposal |
 |---|---|---|
-| Env-var naming | `IG_PORT` next to `IG_HTTP_HOST`/`IG_HTTP_TOKEN`. `IG_AUTH_MODE` and `IG_AUTH_PATH` are aliases, and the code treats `AUTH_PATH` as canonical. | 1.x accepts `IG_HTTP_PORT` and warns on the old name. 2.0 removes `IG_PORT` and one of the auth spellings. |
-| Profile names | Names with `-` are accepted, but a shell `export` refuses them | Restrict to `[A-Z0-9_]`. 1.x warns first. |
+| Env-var naming | `IG_PORT` next to `IG_HTTP_HOST`/`IG_HTTP_TOKEN`. `IG_AUTH_MODE` and `IG_AUTH_PATH` are aliases, and the code treats `AUTH_PATH` as canonical. | 1.x accepts `IG_HTTP_PORT` and warns on the old name. 2.0 removes `IG_PORT` and one of the auth spellings. **1.x part done 2026-10-28** (`IG_HTTP_PORT` canonical, `IG_PORT` warns, CC-CFG-85). |
+| Profile names | Names with `-` are accepted, but a shell `export` refuses them | Restrict to `[A-Z0-9_]`. 1.x warns first. **1.x part done 2026-10-28** (startup warning naming each such profile, CC-CFG-86). |
 | Insights `since`/`until` | Only the 90-day retention is enforced | Add the 30-day window cap. |
 | Discovery hashtag limit, reel `thumbOffset` max, duplicate `userTags` / carousel children | Accepted | Refuse before the call. |
 | `limit` versus `IG_MAX_ITEMS` cursor | The cursor semantics differ when the cap applies | Pick one meaning and document it. |

@@ -127,7 +127,7 @@ export interface HttpTransportOptions {
    */
   host: string;
   /**
-   * Bind port (`IG_PORT`, default `3000`). `0` asks the OS for a free one; the
+   * Bind port (`IG_HTTP_PORT`, deprecated alias `IG_PORT`; default `3000`). `0` asks the OS for a free one; the
    * port that was actually bound is what the ready log and the DNS-rebinding
    * allowlist report, not the `0`.
    */

@@ -22,11 +22,12 @@ import path from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import { McpServer } from '@modelcontextprotocol/server';
 import { systemClock } from './core/clock.js';
-import { SETTINGS_ENV_NAMES, loadSettings } from './core/settings.js';
+import { SETTINGS_ENV_NAMES, loadSettings, settingsWarnings } from './core/settings.js';
 import {
   blankKeys,
   isProfileEnvName,
   loadProfiles,
+  nonPortableProfileNames,
   resolveProfile,
   strayExpiryKeys,
   unsetPlaceholderKeys,
@@ -332,8 +333,23 @@ async function main(): Promise<void> {
       hint: 'nothing reads these; check the spelling against .env.example',
     });
   }
+  // Deprecation notices, once per start and on stderr only (CC-CFG-85). They sit
+  // beside the unrecognised-name warning and BEFORE the profiles load, so the
+  // operator whose start then fails still learns the port name changed.
+  for (const { msg, fields } of settingsWarnings(process.env)) log.warn(msg, fields);
   const { profiles, defaultName } = loadProfiles();
   registerProfileSecrets(profiles);
+  // A profile name a shell `export` cannot spell is still accepted in 1.x and
+  // warned about once here; 2.0 restricts names to [A-Z0-9_] (CC-CFG-86).
+  const nonPortable = nonPortableProfileNames(profiles);
+  if (nonPortable.length > 0) {
+    log.warn('profile names outside [A-Z0-9_] are deprecated', {
+      names: nonPortable,
+      hint:
+        'a shell export cannot set IG_PROFILE_<NAME>_* for these names; ' +
+        'they still work in 1.x and are refused in 2.0',
+    });
+  }
 
   // The one network seam, resolved per profile at call time. This is the join
   // point the registry stays decoupled from, and the CLI diagnostics reuse.

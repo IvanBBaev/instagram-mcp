@@ -283,7 +283,7 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   loop drains. That includes a composite publish in its status poll, which can
   keep the process up to its 60 s poll budget and journals `in_progress` with the
   container id so the run can be resumed (CC-PROC-207).
-- **Streamable HTTP** opt-in via `IG_TRANSPORT=http` (`IG_HTTP_HOST`/`IG_PORT`).
+- **Streamable HTTP** opt-in via `IG_TRANSPORT=http` (`IG_HTTP_HOST`/`IG_HTTP_PORT`).
   It binds loopback unless a bearer token is configured: a **non-loopback** bind
   with no `IG_HTTP_TOKEN` is refused at startup, a loopback bind without one starts
   and logs at **error** level that there is no authentication, and a **blank** token
@@ -346,7 +346,7 @@ hand-maintained and sync-tested against the source (`test/env-catalog.test.ts`,
 | `IG_ACCOUNT_ID` | `me` | IG professional-account ID; unset, calls address `me` (no lookup is made) |
 | `IG_APP_ID` / `IG_APP_SECRET` | — | Meta app credentials: token exchange, refresh, `appsecret_proof`, `debug_token` (`IG_APP_SECRET` is a **secret**) |
 | `IG_ENV_FILE` | XDG path | Env-file location override |
-| `IG_PROFILE_<NAME>_*` | — | Additional account profiles (same keys, prefixed) |
+| `IG_PROFILE_<NAME>_*` | — | Additional account profiles (same keys, prefixed). A `<NAME>` outside `[A-Z0-9_]` still loads but warns at startup; 2.0 refuses it |
 | `IG_ACTIVE_PROFILE` | `default` | Profile used when a tool call passes no `account` |
 | `IG_TOOL_PACKAGES` | `core` | Package profile `core` \| `reader` \| `publisher` \| `all`, or explicit list |
 | `IG_PACKAGES_DENY` | — | Packages to remove after profile resolution |
@@ -355,7 +355,8 @@ hand-maintained and sync-tested against the source (`test/env-catalog.test.ts`,
 | `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (`delete_comment`, `delete_media`) |
 | `IG_WRITE_JOURNAL` | `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl` | Append-only JSONL audit log of applied writes |
 | `IG_TRANSPORT` | `stdio` | `stdio` \| `http` |
-| `IG_HTTP_HOST` / `IG_PORT` | `127.0.0.1` / `3000` | HTTP transport binding (`IG_PORT` range 1–65535) |
+| `IG_HTTP_HOST` / `IG_HTTP_PORT` | `127.0.0.1` / `3000` | HTTP transport binding (`IG_HTTP_PORT` range 1–65535) |
+| `IG_PORT` | — | **Deprecated** alias of `IG_HTTP_PORT` (range 1–65535); still read in 1.x with a startup warning, `IG_HTTP_PORT` wins when both are set, removed in 2.0 |
 | `IG_HTTP_TOKEN` | — | HTTP bearer token (**secret**; constant-time compare) |
 | `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore (range 1–64) |
 | `IG_MAX_ITEMS` | `200` | `fetchAll` hard item cap (range 1–100000) |

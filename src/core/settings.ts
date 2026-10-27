@@ -14,11 +14,13 @@
  *   IG_ALLOW_DESTRUCTIVE-> allowDestructive  (default false)
  *   IG_TRANSPORT        -> transport         (default 'stdio')
  *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1', loopback only)
- *   IG_PORT             -> httpPort          (default 3000)
+ *   IG_HTTP_PORT        -> httpPort          (default 3000; `IG_PORT` is the deprecated alias)
  *   IG_WRITE_JOURNAL    -> writeJournal      (default `<state home>/instagram-mcp-ai/writes.jsonl`)
  *
- * Note: the HTTP port env var is `IG_PORT` (not `IG_HTTP_PORT`) per §12 and
- * `.env.example`; it pairs with `IG_HTTP_HOST` for the HTTP-transport binding.
+ * Note: the HTTP port env var is `IG_HTTP_PORT`, grouped with `IG_HTTP_HOST` and
+ * `IG_HTTP_TOKEN`. Until 2026-10-28 it was `IG_PORT`, which 1.x still reads under
+ * the same validation and reports as deprecated ({@link settingsWarnings}); 2.0
+ * removes it (docs/v2-analysis.md §5).
  * `IG_HTTP_HOST` is validated like every other knob: only loopback addresses are
  * accepted, because the HTTP transport binds loopback only (docs/security.md §3).
  */
@@ -371,9 +373,74 @@ export const SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'IG_ALLOW_DESTRUCTIVE',
   'IG_TRANSPORT',
   'IG_HTTP_HOST',
+  'IG_HTTP_PORT',
   'IG_PORT',
   'IG_WRITE_JOURNAL',
 ]);
+
+/**
+ * Resolve the HTTP port from `IG_HTTP_PORT`, else the deprecated `IG_PORT`.
+ *
+ * BOTH names are parsed whenever they are set, under one rule: a malformed
+ * `IG_PORT` beside a valid `IG_HTTP_PORT` still refuses the start, exactly as it
+ * did before `IG_HTTP_PORT` existed, so adding the new name never turns a
+ * refused configuration into a silently accepted one. The precedence is decided
+ * on presence (blank counts as unset, like every knob), not on value.
+ */
+function resolveHttpPort(env: NodeJS.ProcessEnv, def: number): number {
+  const canonical = parseIntEnv(env, 'IG_HTTP_PORT', def, { min: 1, max: 65535 });
+  const legacy = parseIntEnv(env, 'IG_PORT', def, { min: 1, max: 65535 });
+  return read(env, 'IG_HTTP_PORT') === undefined ? legacy : canonical;
+}
+
+/** One deprecation notice {@link settingsWarnings} reports, ready for `log.warn`. */
+export interface SettingsWarning {
+  msg: string;
+  fields: Record<string, unknown>;
+}
+
+/**
+ * The deprecation notices for the settings `env` carries, in a fixed order.
+ *
+ * Pure, like {@link loadSettings}: this module has no logger (the logger's level
+ * is one of the settings it resolves), so the composition root logs these on
+ * stderr once per start, beside the unrecognised-name warning. Never stdout —
+ * that is the stdio MCP channel. Call it only after {@link loadSettings}
+ * succeeded: it does not re-validate, and the only values it carries are the two
+ * parsed port numbers — bounded, never anything secret, and never a padded
+ * spelling of unbounded length.
+ *
+ * Today the only notice is `IG_PORT` (renamed `IG_HTTP_PORT`, CC-CFG-85). When
+ * both are set the notice also says which one won, and whether they disagreed.
+ */
+export function settingsWarnings(env: NodeJS.ProcessEnv = process.env): SettingsWarning[] {
+  const legacy = read(env, 'IG_PORT');
+  if (legacy === undefined) return [];
+  const canonical = read(env, 'IG_HTTP_PORT');
+  if (canonical === undefined) {
+    return [
+      {
+        msg: 'IG_PORT is deprecated; rename it to IG_HTTP_PORT',
+        fields: { hint: 'IG_PORT still works in 1.x and is removed in 2.0' },
+      },
+    ];
+  }
+  const httpPort = Number(canonical);
+  const port = Number(legacy);
+  return [
+    {
+      msg:
+        httpPort !== port
+          ? 'IG_PORT and IG_HTTP_PORT disagree; IG_HTTP_PORT wins and IG_PORT is ignored'
+          : 'IG_PORT is deprecated and redundant beside IG_HTTP_PORT; remove it',
+      fields: {
+        IG_HTTP_PORT: httpPort,
+        IG_PORT: port,
+        hint: 'IG_PORT still works in 1.x and is removed in 2.0',
+      },
+    },
+  ];
+}
 
 /**
  * Resolve runtime {@link Settings} from `env` (defaults to `process.env`).
@@ -396,7 +463,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     allowDestructive: parseBoolEnv(env, 'IG_ALLOW_DESTRUCTIVE', d.allowDestructive),
     transport: parseEnumEnv(env, 'IG_TRANSPORT', d.transport, TRANSPORTS),
     httpHost: parseHostEnv(env, 'IG_HTTP_HOST', d.httpHost),
-    httpPort: parseIntEnv(env, 'IG_PORT', d.httpPort, { min: 1, max: 65535 }),
+    httpPort: resolveHttpPort(env, d.httpPort),
     // Resolved against `env`, not defaulted from `d` — the fallback depends on
     // `XDG_STATE_HOME`/`$HOME`, which only this env knows.
     writeJournal: resolveWriteJournal(env),

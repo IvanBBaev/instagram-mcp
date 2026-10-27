@@ -324,7 +324,7 @@ request. A missing or wrong bearer returns **`401 Unauthorized`**. Send:
 Authorization: Bearer <IG_HTTP_TOKEN>
 ```
 
-Other HTTP-transport gotchas: a **port already in use** (`IG_PORT`, default 3000)
+Other HTTP-transport gotchas: a **port already in use** (`IG_HTTP_PORT`, default 3000)
 is a clear startup error; DNS-rebinding protection restricts the accepted
 `Host`/`Origin` to the bound loopback address, so reaching it via a non-loopback
 hostname is refused. Always set `IG_HTTP_TOKEN` — loopback binding alone is not

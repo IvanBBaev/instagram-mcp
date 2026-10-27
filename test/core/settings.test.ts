@@ -9,6 +9,7 @@ import {
   SETTINGS_ENV_NAMES,
   isLoopbackHost,
   loadSettings,
+  settingsWarnings,
 } from '../../src/core/settings.js';
 import { InstagramError, type Settings } from '../../src/core/types.js';
 
@@ -71,12 +72,87 @@ test('numeric knobs are coerced and trimmed', () => {
   assert.equal(s.httpPort, 8080);
 });
 
-test('the HTTP port comes from IG_PORT (not IG_HTTP_PORT)', () => {
-  const fromCanonical = loadSettings({ IG_PORT: '4100' });
-  assert.equal(fromCanonical.httpPort, 4100);
-  // A non-canonical IG_HTTP_PORT is ignored — default stands.
-  const ignored = loadSettings({ IG_HTTP_PORT: '4100' });
-  assert.equal(ignored.httpPort, 3000);
+test('the HTTP port comes from IG_HTTP_PORT, and the deprecated IG_PORT still works alone', () => {
+  assert.equal(loadSettings({ IG_HTTP_PORT: '4100' }).httpPort, 4100);
+  // Additive (docs/v2-analysis.md §5): every configuration that set IG_PORT
+  // before 2026-10-28 resolves the same port today.
+  assert.equal(loadSettings({ IG_PORT: '4200' }).httpPort, 4200);
+  assert.equal(loadSettings({}).httpPort, DEFAULT_SETTINGS.httpPort);
+});
+
+test('IG_HTTP_PORT wins over IG_PORT when both are set, and a blank IG_HTTP_PORT defers', () => {
+  assert.equal(loadSettings({ IG_HTTP_PORT: '4100', IG_PORT: '4200' }).httpPort, 4100);
+  // Presence decides, not value: a blank canonical name reads as unset, exactly
+  // as every other knob does, so the legacy name is what configures the port.
+  assert.equal(loadSettings({ IG_HTTP_PORT: '  ', IG_PORT: '4200' }).httpPort, 4200);
+});
+
+test('IG_HTTP_PORT and IG_PORT are validated by the same rule, both of them, every time', () => {
+  for (const name of ['IG_HTTP_PORT', 'IG_PORT']) {
+    assert.throws(
+      () => loadSettings({ [name]: '0' }),
+      (err: unknown) =>
+        err instanceof InstagramError &&
+        err.kind === 'validation' &&
+        err.message === `${name} must be in [1, 65535], got 0`,
+    );
+    assert.throws(
+      () => loadSettings({ [name]: 'x' }),
+      (err: unknown) =>
+        err instanceof InstagramError && err.message === `${name} must be an integer, got "x"`,
+    );
+  }
+  // A malformed IG_PORT refused the start before IG_HTTP_PORT existed; a valid
+  // IG_HTTP_PORT beside it must not quietly turn that refusal into a start.
+  assertValidationError(() => loadSettings({ IG_HTTP_PORT: '4100', IG_PORT: '70000' }), 'IG_PORT');
+  assertValidationError(
+    () => loadSettings({ IG_HTTP_PORT: '70000', IG_PORT: '4100' }),
+    'IG_HTTP_PORT',
+  );
+});
+
+test('settingsWarnings reports IG_PORT as deprecated, and says which name won when both are set', () => {
+  const hint = 'IG_PORT still works in 1.x and is removed in 2.0';
+  assert.deepEqual(settingsWarnings({}), []);
+  assert.deepEqual(settingsWarnings({ IG_HTTP_PORT: '4100' }), []);
+  // A blank IG_PORT is unset, so it is not a use of the deprecated name.
+  assert.deepEqual(settingsWarnings({ IG_PORT: '   ' }), []);
+  assert.deepEqual(settingsWarnings({ IG_PORT: '4200' }), [
+    { msg: 'IG_PORT is deprecated; rename it to IG_HTTP_PORT', fields: { hint } },
+  ]);
+  // Blank IG_HTTP_PORT: IG_PORT is the one in effect, so the plain notice.
+  assert.deepEqual(settingsWarnings({ IG_HTTP_PORT: '', IG_PORT: '4200' }), [
+    { msg: 'IG_PORT is deprecated; rename it to IG_HTTP_PORT', fields: { hint } },
+  ]);
+  assert.deepEqual(settingsWarnings({ IG_HTTP_PORT: '4100', IG_PORT: '4200' }), [
+    {
+      msg: 'IG_PORT and IG_HTTP_PORT disagree; IG_HTTP_PORT wins and IG_PORT is ignored',
+      fields: { IG_HTTP_PORT: 4100, IG_PORT: 4200, hint },
+    },
+  ]);
+  // Equal ports compare as numbers, so `+4100` beside `4100` is a redundant
+  // copy, not a disagreement — and the notice carries the parsed numbers, never
+  // a padded spelling of unbounded length.
+  assert.deepEqual(settingsWarnings({ IG_HTTP_PORT: ' +4100 ', IG_PORT: '0004100' }), [
+    {
+      msg: 'IG_PORT is deprecated and redundant beside IG_HTTP_PORT; remove it',
+      fields: { IG_HTTP_PORT: 4100, IG_PORT: 4100, hint },
+    },
+  ]);
+});
+
+test('settingsWarnings reads process.env when no env is passed', () => {
+  const saved = { IG_PORT: process.env.IG_PORT, IG_HTTP_PORT: process.env.IG_HTTP_PORT };
+  try {
+    delete process.env.IG_HTTP_PORT;
+    process.env.IG_PORT = '4300';
+    assert.equal(settingsWarnings().length, 1);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('boolean knobs accept true/false/1/0/yes/no/on/off (case-insensitive)', () => {
@@ -272,6 +348,7 @@ test('every numeric knob accepts its documented range, and one step outside it i
     { env: 'IG_MAX_ITEMS', field: 'maxItems', min: 1, max: 100_000 },
     { env: 'IG_REFRESH_AFTER_DAYS', field: 'refreshAfterDays', min: 1, max: 60 },
     { env: 'IG_TIMEOUT_MS', field: 'timeoutMs', min: 1, max: 600_000 },
+    { env: 'IG_HTTP_PORT', field: 'httpPort', min: 1, max: 65535 },
     { env: 'IG_PORT', field: 'httpPort', min: 1, max: 65535 },
   ] as const;
 

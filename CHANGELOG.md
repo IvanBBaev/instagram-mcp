@@ -99,6 +99,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An empty `NO_COLOR=` no longer turns off `doctor` colours; only a non-empty
   value does, per no-color.org (CC-PROC-215).
 
+### Deprecated
+
+- `IG_PORT` is renamed `IG_HTTP_PORT`, grouped with `IG_HTTP_HOST` and
+  `IG_HTTP_TOKEN`. `IG_PORT` keeps working under the same 1–65535 validation
+  but logs a one-time deprecation warning on stderr at startup; when both are
+  set, `IG_HTTP_PORT` wins and the warning says so (CC-CFG-85). 2.0 removes
+  `IG_PORT`.
+- A profile name with a character outside `[A-Z0-9_]` (for example
+  `IG_PROFILE_MY-SHOP_*`, which an env file accepts but a shell `export`
+  refuses) still loads, and now logs a one-time startup warning naming it
+  (CC-CFG-86). 2.0 restricts profile names to `[A-Z0-9_]`.
+
 ### Fixed
 
 - `login --profile <name>` no longer stores the default profile's `IG_ACCOUNT_ID`

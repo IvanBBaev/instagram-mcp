@@ -516,6 +516,22 @@ export function loadProfiles(env: Env = process.env): LoadedProfiles {
 }
 
 /**
+ * The profile names 2.0 will refuse, in load order: any name with a character
+ * outside `[a-z0-9_]` — i.e. outside `[A-Z0-9_]` once it is upper-cased back into
+ * its `IG_PROFILE_<NAME>_*` key (CC-CFG-86).
+ *
+ * The parser takes whatever a key carries between `IG_PROFILE_` and the suffix,
+ * and dotenv accepts `-` and `.` in a key, so an env-file key whose `<NAME>` is
+ * `MY-SHOP` resolves a `my-shop` profile — but no POSIX shell can `export`
+ * that name, so the same profile cannot be configured from a terminal. 1.x keeps
+ * accepting every such name and only reports it; nothing here refuses anything.
+ * The default profile is always portable.
+ */
+export function nonPortableProfileNames(profiles: readonly ResolvedProfile[]): string[] {
+  return profiles.map((p) => p.name).filter((name) => !/^[a-z0-9_]+$/.test(name));
+}
+
+/**
  * Return the profile named `name` (case-insensitive), or the default profile
  * when `name` is omitted / blank.
  *

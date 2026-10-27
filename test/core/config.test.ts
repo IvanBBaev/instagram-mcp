@@ -8,6 +8,7 @@ import {
   currentAccount,
   isProfileEnvName,
   loadProfiles,
+  nonPortableProfileNames,
   resolveProfile,
   strayExpiryKeys,
   tokenFingerprint,
@@ -1147,4 +1148,30 @@ test('unsetPlaceholderKeys names exactly the IG_* keys holding a whole MCPB temp
   };
   assert.deepEqual(unsetPlaceholderKeys(env), ['IG_ACCOUNT_ID', 'IG_WORK_APP_ID']);
   assert.deepEqual(unsetPlaceholderKeys({}), []);
+});
+
+test('a profile name a shell export cannot spell is still loaded, and reported as non-portable', () => {
+  // Additive (docs/v2-analysis.md §5, CC-CFG-86): dotenv accepts `-` and `.` in
+  // a key, so these resolve today and must keep resolving in 1.x. 2.0 restricts
+  // names to [A-Z0-9_]; until then they are only reported.
+  const { profiles } = loadProfiles({
+    IG_ACCESS_TOKEN: 'tok-default',
+    'IG_PROFILE_MY-SHOP_ACCESS_TOKEN': 'tok-dash',
+    IG_PROFILE_BRAND_2_ACCESS_TOKEN: 'tok-portable',
+    'IG_PROFILE_EU.STORE_ACCESS_TOKEN': 'tok-dot',
+  });
+  assert.deepEqual(
+    profiles.map((p) => p.name),
+    ['default', 'my-shop', 'brand_2', 'eu.store'],
+  );
+  assert.equal(resolveProfile(profiles, 'MY-SHOP').accessToken, 'tok-dash');
+  assert.deepEqual(nonPortableProfileNames(profiles), ['my-shop', 'eu.store']);
+});
+
+test('nonPortableProfileNames reports nothing for names inside [A-Z0-9_]', () => {
+  const { profiles } = loadProfiles({
+    IG_ACCESS_TOKEN: 'tok-default',
+    IG_PROFILE_BRAND_2_ACCESS_TOKEN: 'tok-portable',
+  });
+  assert.deepEqual(nonPortableProfileNames(profiles), []);
 });

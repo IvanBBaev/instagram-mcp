@@ -206,7 +206,8 @@ before any configuration is read — it never starts the server by accident.
 - **stdio** (default) — for local MCP clients. `stdout` is the protocol channel;
   all diagnostics go to `stderr`.
 - **Streamable HTTP** — opt in with `IG_TRANSPORT=http`. Loopback-bound
-  (`127.0.0.1:3000` by default via `IG_HTTP_HOST` / `IG_PORT`); set
+  (`127.0.0.1:3000` by default via `IG_HTTP_HOST` / `IG_HTTP_PORT`; the older
+  `IG_PORT` still works but is deprecated); set
   `IG_HTTP_TOKEN` to require an `Authorization: Bearer <token>` header
   (constant-time compared).
   **Leaving `IG_HTTP_TOKEN` unset means no authentication at all** — every local
@@ -364,7 +365,7 @@ client that supports MCP elicitation is asked to confirm each applied write.
 | `IG_WRITE_JOURNAL` |  | Applied-write audit log (default: $XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl) |
 | `IG_TRANSPORT` | `stdio` | stdio \| http |
 | `IG_HTTP_HOST` | `127.0.0.1` |  |
-| `IG_PORT` | `3000` |  |
+| `IG_HTTP_PORT` | `3000` | HTTP port; IG_PORT is the deprecated 1.x alias (warns; IG_HTTP_PORT wins) |
 | `IG_HTTP_TOKEN` |  | HTTP bearer token (secret; constant-time compare) |
 | `IG_MAX_CONCURRENT` | `4` | Per-host concurrency semaphore |
 | `IG_MAX_ITEMS` | `200` | fetchAll hard item cap |

@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the id comes from a mention webhook or a link). Path B (`fb-login`) only;
   story mentions are not supported. Captions, usernames and comment text are
   fenced.
+- Icon: the server advertises a 128x128 PNG icon in `serverInfo.icons` on
+  `initialize`, embedded as a `data:` URI so no URL is fetched. `server.json`
+  lists the same icon at its GitHub Pages URL, and the MCPB bundle ships it as
+  `icon.png` (`icon` / `icons` in `manifest.json`). Server-level only; tools
+  carry no icons.
 
 ### Changed
 

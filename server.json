@@ -6,6 +6,13 @@
     "url": "https://github.com/IvanBBaev/instagram-mcp",
     "source": "github"
   },
+  "icons": [
+    {
+      "src": "https://ivanbbaev.github.io/instagram-mcp/assets/icon.png",
+      "mimeType": "image/png",
+      "sizes": ["128x128"]
+    }
+  ],
   "version": "0.8.0",
   "packages": [
     {

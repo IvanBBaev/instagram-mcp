@@ -47,6 +47,7 @@ import { closeOnSignal, startHttp, startStdio } from './mcp/transport.js';
 import { runLogin } from './cli/login.js';
 import { runDoctor } from './cli/doctor.js';
 import { allTools } from './tools/index.js';
+import { SERVER_ICONS } from './mcp/icon.js';
 
 /** Mirrors package.json — the identity advertised to MCP clients. */
 const SERVER_NAME = 'instagram-mcp-ai';
@@ -504,7 +505,11 @@ async function main(): Promise<void> {
   // requires a fresh server + transport PER REQUEST (see mcp/transport.ts), so
   // it gets this as a factory instead.
   const buildServer = (): { server: McpServer; registered: string[] } => {
-    const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+    const server = new McpServer({
+      name: SERVER_NAME,
+      version: SERVER_VERSION,
+      icons: SERVER_ICONS,
+    });
     const { registered } = registerTools({
       server,
       tools: allTools,

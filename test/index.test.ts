@@ -2342,9 +2342,20 @@ test('the stdio transport speaks MCP on stdout and keeps every diagnostic on std
       },
     });
     const init = (await awaitResponse(1)).result as {
-      serverInfo?: { name?: string; version?: string };
+      serverInfo?: {
+        name?: string;
+        version?: string;
+        icons?: { src: string; mimeType?: string; sizes?: string[] }[];
+      };
     };
     assert.equal(init.serverInfo?.name, 'instagram-mcp-ai');
+    // The icon travels inline as a data: URI — the handshake never points a
+    // client at an external URL (see src/mcp/icon.ts).
+    const icons = init.serverInfo?.icons ?? [];
+    assert.equal(icons.length, 1);
+    assert.equal(icons[0]?.mimeType, 'image/png');
+    assert.deepEqual(icons[0]?.sizes, ['128x128']);
+    assert.match(icons[0]?.src ?? '', /^data:image\/png;base64,/);
     // The advertised version is what clients log, what a bug report quotes, and
     // what a client gates behaviour on. It is a hand-maintained constant in
     // `src/index.ts`, so the only thing keeping it honest is this comparison

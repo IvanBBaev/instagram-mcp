@@ -8,6 +8,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 ( cd "$REPO" && npm run build >/dev/null && npm pack --ignore-scripts --pack-destination "$WORK" >/dev/null )
 tar xzf "$WORK/instagram-mcp-ai-$VERSION.tgz" -C "$WORK"          # -> $WORK/package (exact npm file allowlist)
 cp "$REPO/manifest.json" "$REPO/package-lock.json" "$WORK/package/"
+cp "$REPO/docs/assets/icon.png" "$WORK/package/icon.png"                 # manifest.json "icon"/"icons"
 ( cd "$WORK/package" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null && rm package-lock.json )
 [ "$(node -p "require('$WORK/package/manifest.json').version")" = "$VERSION" ] || { echo "manifest.json version != $VERSION" >&2; exit 1; }
 npx -y @anthropic-ai/mcpb@2 validate "$WORK/package/manifest.json"

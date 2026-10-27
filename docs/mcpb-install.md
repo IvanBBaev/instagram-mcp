@@ -154,7 +154,8 @@ scripts/build-mcpb.sh . ./out          # -> out/instagram-mcp-ai-<version>.mcpb
 ```
 
 The script builds `dist/`, stages the exact npm tarball contents (`npm pack`), adds
-`manifest.json`, installs production dependencies only (`npm ci --omit=dev` inside the
+`manifest.json` and the bundle icon (`docs/assets/icon.png`, copied in as the `icon.png`
+the manifest names), installs production dependencies only (`npm ci --omit=dev` inside the
 staging directory, never in your checkout), checks that the manifest version matches
 `package.json`, then runs `mcpb validate` and `mcpb pack` on the staging directory. The
 output path is ignored by git (`*.mcpb` in `.gitignore`).

@@ -20,6 +20,10 @@
  * non-error `in_progress` result carrying `resume_container_id` — `media_publish`
  * is NEVER auto-retried, so the operator resumes explicitly rather than risking
  * a duplicate post (docs/operations.md §2, architecture §10).
+ * That flow — resume arm, write gate, outcomes, failure re-attachment — is one
+ * shape for all three composites and lives in `tools/publish-flow.ts`
+ * ({@link runComposite}); each composite here supplies only its validation, the
+ * preview of a new post and its container create.
  * `instagram_delete_media` is the package's only destructive tool and is
  * additionally gated by `IG_ALLOW_DESTRUCTIVE`, like `instagram_delete_comment`.
  *
@@ -48,6 +52,7 @@ import { z } from 'zod';
 import { graphObjectId } from './ids.js';
 import { acknowledgedId } from './ack.js';
 import { boundedArray } from './arrays.js';
+import { publishIdMissing, runComposite, type FreshPost } from './publish-flow.js';
 import {
   defineTool,
   type ToolContext,
@@ -57,7 +62,7 @@ import {
 } from '../mcp/define.js';
 import { json } from '../mcp/result.js';
 import { withWriteGate, type WriteIntent } from '../mcp/write-mode.js';
-import { InstagramError, isInstagramError } from '../core/types.js';
+import { InstagramError } from '../core/types.js';
 import { quoteGraphId } from '../core/errors.js';
 import { PREVIEW_EXCERPT_MAX, previewExcerpt } from '../core/untrusted.js';
 import {
@@ -67,7 +72,6 @@ import {
   getContainerStatus,
   getPublishingLimit,
   publishMedia,
-  runPublishFlow,
   type PublishFlowOptions,
 } from '../api/publishing.js';
 import {
@@ -168,6 +172,18 @@ const resumeField = graphObjectId()
       'When set, the media inputs are ignored.',
   );
 
+/**
+ * The reel cover-frame offset, declared once for `instagram_create_media_container`
+ * and `instagram_post_reel`. A factory rather than a shared constant, like
+ * `httpsUrl()` (CC-PUB-35): each field builds its own instance and carries its
+ * own description, so neither tool's published schema can turn into a `$ref`
+ * to the other's, and the two descriptions — which say different things about
+ * when the offset applies — stay separate.
+ */
+function thumbOffsetField(description: string) {
+  return z.number().int().min(0).optional().describe(description);
+}
+
 // --- Read-tool output schemas ----------------------------------------------
 
 const containerStatusOutput = {
@@ -232,93 +248,6 @@ function mediaHosts(urls: readonly (string | undefined)[]): string[] {
 }
 
 /**
- * The warning a resume carries when the caller also passed media inputs
- * (CC-PUB-59). A resume publishes the existing container, which cannot be
- * changed, so a caption or URL passed beside `resumeContainerId` is ignored; the
- * field description says so, but a caller who did not read it would otherwise
- * approve a post believing its new caption applies. The ignored fields are read
- * off the tool's own input shape, so a field added later is covered without an
- * edit here.
- */
-function resumeIgnoredWarning(
-  shape: Record<string, unknown>,
-  args: Record<string, unknown>,
-): string | undefined {
-  const ignored = Object.keys(shape).filter(
-    (key) => key !== 'resumeContainerId' && key !== 'apply' && args[key] !== undefined,
-  );
-  if (ignored.length === 0) return undefined;
-  return (
-    'resumeContainerId is set, so these inputs are ignored — the existing container is ' +
-    `published exactly as it was created and cannot be changed: ${ignored.join(', ')}.`
-  );
-}
-
-/**
- * Re-attach a created container's id to a failure that would otherwise drop it
- * (CC-PUB-4 — the duplicate-post corner case).
- *
- * `runPublishFlow` creates the container FIRST and only then polls and
- * publishes. Those two steps are ordinary Graph calls, so a 429, a 500 or a
- * dropped socket throws straight out of the flow with the brand-new container
- * id held in nothing but a local variable. All the caller sees is "posting
- * failed", and the obvious recovery — post it again — is exactly the duplicate
- * this module exists to prevent: the container may already be FINISHED, and if
- * the failure was on `media_publish` itself the post may already be live and
- * only the response lost.
- *
- * The success paths hand the id back in `structuredContent`; this is the same
- * promise kept on the failure paths, in the only channel an error has — the
- * message the model reads (`mcp/registry.ts` renders it through
- * `errorResult`). The original message, kind and Graph metadata are carried
- * over unchanged, the house pattern of `carouselAbortError` in
- * `api/publishing.ts`, so any handling that keys on `kind`, `status` or `code`
- * is unaffected.
- *
- * Two deliberate non-firings:
- *
- *   - `containerId === undefined` — nothing was created yet, so nothing is
- *     lost. This is the carousel mid-build abort, whose own error already
- *     accounts for the orphaned children, and any failure of the container
- *     create itself.
- *   - the message already names the container — `runPublishFlow`'s terminal
- *     ERROR and EXPIRED errors name it and end with "re-create it", which the
- *     addendum below would flatly contradict. The rule is literal on purpose:
- *     this exists to restore an id the error dropped, and an error carrying the
- *     id dropped nothing. It is imprecise in one harmless direction — if Graph
- *     happens to echo the id in an unrelated message the advice is skipped too,
- *     but the caller still has the id, which is the part that cannot be
- *     recovered by hand. If `api/publishing.ts` ever stopped naming the
- *     container, this would simply start firing on those paths, which is the
- *     safe direction to fail in.
- */
-function resumableFailure(err: unknown, containerId: string | undefined): unknown {
-  if (containerId === undefined) return err;
-  const graph = isInstagramError(err) ? err : undefined;
-  const originalMessage = graph?.message ?? String(err);
-  // The id as every message names it — bare when it is a Graph id, quoted and
-  // bounded when the wire sent something else (CC-PUB-56) — which is also
-  // the spelling `api/publishing.ts` put into the ERROR and EXPIRED messages.
-  const named = quoteGraphId(containerId);
-  if (originalMessage.includes(named)) return err;
-  return new InstagramError(
-    `${originalMessage} — publishing did not complete, but container ${named} was already ` +
-      'created and may even be live. Do NOT post again blindly: read its state with ' +
-      `instagram_get_container_status. If it is FINISHED, re-run this tool with apply:true and ` +
-      `resumeContainerId set to ${named}; if it is PUBLISHED the post already exists — find ` +
-      'it with instagram_list_media.',
-    {
-      kind: graph?.kind ?? 'upstream',
-      status: graph?.status,
-      code: graph?.code,
-      subcode: graph?.subcode,
-      fbtraceId: graph?.fbtraceId,
-      cause: err,
-    },
-  );
-}
-
-/**
  * Consequence text for a container create acknowledged without an id. Nothing
  * was published — publishing needs the id — and there is no id to resume with,
  * so the honest advice is that a re-run starts over and the lost container, if
@@ -327,138 +256,6 @@ function resumableFailure(err: unknown, containerId: string | undefined): unknow
 const CONTAINER_ID_MISSING =
   'Nothing was published and there is no container to resume. Re-running creates a new ' +
   'container; one Graph may have made without reporting it expires unpublished within 24 h.';
-
-/**
- * Consequence text for a `media_publish` acknowledged without an id. Graph may
- * have published anyway, so this must never read as "safe to retry": a second
- * publish of the same container is refused at best and a duplicate post at worst.
- */
-function publishIdMissing(containerId: string): string {
-  return (
-    `The post may already be live. Do NOT publish container ${quoteGraphId(containerId)} again: read its ` +
-    'state with instagram_get_container_status (PUBLISHED means the post exists) and find the ' +
-    'post with instagram_list_media.'
-  );
-}
-
-/**
- * Shared apply/preview driver for the three composite post tools. In preview
- * mode {@link withWriteGate} returns before `perform`, so no container is created
- * and no `media_publish` is issued. In apply mode it drives {@link runPublishFlow}
- * and shapes one of three outcomes:
- *   - published         → the new media id (journaled as the write target);
- *   - already_published → a resumed container that was already live (not re-published);
- *   - in_progress       → still processing at the deadline; returns resume_container_id.
- * Each arm reports its outcome as the gate's `status`, so the journal line says
- * which of the three happened: without it every arm journals as the same
- * `publish_media` write against a target id, and a resume that re-sent nothing
- * is indistinguishable in the audit trail from a post going live.
- */
-async function executePublish(
-  params: {
-    ctx: ToolContext;
-    args: { apply?: boolean; resumeContainerId?: string };
-    intent: WriteIntent;
-    createContainer: () => Promise<string>;
-    warnings: readonly string[];
-  },
-  opts: PublishFlowOptions,
-): Promise<ToolResult> {
-  const { ctx, args, intent, createContainer, warnings } = params;
-  // The preview's `details.warnings`, carried into every applied outcome too
-  // (CC-PUB-25 (a)): an operator running with `IG_WRITE_MODE=apply` never sees a
-  // preview, and without this the hint reached nobody. Absent, never `[]`, when
-  // there is nothing to say — the same rule as the preview.
-  const withWarnings = (payload: Record<string, unknown>): Record<string, unknown> =>
-    warnings.length > 0 ? { ...payload, warnings: [...warnings] } : payload;
-  return withWriteGate(intent, args, ctx, async () => {
-    // The id is captured as the flow produces it rather than read back off the
-    // result, because the paths that need it most have no result to read from
-    // (see `resumableFailure`). A resume already knows its id up front.
-    let containerId = args.resumeContainerId;
-    const trackCreate = async (): Promise<string> => {
-      const id = await createContainer();
-      containerId = id;
-      return id;
-    };
-    let flow;
-    try {
-      flow = await runPublishFlow(
-        { req: ctx.req, clock: ctx.clock, igId: igIdOf(ctx) },
-        { resumeContainerId: args.resumeContainerId, createContainer: trackCreate },
-        opts,
-      );
-    } catch (err) {
-      throw resumableFailure(err, containerId);
-    }
-    if (flow.status === 'published') {
-      // `runPublishFlow` passes a silent `media_publish` ack through as
-      // `mediaId: undefined` (CC-PUB-29). Reported as `published` it would give
-      // the model no handle on the post and journal a publish with no target, so
-      // it is raised instead; the refusal already names the container and the
-      // check-before-retry advice, so it needs no `resumableFailure` wrapping.
-      const mediaId = acknowledgedId(
-        { id: flow.mediaId },
-        'publish',
-        publishIdMissing(flow.containerId),
-      );
-      return {
-        result: json(
-          withWarnings({
-            status: 'published',
-            container_id: flow.containerId,
-            media_id: mediaId,
-          }),
-          { pretty: ctx.settings.prettyJson },
-        ),
-        targetId: mediaId,
-        status: 'published',
-      };
-    }
-    if (flow.status === 'already_published') {
-      return {
-        result: json(
-          withWarnings({
-            status: 'already_published',
-            container_id: flow.containerId,
-            // Explicitly null, not omitted. This arm is reached by a caller that
-            // retried after a timeout and needs to know which post exists; the
-            // container status edge returns only `id`/`status_code`/`status`, so
-            // there is no media id to plumb through (CC-PUB-4). A missing key
-            // reads as "forgot to include it" and invites a caller to retry for
-            // real; `null` plus the note below says the id is unavailable here and
-            // names the one call that can find it. Guessing "the newest media" is
-            // refused on purpose — it would attribute an unrelated post.
-            media_id: null,
-            note:
-              'This container was already published; it was NOT published again. Instagram returns ' +
-              'no media id for an already-published container, so media_id is null rather than ' +
-              'guessed — use instagram_list_media to locate the existing post (match it by caption ' +
-              'or timestamp).',
-          }),
-          { pretty: ctx.settings.prettyJson },
-        ),
-        targetId: flow.containerId,
-        status: 'already_published',
-      };
-    }
-    return {
-      result: json(
-        withWarnings({
-          status: 'in_progress',
-          resume_container_id: flow.containerId,
-          note:
-            'The media is still processing after the poll budget. Re-run this tool with apply:true and ' +
-            'resumeContainerId set to this id to finish publishing — do NOT create a new post, which would ' +
-            'duplicate it.',
-        }),
-        { pretty: ctx.settings.prettyJson },
-      ),
-      targetId: flow.containerId,
-      status: 'in_progress',
-    };
-  });
-}
 
 // --- instagram_create_media_container --------------------------------------
 
@@ -494,12 +291,7 @@ const createContainerInput = {
     .optional()
     .describe('CAROUSEL album only: 2–10 previously-created child container ids to combine.'),
   coverUrl: httpsUrl().optional().describe('Reels cover image URL.'),
-  thumbOffset: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe('Reels/video cover frame offset, in milliseconds.'),
+  thumbOffset: thumbOffsetField('Reels/video cover frame offset, in milliseconds.'),
   shareToFeed: z.boolean().optional().describe('Reels: also cross-post the reel to the main feed.'),
   isCarouselItem: z
     .boolean()
@@ -773,21 +565,17 @@ export async function runPostImage(
   ctx: ToolContext,
   opts: PublishFlowOptions = {},
 ): Promise<ToolResult> {
-  const resuming = args.resumeContainerId !== undefined;
   const imageUrls = args.imageUrls ?? [];
-  let caption: Record<string, unknown> | undefined;
-  const warnings: string[] = [];
 
-  if (resuming) {
-    const ignored = resumeIgnoredWarning(postImageInput, args);
-    if (ignored !== undefined) warnings.push(ignored);
-  } else {
+  const fresh = (): FreshPost => {
     if (imageUrls.length < 1) {
       throw new InstagramError(
         'instagram_post_image needs at least one imageUrl (or a resumeContainerId to finish a prior attempt).',
         { kind: 'validation' },
       );
     }
+    const warnings: string[] = [];
+    let caption: Record<string, unknown> | undefined;
     if (args.caption !== undefined) {
       caption = captionSummary(args.caption, assertCaptionWithinLimits(args.caption));
     }
@@ -838,7 +626,24 @@ export async function runPostImage(
           `only, so the ${args.userTags.length} tag(s) passed are NOT applied to this album.`,
       );
     }
-  }
+
+    const details: Record<string, unknown> = {
+      media_kind: imageUrls.length >= CAROUSEL_MIN ? 'carousel' : 'image',
+      image_count: imageUrls.length,
+      media_hosts: mediaHosts(imageUrls),
+    };
+    if (caption !== undefined) details.caption = caption;
+    if (args.altTexts !== undefined) details.alt_texts = args.altTexts.map(previewExcerpt);
+    if (args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
+    return {
+      details,
+      warnings,
+      summary:
+        imageUrls.length >= CAROUSEL_MIN
+          ? `Create a ${imageUrls.length}-image carousel and publish it to the feed`
+          : 'Create a single feed image container and publish it',
+    };
+  };
 
   const createContainer = async (): Promise<string> => {
     if (imageUrls.length >= CAROUSEL_MIN) {
@@ -860,9 +665,9 @@ export async function runPostImage(
     /* c8 ignore start -- unreachable: a narrowing guard for `noUncheckedIndexedAccess`.
        This closure only runs when there is no `resumeContainerId` (see
        `runPublishFlow`), and that path already threw on `imageUrls.length < 1`
-       above, so index 0 is always populated. Kept as a throw rather than a
-       non-null assertion so a future refactor that breaks the invariant fails
-       loudly instead of posting `undefined` to Graph. */
+       in `fresh` above, so index 0 is always populated. Kept as a throw rather
+       than a non-null assertion so a future refactor that breaks the invariant
+       fails loudly instead of posting `undefined` to Graph. */
     if (imageUrl === undefined) {
       throw new InstagramError('No imageUrl to create a container from.', { kind: 'validation' });
     }
@@ -879,30 +684,18 @@ export async function runPostImage(
     return acknowledgedId(container, 'media container', CONTAINER_ID_MISSING);
   };
 
-  const details: Record<string, unknown> = resuming
-    ? { resume_container_id: args.resumeContainerId }
-    : {
-        media_kind: imageUrls.length >= CAROUSEL_MIN ? 'carousel' : 'image',
-        image_count: imageUrls.length,
-        media_hosts: mediaHosts(imageUrls),
-      };
-  if (caption !== undefined) details.caption = caption;
-  if (!resuming && args.altTexts !== undefined)
-    details.alt_texts = args.altTexts.map(previewExcerpt);
-  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
-  if (warnings.length > 0) details.warnings = warnings;
-
-  const intent: WriteIntent = {
-    action: 'post_image',
-    summary: resuming
-      ? `Resume publishing container ${args.resumeContainerId}`
-      : imageUrls.length >= CAROUSEL_MIN
-        ? `Create a ${imageUrls.length}-image carousel and publish it to the feed`
-        : 'Create a single feed image container and publish it',
-    details,
-  };
-
-  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
+  return runComposite(
+    {
+      ctx,
+      igId: igIdOf(ctx),
+      action: 'post_image',
+      input: postImageInput,
+      args,
+      fresh,
+      createContainer,
+    },
+    opts,
+  );
 }
 
 const postImageTool = defineTool({
@@ -941,12 +734,9 @@ const postReelInput = {
     ),
   caption: captionField,
   coverUrl: httpsUrl().optional().describe('Public HTTPS cover image URL for the reel.'),
-  thumbOffset: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe('Cover frame offset in milliseconds (used when no coverUrl is given).'),
+  thumbOffset: thumbOffsetField(
+    'Cover frame offset in milliseconds (used when no coverUrl is given).',
+  ),
   shareToFeed: z.boolean().optional().describe('Also show the reel in the main feed.'),
   locationId: locationField,
   isAiGenerated: aiGeneratedField,
@@ -962,20 +752,15 @@ export async function runPostReel(
   ctx: ToolContext,
   opts: PublishFlowOptions = {},
 ): Promise<ToolResult> {
-  const resuming = args.resumeContainerId !== undefined;
-  let caption: Record<string, unknown> | undefined;
-  const warnings: string[] = [];
-
-  if (resuming) {
-    const ignored = resumeIgnoredWarning(postReelInput, args);
-    if (ignored !== undefined) warnings.push(ignored);
-  } else {
+  const fresh = (): FreshPost => {
     if (args.videoUrl === undefined) {
       throw new InstagramError(
         'instagram_post_reel needs a videoUrl (or a resumeContainerId to finish a prior attempt).',
         { kind: 'validation' },
       );
     }
+    const warnings: string[] = [];
+    let caption: Record<string, unknown> | undefined;
     assertHttpsUrl(args.videoUrl, 'videoUrl');
     if (args.coverUrl !== undefined) {
       assertHttpsUrl(args.coverUrl, 'coverUrl');
@@ -989,7 +774,31 @@ export async function runPostReel(
     if (args.caption !== undefined) {
       caption = captionSummary(args.caption, assertCaptionWithinLimits(args.caption));
     }
-  }
+
+    // Equivalent-mutant note: `?? undefined` is a no-op — `shareToFeed` is
+    // `boolean | undefined`, so both spellings write the same key with the
+    // same value, and dropping the operator survives every test. It is kept
+    // as the local marker that the key is emitted deliberately even when
+    // unset: the preview is what an operator reads before approving a post,
+    // and `share_to_feed: undefined` (pinned below) says "Instagram's default
+    // applies" where an absent key reads as "this tool forgot to consider it".
+    const details: Record<string, unknown> = {
+      media_kind: 'reel',
+      share_to_feed: args.shareToFeed ?? undefined,
+      media_hosts: mediaHosts([args.videoUrl, args.coverUrl]),
+    };
+    if (caption !== undefined) details.caption = caption;
+    if (args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
+    if (args.trialGraduation !== undefined) details.trial_graduation = args.trialGraduation;
+    return {
+      details,
+      warnings,
+      summary:
+        args.trialGraduation !== undefined
+          ? 'Create a trial reel container and publish it to non-followers'
+          : 'Create a reel container and publish it',
+    };
+  };
 
   const createContainer = async (): Promise<string> => {
     const r = await createMediaContainer(ctx.req, {
@@ -1007,41 +816,18 @@ export async function runPostReel(
     return acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
   };
 
-  const details: Record<string, unknown> = resuming
-    ? { resume_container_id: args.resumeContainerId }
-    : // Equivalent-mutant note: `?? undefined` is a no-op — `shareToFeed` is
-      // `boolean | undefined`, so both spellings write the same key with the
-      // same value, and dropping the operator survives every test. It is kept
-      // as the local marker that the key is emitted deliberately even when
-      // unset: the preview is what an operator reads before approving a post,
-      // and `share_to_feed: undefined` (pinned below) says "Instagram's default
-      // applies" where an absent key reads as "this tool forgot to consider it".
-      {
-        media_kind: 'reel',
-        share_to_feed: args.shareToFeed ?? undefined,
-        media_hosts: mediaHosts([args.videoUrl, args.coverUrl]),
-      };
-  if (caption !== undefined) details.caption = caption;
-  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
-  if (!resuming && args.trialGraduation !== undefined)
-    details.trial_graduation = args.trialGraduation;
-  // Same `details.warnings` channel the other publishing tools use — a list even
-  // for one entry, so a caller reads warnings the same way everywhere, and
-  // absent entirely when there is nothing to say (an always-present empty list
-  // trains the operator to skim past the field).
-  if (warnings.length > 0) details.warnings = warnings;
-
-  const intent: WriteIntent = {
-    action: 'post_reel',
-    summary: resuming
-      ? `Resume publishing container ${args.resumeContainerId}`
-      : args.trialGraduation !== undefined
-        ? 'Create a trial reel container and publish it to non-followers'
-        : 'Create a reel container and publish it',
-    details,
-  };
-
-  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
+  return runComposite(
+    {
+      ctx,
+      igId: igIdOf(ctx),
+      action: 'post_reel',
+      input: postReelInput,
+      args,
+      fresh,
+      createContainer,
+    },
+    opts,
+  );
 }
 
 const postReelTool = defineTool({
@@ -1092,13 +878,7 @@ export async function runPostStory(
   ctx: ToolContext,
   opts: PublishFlowOptions = {},
 ): Promise<ToolResult> {
-  const resuming = args.resumeContainerId !== undefined;
-  const warnings: string[] = [];
-
-  if (resuming) {
-    const ignored = resumeIgnoredWarning(postStoryInput, args);
-    if (ignored !== undefined) warnings.push(ignored);
-  } else {
+  const fresh = (): FreshPost => {
     const hasImage = args.imageUrl !== undefined;
     const hasVideo = args.videoUrl !== undefined;
     if (hasImage === hasVideo) {
@@ -1107,6 +887,7 @@ export async function runPostStory(
         { kind: 'validation' },
       );
     }
+    const warnings: string[] = [];
     if (args.imageUrl !== undefined) {
       assertHttpsUrl(args.imageUrl, 'imageUrl');
       // A photo story is a still image under the same JPEG rule as a feed image.
@@ -1123,7 +904,15 @@ export async function runPostStory(
       if (imageWarning !== undefined) warnings.push(imageWarning);
     }
     if (args.videoUrl !== undefined) assertHttpsUrl(args.videoUrl, 'videoUrl');
-  }
+
+    const details: Record<string, unknown> = {
+      media_kind: 'story',
+      source: args.imageUrl !== undefined ? 'image' : 'video',
+      media_hosts: mediaHosts([args.imageUrl, args.videoUrl]),
+    };
+    if (args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
+    return { details, warnings, summary: 'Create a story container and publish it' };
+  };
 
   const createContainer = async (): Promise<string> => {
     const r = await createMediaContainer(ctx.req, {
@@ -1136,25 +925,18 @@ export async function runPostStory(
     return acknowledgedId(r, 'media container', CONTAINER_ID_MISSING);
   };
 
-  const details: Record<string, unknown> = resuming
-    ? { resume_container_id: args.resumeContainerId }
-    : {
-        media_kind: 'story',
-        source: args.imageUrl !== undefined ? 'image' : 'video',
-        media_hosts: mediaHosts([args.imageUrl, args.videoUrl]),
-      };
-  if (!resuming && args.isAiGenerated !== undefined) details.ai_generated = args.isAiGenerated;
-  if (warnings.length > 0) details.warnings = warnings;
-
-  const intent: WriteIntent = {
-    action: 'post_story',
-    summary: resuming
-      ? `Resume publishing container ${args.resumeContainerId}`
-      : 'Create a story container and publish it',
-    details,
-  };
-
-  return executePublish({ ctx, args, intent, createContainer, warnings }, opts);
+  return runComposite(
+    {
+      ctx,
+      igId: igIdOf(ctx),
+      action: 'post_story',
+      input: postStoryInput,
+      args,
+      fresh,
+      createContainer,
+    },
+    opts,
+  );
 }
 
 const postStoryTool = defineTool({

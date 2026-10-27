@@ -150,7 +150,7 @@ version move is **minor** unless Meta removes something an output promised.
 |---|---|---|
 | Split `src/cli/login.ts` (1333 lines) by Path A / Path B / redirect capture | Largest file. The two paths share little. | M |
 | Split `src/core/config-write.ts` (1303 lines) into lock / atomic write / env parser | Three concerns in one module. **Done 2026-10-27** (`src/core/config-lock.ts`, `src/core/atomic-write.ts`, `src/core/env-file.ts`, plus `src/core/store-link.ts` for the symlink walk). | M |
-| Factor the image / reel / story composites in `src/tools/publishing.ts` | Repeated flow shape, and `thumbOffset` is declared twice. Trial reels, alt text, AI labels and tasks will all touch this file. | M |
+| Factor the image / reel / story composites in `src/tools/publishing.ts` | Repeated flow shape, and `thumbOffset` is declared twice. Trial reels, alt text, AI labels and tasks will all touch this file. **Done 2026-10-28** (`src/tools/publish-flow.ts`: `runComposite` owns the resume arm, the write gate, the three outcomes and the failure re-attachment; `thumbOffset` is one `thumbOffsetField` factory). | M |
 | Move CLI dispatch out of `src/index.ts` | The composition root and the CLI are mixed together. **Done 2026-10-27** (`src/cli/argv.ts`, `src/cli/refresh.ts`). | S |
 | Drop the deprecated raw-shape `registerTool` workaround in `src/mcp/registry.ts` | SDK debt. Must happen before the SDK removes the overload. | S |
 | Make the diagnostics/status tool undeniable (architecture-review finding F-19) | A deny list can currently switch off the tool used to diagnose the deny list. **Done 2026-10-27** (`ALWAYS_ON_TOOLS`). | S |

@@ -301,7 +301,7 @@ test('the probe reaches every write-gate outcome it claims to', async () => {
 });
 
 test('the composite post tools honour IG_PRETTY_JSON in their resume and timeout arms too', async () => {
-  // `executePublish` in `tools/publishing.ts` has three applied outcomes, each
+  // `executePublish` in `tools/publish-flow.ts` has three applied outcomes, each
   // with its own `json(...)` call, and the shared probe payload above reaches
   // only `published` (its container reads FINISHED). `already_published` needs a
   // resumed container Graph reports as PUBLISHED, and `in_progress` needs a

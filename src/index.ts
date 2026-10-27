@@ -42,6 +42,7 @@ import { escapeControls } from './core/untrusted.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { PACKAGE_ENV_NAMES, registerTools } from './mcp/registry.js';
+import { registerPrompts } from './mcp/prompts.js';
 import { closeOnSignal, startHttp, startStdio } from './mcp/transport.js';
 import { runLogin } from './cli/login.js';
 import { runDoctor } from './cli/doctor.js';
@@ -514,6 +515,9 @@ async function main(): Promise<void> {
       log,
       makeRequest,
     });
+    // Prompts name tools by their exact names, so each is listed only when every
+    // tool it names was exposed above (mcp/prompts.ts).
+    registerPrompts(server, registered);
     return { server, registered };
   };
 

@@ -305,6 +305,20 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_search_hashtag` | discovery | fb-login | Read | Resolve a hashtag name to its Instagram hashtag id(s) via GET /ig_hashtag_search?user_id={ig-id}&amp;q=&lt;hashtag&gt; (the returned id feeds instagram_get_hashtag_media). |
 <!-- END AUTOGEN:tools -->
 
+## Prompts
+
+Four MCP prompts package common workflows over the tools: `instagram_weekly_report`
+(account and per-post insights for the last 1-30 days), `instagram_caption_to_publish`
+(caption from a brief, then a previewed image, carousel or reel post),
+`instagram_comment_triage` (classify comments, draft replies, propose hiding spam)
+and `instagram_discovery_research` (hashtag and competitor research). They are
+static templates: each one keeps the write gate (preview with `apply: false`,
+`apply: true` only after you confirm) and treats Instagram content as untrusted
+data. A prompt is listed only when every tool it uses is exposed under the active
+profile, so the discovery prompt needs `reader` or `all` with a Path B profile,
+and `reader` (read-only) hides the two prompts that write. Arguments and details:
+[docs/tools.md](docs/tools.md#prompts).
+
 ## Configuration
 
 All settings are environment variables with the uniform `IG_` prefix; the

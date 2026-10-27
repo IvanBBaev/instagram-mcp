@@ -2370,6 +2370,16 @@ test('the stdio transport speaks MCP on stdout and keeps every diagnostic on std
       `no account tool registered: ${names.join()}`,
     );
 
+    // The entry wires the prompts to the REGISTERED surface: on the default
+    // `core` profile the three workflows over its packages are listed, and the
+    // discovery one — whose tools `core` keeps dark — is not.
+    send({ jsonrpc: '2.0', id: 3, method: 'prompts/list' });
+    const prompted = (await awaitResponse(3)).result as { prompts?: { name: string }[] };
+    assert.deepEqual(
+      (prompted.prompts ?? []).map((p) => p.name),
+      ['instagram_weekly_report', 'instagram_caption_to_publish', 'instagram_comment_triage'],
+    );
+
     // Every line on stdout parsed as JSON-RPC above; the logs went elsewhere.
     const stderr = running.stderr();
     assert.ok(!stderr.includes(TOKEN), 'the redactor must mask the token in the startup logs');

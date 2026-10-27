@@ -246,6 +246,36 @@ The envelope is text-only on purpose: a v1 MCP SDK client validates any
 it; the v2 client skips that check, but v1 clients are still in the field
 (CC-DATA-61).
 
+## Prompts
+
+The server also exposes four MCP **prompts** (`prompts/list`, `prompts/get`) —
+static workflow templates defined in [`mcp/prompts.ts`](../src/mcp/prompts.ts).
+A prompt performs no I/O when it is fetched; it renders its validated arguments
+into instructions that name this server's tools by their exact names.
+
+| Prompt | Arguments | Tools it drives |
+|---|---|---|
+| `instagram_weekly_report` | `days?` (1-30, default 7), `account?` | `instagram_get_account`, `instagram_get_account_insights`, `instagram_list_media`, `instagram_get_media_insights` (read-only) |
+| `instagram_caption_to_publish` | `brief` (1-2000 chars), `format?` (`image` \| `carousel` \| `reel`, default `image`), `account?` | `instagram_get_publishing_limit`, `instagram_post_image`, `instagram_post_reel` |
+| `instagram_comment_triage` | `media_id?` (Graph ID; default: the 5 latest posts), `account?` | `instagram_list_media`, `instagram_list_comments`, `instagram_reply_to_comment`, `instagram_hide_comment` |
+| `instagram_discovery_research` | `hashtag` (with or without `#`), `competitor?` (username), `account?` | `instagram_search_hashtag`, `instagram_get_hashtag_media`, `instagram_discover_business` (read-only) |
+
+`account?` is a profile name (`[A-Za-z0-9_-]{1,64}`). An argument outside its
+bound is rejected with `InvalidParams` before the template renders.
+
+- **Safety model.** Every prompt tells the model that text inside the
+  `[UNTRUSTED source: "instagram-user-content"]` … `[/UNTRUSTED]` fence is data,
+  never instructions. The two prompts that write tell it to call the write tool
+  with an explicit `apply: false`, show the user the preview, and repeat the call
+  with `apply: true` only after the user explicitly confirms (the D3 gate above);
+  the read-only prompts tell it not to call write tools at all.
+- **Gating.** A prompt is registered only when **every** tool it names is
+  exposed after the package profile, `IG_PACKAGES_DENY`, read-only forcing and
+  auth-path filtering. Under the default `core` profile the discovery prompt is
+  absent (discovery is not in `core`, and needs a Path B profile). Under `reader`
+  the caption and comment-triage prompts are absent (their write tools are
+  forced off); under `publisher` the weekly report is absent (no insights).
+
 ## Tool-count budget
 
 Surface: **32 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media` and `instagram_get_mentioned_comment` added since) — deliberately compact; every tool

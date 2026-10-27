@@ -88,6 +88,11 @@ export interface ToolSpec<S extends z.ZodRawShape> {
   `reader` is a read-only *boundary*, not a package list: every package it selects
   is forced read-only, so no write tool is registered under it. An explicit list
   naming the same packages is **not** equivalent — it registers their writes.
+- **Prompts** (`mcp/prompts.ts`) are static workflow templates over these tools,
+  registered after them from the list of names `registerTools` actually exposed:
+  a prompt is listed only when every tool it names is registered, so it never
+  points the model at a tool it cannot call. Rendering is pure (no I/O). The
+  server exposes no MCP resources.
 
 ## 4. Planned packages
 

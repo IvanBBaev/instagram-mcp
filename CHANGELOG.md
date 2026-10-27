@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP prompts: `instagram_weekly_report`, `instagram_caption_to_publish`,
+  `instagram_comment_triage` and `instagram_discovery_research` — static
+  workflow templates over the existing tools, with bounded arguments. Each one
+  treats fenced Instagram content as untrusted data, and the writing ones go
+  preview-first (`apply: false`, then `apply: true` only after the user
+  confirms). A prompt is listed only when every tool it names is exposed under
+  the active profile, deny list and auth path.
 - Image alt text: `instagram_create_media_container` takes `altText` (sent as
   `alt_text`, image containers only) and `instagram_post_image` takes
   `altTexts`, one entry per image in order — each lands on its own image or

@@ -26,6 +26,15 @@ before release.
 | **Widen** an open enum / add an output field | **minor** (additive) | Additive Meta fields never break structured output — because the api layer normalises field by field, so an unknown field is dropped before the output object exists. Not because output schemas are passthrough: a top-level `.passthrough()` is discarded when the raw shape is handed to the SDK (CC-DATA-7). |
 | Bug fix, doc, perf, internal refactor with no surface change | **patch** | No manifest diff. |
 
+**Prompts are surface too.** The MCP prompts ([`mcp/prompts.ts`](../src/mcp/prompts.ts),
+[tools.md](tools.md#prompts)) follow the same table: renaming or removing a prompt,
+or adding, renaming or narrowing a required argument, is **major**; adding a prompt
+or an optional argument is **minor**. A prompt's rendered text is guidance, not a
+contract — rewording it is a **patch**, as long as it keeps naming only existing
+tools and keeps the preview-first and untrusted-data rules. A prompt disappearing
+because the operator's profile no longer exposes one of its tools is configuration,
+not a surface change.
+
 The text block of a success result is a *rendering* of `structuredContent`, not a
 second contract: its exact bytes (spacing, which characters are written as `\uXXXX`
 escapes — CC-DATA-102) may change in a patch release as long as it still parses to the

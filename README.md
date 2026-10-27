@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-33-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-34-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -47,7 +47,7 @@ _Built and maintained in my own time — a
 
 ## What it does
 
-The server exposes an Instagram professional account through **33 MCP tools**
+The server exposes an Instagram professional account through **34 MCP tools**
 grouped into six packages:
 
 - **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
@@ -223,7 +223,8 @@ Every mutating tool passes through a single **write gate** (design gate D3):
 - **Apply explicitly.** Pass `apply: true` on the call, or set
   `IG_WRITE_MODE=apply` for standing consent, to actually perform the write.
 - **Destructive ops are double-gated.** Irreversible actions (e.g.
-  `instagram_delete_comment`) additionally require `IG_ALLOW_DESTRUCTIVE=true`.
+  `instagram_delete_comment`, `instagram_delete_media`) additionally require
+  `IG_ALLOW_DESTRUCTIVE=true`.
 - **Journaled.** Every applied write is appended to a local, append-only JSONL
   journal (`~/.local/state/instagram-mcp-ai/writes.jsonl`, or `IG_WRITE_JOURNAL`)
   for auditing — best-effort, so a broken journal never fails an authorized write.
@@ -236,10 +237,10 @@ explicit comma list of packages:
 
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
-| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 29 |
+| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 30 |
 | `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 20 |
-| `publisher` | `account, media, publishing, comments` | publish and moderate | 25 |
-| `all` | every package | the full surface | 33 |
+| `publisher` | `account, media, publishing, comments` | publish and moderate | 26 |
+| `all` | every package | the full surface | 34 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
@@ -284,6 +285,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_get_media_insights` | insights | both | Read | Insights for a single media object (GET /{media-id}/insights). |
 | `instagram_get_online_followers` | insights | both | Read | Hourly distribution of when the account's followers are online (GET /{ig-id}/insights?metric=online_followers&amp;period=lifetime). |
 | `instagram_create_media_container` | publishing | both | Write | Phase 1 of publishing: create a media container that Instagram ingests from a public HTTPS URL. |
+| `instagram_delete_media` | publishing | fb-login | Write | Permanently delete a published post, reel, story or whole carousel album (DELETE /{ig-media-id}). |
 | `instagram_get_container_status` | publishing | both | Read | Read a media container's processing state: status_code is IN_PROGRESS, FINISHED, ERROR, EXPIRED, or PUBLISHED. |
 | `instagram_get_publishing_limit` | publishing | both | Read | Report the account's content-publishing usage against its rolling-window quota. |
 | `instagram_post_image` | publishing | both | Write | Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish. |
@@ -358,7 +360,7 @@ client that supports MCP elicitation is asked to confirm each applied write.
 | `IG_PACKAGES_DENY` |  | Packages to remove after profile resolution |
 | `IG_PACKAGES_READONLY` |  | Packages forced read-only |
 | `IG_WRITE_MODE` | `preview` | preview \| apply (standing consent for writes) |
-| `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (delete_comment) |
+| `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (delete_comment, delete_media) |
 | `IG_WRITE_JOURNAL` |  | Applied-write audit log (default: $XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl) |
 | `IG_TRANSPORT` | `stdio` | stdio \| http |
 | `IG_HTTP_HOST` | `127.0.0.1` |  |

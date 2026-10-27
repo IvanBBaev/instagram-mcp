@@ -87,7 +87,7 @@ capability; nothing in a lower tier is taken away. The two axes that matter are 
 - **Degrades:** Path A has no `debug_token`, so token expiry is only the
   `IG_TOKEN_EXPIRES_AT` record `login`/`refresh` wrote (**unknown** without one),
   and `doctor`/`token_status` cannot introspect validity — the reachability check
-  is the only validity signal. `delete_comment` still needs
+  is the only validity signal. `delete_comment` (and `delete_media`, Path B only) still needs
   `IG_ALLOW_DESTRUCTIVE=true` **and** `apply:true`.
 - **Unavailable:** the `discovery` package (Path-B-only, capability-filtered out);
   `appsecret_proof` (not supported on `graph.instagram.com`, by design);
@@ -170,7 +170,7 @@ review records what the promise covers on the current tree (`0.8.0` plus
 the release: see [release-checklist.md](release-checklist.md) §"1.0.0 cut
 readiness".
 
-**Covered by §1 today, and ready to bind.** The tool names (33 tools in the
+**Covered by §1 today, and ready to bind.** The tool names (34 tools in the
 PACKAGES manifest, snapshot-tested), their `.strict()` input schemas, the
 structured output of each tool, and the error line with its `kind`. No tool is
 in a dual-registration window, so `1.0.0` carries no deprecated name.

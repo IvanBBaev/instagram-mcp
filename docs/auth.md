@@ -61,7 +61,8 @@ in `src/core/config.ts`).
   `GET /{page-id}?fields=instagram_business_account` → the IG user ID.
 - Scopes: `instagram_basic`, `instagram_content_publish`,
   `instagram_manage_comments`, `instagram_manage_insights`,
-  (`instagram_manage_messages` for DMs — supported, but **not requested by
+  `instagram_manage_contents` (for `instagram_delete_media`, which Meta documents
+  for this path only), (`instagram_manage_messages` for DMs — supported, but **not requested by
   `login`**; M6 is DEFER), plus Page plumbing:
   `pages_show_list`, `pages_read_engagement`; `business_management` for
   system-user setups.

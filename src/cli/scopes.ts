@@ -48,6 +48,11 @@ export const DEFAULT_SCOPES: Record<AuthPath, readonly string[]> = Object.freeze
     'instagram_content_publish',
     'instagram_manage_comments',
     'instagram_manage_insights',
+    // `instagram_delete_media` (Path B only): the Instagram Media reference
+    // documents `DELETE /{ig-media-id}` with `instagram_manage_contents`
+    // (changelog 2025-12-03, read 2026-10-27). Path A has no documented
+    // equivalent and no delete, so its list is unchanged.
+    'instagram_manage_contents',
     'pages_show_list',
     'pages_read_engagement',
     'business_management',

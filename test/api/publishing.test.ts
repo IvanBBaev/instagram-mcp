@@ -22,6 +22,7 @@ import type { Clock } from '../../src/core/clock.js';
 import {
   createCarouselContainer,
   createMediaContainer,
+  deleteMedia,
   getContainerStatus,
   getPublishingLimit,
   publishMedia,
@@ -2147,4 +2148,65 @@ test('the ERROR, EXPIRED and unreadable-status errors quote a created id that is
         `Container ${FORGED_ID_QUOTED} never reported a recognised status_code within its 0 ms ` +
           `poll budget (last answer: "PENDING_REVIEW"${UNKNOWN_STATUS_TAIL}`,
   );
+});
+
+// --- deleteMedia ------------------------------------------------------------
+
+test('deleteMedia sends DELETE /{media-id} to graph.facebook.com and keeps only success', async () => {
+  // The one irreversible call in this module. The whole request is pinned: a
+  // GET would read the media and report it deleted, a path built from the
+  // account id would aim the delete at the wrong object, and the host is pinned
+  // because Meta documents the endpoint for Facebook Login only. `deleted_id`
+  // is the documented second field; the tool echoes the argument instead, so it
+  // is not forwarded.
+  const { req, calls } = fakeReq(() => ({ success: true, deleted_id: '17918920912340654' }));
+
+  const r = await deleteMedia(req, { mediaId: '17918920912340654' });
+
+  assert.deepEqual(r, { success: true });
+  assert.deepEqual(calls, [
+    { method: 'DELETE', host: 'graph.facebook.com', path: '/17918920912340654' },
+  ]);
+});
+
+test('deleteMedia reports a refusal as success:false, whether wrapped or a bare false', async () => {
+  // `graphBody` flattens a scalar to `{}`, which would read as a silent
+  // acknowledgement; the legacy bare `false` must survive as a refusal.
+  assert.deepEqual(await deleteMedia(fakeReq(() => ({ success: false })).req, { mediaId: 'M1' }), {
+    success: false,
+  });
+  assert.deepEqual(await deleteMedia(fakeReq(() => false).req, { mediaId: 'M1' }), {
+    success: false,
+  });
+});
+
+test('deleteMedia leaves an ack that does not say unstated', async () => {
+  for (const body of [{}, null, true, { success: 'true' }]) {
+    assert.deepEqual(
+      await deleteMedia(fakeReq(() => body).req, { mediaId: 'M1' }),
+      {},
+      `${JSON.stringify(body)} discloses nothing`,
+    );
+  }
+});
+
+test('deleteMedia maps an error envelope delivered with HTTP 200 (CC-PUB-53)', async () => {
+  const { req } = fakeReq(() => ({
+    error: { message: 'Unsupported delete request.', type: 'GraphMethodException', code: 100 },
+  }));
+  await assert.rejects(
+    () => deleteMedia(req, { mediaId: 'M1' }),
+    (err: unknown) => {
+      assert.ok(err instanceof InstagramError);
+      assert.equal(err.code, 100);
+      assert.match(err.message, /Unsupported delete request/);
+      return true;
+    },
+  );
+});
+
+test('deleteMedia URL-encodes the media id into the path', async () => {
+  const { req, calls } = fakeReq(() => ({ success: true }));
+  await deleteMedia(req, { mediaId: 'a/b' });
+  assert.equal(calls[0]?.path, '/a%2Fb');
 });

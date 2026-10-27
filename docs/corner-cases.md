@@ -32,7 +32,7 @@ advertises: 112 `CC-DATA`, 56 `CC-AUTH`, 69 `CC-CFG`, 39 `CC-PUB`, 22 `CC-INS`,
 useful index for what is really an audit log, and moving a row would break the
 line-anchored references that source comments and the other documents point at.
 **To find every row of one prefix, grep the ID — do not read a section.**
-Nothing downstream resolves a case by section number; 1947 citation sites across the
+Nothing downstream resolves a case by section number; 1950 citation sites across the
 repo name rows by ID alone, and `test/docs-catalog.test.ts` pins that every one of
 them still resolves.
 
@@ -762,7 +762,7 @@ is the safety design, not ergonomics:
 |---|---|---|
 | *(none)* | `read`, `discovery` | Nothing is created. Safe on any account. |
 | `--allow-writes` | `container`, `story`, `comment` | Stories expire in 24 h and comments are deletable — recoverable. |
-| `--allow-feed-post` | `feed` | A published feed post **cannot be deleted by this server or the probe** (no delete tool yet). Treat it as permanent; remove it from the Instagram app. |
+| `--allow-feed-post` | `feed` | A published feed post **is not deleted by the probe**. On a Path B (`fb-login`) profile `instagram_delete_media` can remove it (double-gated: `apply: true` + `IG_ALLOW_DESTRUCTIVE=true`) *[verify — live]*; on Path A (no documented delete) treat it as permanent and remove it from the Instagram app. |
 | `--allow-token-refresh` | `auth` | Rotates the live credential and **rewrites the XDG env file**. If the old token dies, concurrent instances break. |
 
 Both `--allow-feed-post` and `--allow-token-refresh` imply `--allow-writes`; neither

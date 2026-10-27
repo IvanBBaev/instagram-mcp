@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `instagram_delete_media` (package `publishing`, Path B only) permanently
+  deletes a published post, reel, story or whole carousel album
+  (`DELETE /{ig-media-id}` on `graph.facebook.com`). It previews by default and
+  is double-gated like `instagram_delete_comment`: `apply: true` plus
+  `IG_ALLOW_DESTRUCTIVE=true`. Ad posts and single carousel children cannot be
+  deleted. The `fb-login` default login scopes now include
+  `instagram_manage_contents`, the permission Meta documents for it; a Path B
+  token minted before this change lacks it, and `doctor` reports it missing
+  until the next `login`.
 - `instagram_token_status` is always registered, whatever `IG_TOOL_PACKAGES`
   and `IG_PACKAGES_DENY` select (architecture-review finding F-19). Denying
   `account`, or an explicit package list without it, no longer removes the one

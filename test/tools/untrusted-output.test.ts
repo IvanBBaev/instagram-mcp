@@ -396,6 +396,7 @@ test('structuredContent carries hostile wire text as received, never escaped or 
   const silent = allTools.map((t) => t.name).filter((n) => !echoing.has(n));
   assert.deepEqual(silent.sort(), [
     'instagram_delete_comment',
+    'instagram_delete_media',
     'instagram_get_publishing_limit',
     'instagram_hide_comment',
     'instagram_set_comments_enabled',

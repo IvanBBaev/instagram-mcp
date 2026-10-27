@@ -37,8 +37,9 @@ into one report.
    - `IG_ACCOUNT_ID`
    - `IG_APP_ID` and `IG_APP_SECRET`
    - Scopes: `instagram_basic`, `instagram_content_publish`,
-     `instagram_manage_comments`, `instagram_manage_insights`, `pages_show_list`,
-     `pages_read_engagement`, `business_management`.
+     `instagram_manage_comments`, `instagram_manage_insights`,
+     `instagram_manage_contents`, `pages_show_list`, `pages_read_engagement`,
+     `business_management`.
    - For T-E3 the app should be in Development mode, with you as an admin, so the
      hashtag probes test the own-app-admin case.
    - The simplest setup is a named profile (`IG_PROFILE_FB_*`) next to the Path-A
@@ -95,7 +96,7 @@ With no terminal, the write probes are reported as SKIP and nothing is written.
 `live-probe.mjs`. The two irreversible live-probe lanes are never started from
 here:
 
-- `--allow-feed-post` publishes a feed post, which this server cannot delete (it has no delete tool).
+- `--allow-feed-post` publishes a feed post. The probe does not delete it. On a Path B (`fb-login`) profile, `instagram_delete_media` can remove it (needs `IG_ALLOW_DESTRUCTIVE=true` and `apply: true`); on Path A, remove it from the Instagram app.
 - `--allow-token-refresh` rotates the credential.
 
 Run those by hand, last, as [workplan.md](workplan.md) §6 describes.

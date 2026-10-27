@@ -350,7 +350,7 @@ hand-maintained and sync-tested against the source (`test/env-catalog.test.ts`,
 | `IG_PACKAGES_DENY` | — | Packages to remove after profile resolution |
 | `IG_PACKAGES_READONLY` | — | Packages forced read-only |
 | `IG_WRITE_MODE` | `preview` | `preview` \| `apply` (standing consent for writes) |
-| `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (`delete_comment`) |
+| `IG_ALLOW_DESTRUCTIVE` | `false` | Second gate for irreversible ops (`delete_comment`, `delete_media`) |
 | `IG_WRITE_JOURNAL` | `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl` | Append-only JSONL audit log of applied writes |
 | `IG_TRANSPORT` | `stdio` | `stdio` \| `http` |
 | `IG_HTTP_HOST` / `IG_PORT` | `127.0.0.1` / `3000` | HTTP transport binding (`IG_PORT` range 1–65535) |

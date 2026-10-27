@@ -116,6 +116,7 @@ Request exactly the scopes the server needs — over-granted scopes are flagged 
 - `instagram_content_publish`
 - `instagram_manage_comments`
 - `instagram_manage_insights`
+- `instagram_manage_contents` *(used only by `instagram_delete_media`)*
 - `pages_show_list`
 - `pages_read_engagement`
 - `business_management` *(system-user / Business-portfolio setups)*

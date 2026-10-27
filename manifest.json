@@ -108,6 +108,10 @@
       "description": "Publish a photo or video story in one call: create the STORIES container, wait for processing, then publish."
     },
     {
+      "name": "instagram_delete_media",
+      "description": "Permanently delete a published post, reel, story or whole carousel album (DELETE /{ig-media-id})."
+    },
+    {
       "name": "instagram_list_comments",
       "description": "List the top-level comments on a media object, newest first, cursor-paginated, with threaded replies expanded inline under `replies` (repliesTruncated=true marks a thread Instagram cut at its first page of replies; instagram_list_comment_replies reads the rest)."
     },

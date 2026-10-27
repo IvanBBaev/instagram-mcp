@@ -141,9 +141,10 @@ function autoClock(startMs = 0): Clock {
 
 // --- surface ----------------------------------------------------------------
 
-test('publishingTools exposes the seven publishing specs with correct read/write hints', () => {
+test('publishingTools exposes the eight publishing specs with correct read/write hints', () => {
   assert.deepEqual(publishingTools.map((t) => t.name).sort(), [
     'instagram_create_media_container',
+    'instagram_delete_media',
     'instagram_get_container_status',
     'instagram_get_publishing_limit',
     'instagram_post_image',
@@ -1598,20 +1599,27 @@ test('get_publishing_limit output requires quota_usage and keeps the derived fac
 
 // --- annotations ------------------------------------------------------------
 
-test('no publishing tool is announced destructive — publishing creates, it does not destroy', () => {
+test('only delete_media is announced destructive — publishing creates, it does not destroy', () => {
   // `destructive` in this server means "removes or overwrites data that cannot be
   // restored through this server". Publishing creates new content. Marking it
   // destructive puts every ordinary post behind IG_ALLOW_DESTRUCTIVE, so operators
   // set that flag permanently — which is precisely how the genuinely destructive
-  // tools (comment deletion) lose their second gate. Read tools declare no hint at
-  // all: a `false` there would imply the question was ever relevant.
+  // tools (comment and media deletion) lose their second gate. Read tools declare
+  // no hint at all: a `false` there would imply the question was ever relevant.
+  // `instagram_delete_media` is the one exception, and it is the package's
+  // genuinely destructive tool.
   for (const name of writeToolNames) {
-    assert.equal(tool(name).annotations.destructiveHint, false, `${name} destructiveHint`);
+    assert.equal(
+      tool(name).annotations.destructiveHint,
+      name === 'instagram_delete_media',
+      `${name} destructiveHint`,
+    );
   }
   assert.deepEqual(
     [...writeToolNames].sort((a, b) => a.localeCompare(b)),
     [
       'instagram_create_media_container',
+      'instagram_delete_media',
       'instagram_post_image',
       'instagram_post_reel',
       'instagram_post_story',
@@ -2201,11 +2209,12 @@ test('every publishing tool keeps the title that identifies what it does', () =>
       ['instagram_post_image', 'Post an Instagram image or carousel'],
       ['instagram_post_reel', 'Post an Instagram reel'],
       ['instagram_post_story', 'Post an Instagram story'],
+      ['instagram_delete_media', 'Delete a published media object'],
     ],
   );
 });
 
-test('the publishing package registers all seven tools in a stable order', () => {
+test('the publishing package registers all eight tools in a stable order', () => {
   // This array is the package: a tool missing from it is not registered at all,
   // and the model silently loses a capability — most damagingly `post_image`'s
   // resume path or `get_container_status`, without which an in_progress result
@@ -2221,6 +2230,7 @@ test('the publishing package registers all seven tools in a stable order', () =>
       'instagram_post_image',
       'instagram_post_reel',
       'instagram_post_story',
+      'instagram_delete_media',
     ],
   );
 });
@@ -5397,4 +5407,121 @@ test('a resumed reel handed a trial graduation names it as ignored', async () =>
   assert.equal(details.trial_graduation, undefined);
   assert.match(String((details.warnings as string[])[0]), /ignored.*: trialGraduation\.$/);
   assert.equal(res.structuredContent?.summary, 'Resume publishing container R-1');
+});
+
+// --- instagram_delete_media ---------------------------------------------------
+
+test('delete_media is a destructive, Path-B-only write in the publishing package', () => {
+  const spec = tool('instagram_delete_media');
+  assert.equal(spec.package, 'publishing');
+  assert.deepEqual(spec.paths, ['fb-login']);
+  assert.equal(spec.annotations.readOnlyHint, false);
+  assert.equal(spec.annotations.destructiveHint, true);
+  assert.equal(spec.annotations.idempotentHint, false);
+  assert.match(spec.description, /IRREVERSIBLE/);
+  assert.match(spec.description, /IG_ALLOW_DESTRUCTIVE/, 'names the second gate');
+  assert.match(spec.description, /instagram_manage_contents/, 'names the permission');
+});
+
+test('delete_media previews by default and calls nothing', async () => {
+  const { req, calls } = fakeReq(() => ({ success: true }));
+  const res = await tool('instagram_delete_media').handler(
+    { mediaId: 'M1' },
+    makeCtx(req, { settings: { allowDestructive: true } }),
+  );
+  assert.equal(res.structuredContent?.mode, 'preview');
+  assert.equal(res.structuredContent?.action, 'delete_media');
+  assert.equal(calls.length, 0);
+});
+
+test('delete_media stays a preview with apply:true but no IG_ALLOW_DESTRUCTIVE', async () => {
+  const { req, calls } = fakeReq(() => ({ success: true }));
+  const res = await tool('instagram_delete_media').handler(
+    { mediaId: 'M1', apply: true },
+    makeCtx(req), // allowDestructive defaults to false
+  );
+  assert.equal(res.structuredContent?.mode, 'preview');
+  assert.ok(String(res.content[0]?.text).includes('IG_ALLOW_DESTRUCTIVE'));
+  assert.equal(calls.length, 0, 'destructive write must not run without the second gate');
+});
+
+test('delete_media deletes with apply:true AND allowDestructive, and journals it', async () => {
+  const journal = join(journalDir, 'delete-media.jsonl');
+  const { req, calls } = fakeReq(() => ({ success: true, deleted_id: 'M1' }));
+  const res = await tool('instagram_delete_media').handler(
+    { mediaId: 'M1', apply: true },
+    makeCtx(req, { settings: { allowDestructive: true, writeJournal: journal } }),
+  );
+  // Whole-body pin: the reply to an irreversible write carries nothing but the
+  // echoed id.
+  assert.deepEqual(res.structuredContent, { deleted: 'M1' });
+  assert.deepEqual(calls, [{ method: 'DELETE', host: 'graph.facebook.com', path: '/M1' }]);
+
+  const rec = JSON.parse(readFileSync(journal, 'utf8').trim()) as Record<string, unknown>;
+  assert.equal(rec.action, 'delete_media');
+  assert.equal(rec.summary, 'Delete media M1');
+  assert.equal(rec.targetId, 'M1');
+  assert.equal(rec.destructive, true);
+});
+
+test('delete_media reads an ack without a success key as done', async () => {
+  const { req } = fakeReq(() => ({}));
+  const res = await tool('instagram_delete_media').handler(
+    { mediaId: 'M1', apply: true },
+    makeCtx(req, { settings: { allowDestructive: true } }),
+  );
+  assert.deepEqual(res.structuredContent, { deleted: 'M1' });
+});
+
+test('delete_media raises a declined delete and journals nothing', async () => {
+  const journal = join(journalDir, 'delete-media-declined.jsonl');
+  for (const body of [{ success: false }, false]) {
+    const { req } = fakeReq(() => body);
+    await assert.rejects(
+      async () =>
+        tool('instagram_delete_media').handler(
+          { mediaId: 'M1', apply: true },
+          makeCtx(req, { settings: { allowDestructive: true, writeJournal: journal } }),
+        ),
+      (err: unknown) => {
+        assert.ok(err instanceof InstagramError);
+        assert.equal(err.kind, 'upstream');
+        assert.match(err.message, /declined to delete media M1/);
+        return true;
+      },
+    );
+  }
+  assert.equal(existsSync(journal), false, 'nothing was journaled');
+});
+
+test('delete_media lets a Graph error propagate unchanged and journals nothing', async () => {
+  const journal = join(journalDir, 'delete-media-error.jsonl');
+  const graphError = new InstagramError('Media cannot be deleted.', {
+    kind: 'validation',
+    code: 100,
+  });
+  const req: IgRequestFn = async () => {
+    throw graphError;
+  };
+  await assert.rejects(
+    async () =>
+      tool('instagram_delete_media').handler(
+        { mediaId: 'M1', apply: true },
+        makeCtx(req, { settings: { allowDestructive: true, writeJournal: journal } }),
+      ),
+    (err: unknown) => err === graphError,
+  );
+  assert.equal(existsSync(journal), false);
+});
+
+test('delete_media refuses a malformed media id before the handler runs', () => {
+  const input = inputOf('instagram_delete_media');
+  for (const mediaId of ['', '../me', 'M1/comments', 'me?fields=x']) {
+    assert.equal(input.safeParse({ mediaId }).success, false, `${mediaId} is refused`);
+  }
+  assert.equal(input.safeParse({ mediaId: '17918920912340654' }).success, true);
+  assert.deepEqual(logFieldsOf('instagram_delete_media', { mediaId: 'M1' }), {
+    mediaId: 'M1',
+    apply: false,
+  });
 });

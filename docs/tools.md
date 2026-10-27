@@ -25,7 +25,8 @@ Mirrors the reference plan-and-apply gate:
 - Applied writes append to a local **write journal** (`IG_WRITE_JOURNAL`; default
   `$XDG_STATE_HOME/instagram-mcp-ai/writes.jsonl`, i.e. `~/.local/state/instagram-mcp-ai/writes.jsonl`
   when `XDG_STATE_HOME` is unset or relative).
-- `instagram_delete_comment` is additionally gated by `IG_ALLOW_DESTRUCTIVE=true`.
+- `instagram_delete_comment` and `instagram_delete_media` are additionally gated by
+  `IG_ALLOW_DESTRUCTIVE=true`.
 
 ## Package `account`
 
@@ -58,6 +59,7 @@ the server never uploads local bytes for images (see design note below).
 | `instagram_post_image` | — | **Convenience composite**: container + poll + publish for a single image/carousel in one call; the preview shows the full plan. `altTexts` (optional) is one alt text per `imageUrls` entry, in order — each goes on its own image (a carousel child, never the album); a count mismatch is refused. `isAiGenerated` labels the single image, or the carousel album only (never a child) |
 | `instagram_post_reel` | — | Convenience composite for `REELS` (video URL, cover, share_to_feed, `isAiGenerated`, `trialGraduation` for a trial reel shown to non-followers first) |
 | `instagram_post_story` | — | Convenience composite for `STORIES` (image or video, `isAiGenerated`) |
+| `instagram_delete_media` | **D** | `DELETE /{ig-media-id}` on `graph.facebook.com` — irreversible; double-gated (apply + `IG_ALLOW_DESTRUCTIVE`). **Path B only** (Meta documents Facebook Login only) and needs `instagram_manage_contents` (in the `fb-login` default scopes). Posts, carousels (the whole album), reels and stories; ad posts and single carousel children are not deletable *[verified 2026-10-27 against the Meta changelog and IG Media reference; live behaviour *[verify]*]* |
 
 **Design note — media hosting**: because ingestion is URL-based, publishing a local
 file requires a publicly reachable URL. v1 documents this constraint honestly and
@@ -310,7 +312,7 @@ profile (the one a tool call without `account` runs as).
 
 ## Tool-count budget
 
-Surface: **33 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment` and `instagram_list_recently_searched_hashtags` added since) — deliberately compact; every tool
+Surface: **34 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment`, `instagram_list_recently_searched_hashtags` and `instagram_delete_media` added since) — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

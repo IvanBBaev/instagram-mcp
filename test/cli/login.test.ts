@@ -3604,6 +3604,7 @@ test('each auth path asks for its own default scopes, exactly', async () => {
       'instagram_content_publish',
       'instagram_manage_comments',
       'instagram_manage_insights',
+      'instagram_manage_contents',
       'pages_show_list',
       'pages_read_engagement',
       'business_management',

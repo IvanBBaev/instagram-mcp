@@ -231,6 +231,11 @@ const CASES: LogCase[] = [
     expect: { commentId: 'C1', apply: true },
   },
   {
+    name: 'instagram_delete_media',
+    args: { mediaId: 'M1', apply: true },
+    expect: { mediaId: 'M1', apply: true },
+  },
+  {
     name: 'instagram_set_comments_enabled',
     args: { mediaId: 'M1', enabled: false, apply: true },
     expect: { mediaId: 'M1', enabled: false, apply: true },

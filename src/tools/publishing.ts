@@ -1,7 +1,8 @@
 /**
  * Publishing tool specs (Layer 3) — the `publishing` package. Two granular
  * primitives plus three convenience composites over the two-phase Instagram
- * publish flow (create container → poll → publish):
+ * publish flow (create container → poll → publish), and the one way to take a
+ * published media object back down:
  *
  *   - instagram_create_media_container   (write) low-level container create
  *   - instagram_get_container_status     (read)  poll a container's state
@@ -10,6 +11,7 @@
  *   - instagram_post_image               (write) image/carousel: create→publish
  *   - instagram_post_reel                (write) reel: create→poll→publish
  *   - instagram_post_story               (write) story: create→poll→publish
+ *   - instagram_delete_media             (write) DESTRUCTIVE: delete published media
  *
  * Every mutation passes through {@link withWriteGate}: a **preview** (the
  * default) describes exactly what would happen and calls NOTHING (no container
@@ -18,6 +20,8 @@
  * non-error `in_progress` result carrying `resume_container_id` — `media_publish`
  * is NEVER auto-retried, so the operator resumes explicitly rather than risking
  * a duplicate post (docs/operations.md §2, architecture §10).
+ * `instagram_delete_media` is the package's only destructive tool and is
+ * additionally gated by `IG_ALLOW_DESTRUCTIVE`, like `instagram_delete_comment`.
  *
  * The server never fetches user-supplied media URLs (SSRF policy), so only
  * structural checks are possible here — https URL form, caption limits, carousel
@@ -59,6 +63,7 @@ import { PREVIEW_EXCERPT_MAX, previewExcerpt } from '../core/untrusted.js';
 import {
   createCarouselContainer,
   createMediaContainer,
+  deleteMedia,
   getContainerStatus,
   getPublishingLimit,
   publishMedia,
@@ -1176,6 +1181,62 @@ const postStoryTool = defineTool({
   handler: (args, ctx) => runPostStory(args, ctx),
 });
 
+// --- instagram_delete_media ------------------------------------------------
+
+const deleteMediaTool = defineTool({
+  name: 'instagram_delete_media',
+  title: 'Delete a published media object',
+  description:
+    'Permanently delete a published post, reel, story or whole carousel album (DELETE /{ig-media-id}). ' +
+    'IRREVERSIBLE: the media, its comments and its insights are gone. A single carousel child cannot be ' +
+    'deleted (delete the album) and ad posts are not supported. Facebook Login (Path B) only, and the ' +
+    'token needs the instagram_manage_contents permission. Double-gated: it runs only with apply:true ' +
+    'AND IG_ALLOW_DESTRUCTIVE=true; otherwise it stays a preview.',
+  package: 'publishing',
+  paths: ['fb-login'],
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
+  input: {
+    mediaId: graphObjectId().describe(
+      'The id of the published media to delete (a post, reel, story or carousel album).',
+    ),
+    apply: applyField,
+  },
+  logFields: (args) => ({ mediaId: args.mediaId, apply: args.apply ?? false }),
+  handler: (args, ctx) =>
+    withWriteGate(
+      {
+        action: 'delete_media',
+        summary: `Delete media ${args.mediaId}`,
+        details: { mediaId: args.mediaId },
+        destructive: true,
+      },
+      args,
+      ctx,
+      async () => {
+        const ack = await deleteMedia(ctx.req, { mediaId: args.mediaId });
+        // `{ success: false }` (or a bare `false`) is Meta declining the delete.
+        // Echoing the id as deleted would tell the model the post is gone and
+        // journal a removal that never happened. An ack that does not say is
+        // read as done, as the comment delete does (CC-COM-21).
+        if (ack.success === false) {
+          throw new InstagramError(
+            `Instagram declined to delete media ${args.mediaId} (success: false).`,
+            { kind: 'upstream' },
+          );
+        }
+        return {
+          result: json({ deleted: args.mediaId }, { pretty: ctx.settings.prettyJson }),
+          targetId: args.mediaId,
+        };
+      },
+    ),
+});
+
 // --- Package export ---------------------------------------------------------
 
 /** Publishing tools, registered by `mcp/registry.ts`. */
@@ -1187,4 +1248,5 @@ export const publishingTools: readonly ToolSpec[] = Object.freeze([
   postImageTool,
   postReelTool,
   postStoryTool,
+  deleteMediaTool,
 ] as unknown as ToolSpec[]);

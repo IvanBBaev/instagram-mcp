@@ -235,7 +235,7 @@ sentence read "21" while `api/discovery.ts` in fact had none, and
 so that one tool was the single place where *neither* layer held. Both halves are
 now closed, and the count is derived from the tree rather than from the audit note
 that could not see the module it never opened); the tool layer constrains the charset to
-`/^[A-Za-z0-9_-]{1,64}$/` on the 23 id-bearing fields (`src/tools/ids.ts`; the `ID_FIELDS` sweep in `test/tools/id-schemas.test.ts` lists them), which
+`/^[A-Za-z0-9_-]{1,64}$/` on the 24 id-bearing fields (`src/tools/ids.ts`; the `ID_FIELDS` sweep in `test/tools/id-schemas.test.ts` lists them), which
 is the exact complement of the three failures above. `.` is excluded
 deliberately — a single `..` segment is enough to eat the version pin. Pagination
 cursors, hashtag search terms and usernames keep their own rules and are pinned as
@@ -250,18 +250,19 @@ exactly where a caller may paste a token by mistake.
 - **Plan-and-apply** on every write (see [tools.md](tools.md)): preview by default,
   `apply: true` to execute, `IG_WRITE_MODE=apply` for standing consent; journal of
   applied writes for audit (redacted before it is written — see §2).
-- **Honest annotations**: `destructiveHint` on irreversible ops (`delete_comment`),
+- **Honest annotations**: `destructiveHint` on irreversible ops (`delete_comment`,
+  `delete_media`),
   `readOnlyHint` on all reads — clients surface these in their permission UX, and
   `IG_PACKAGES_READONLY` / `IG_TOOL_PACKAGES=reader` filter on `readOnlyHint`, so a
   tool mis-annotated as read-only would be both advertised as safe *and* survive
   the filter. Since 2026-08-27 the annotation is bound to real behaviour rather
-  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 33
+  than trusted: `test/mcp/tool-metadata-contract.test.ts` **executes** all 34
   handlers against an instrumented write-gate context and derives read-vs-write
   from what each one actually does, under four `IG_WRITE_MODE` ×
   `IG_ALLOW_DESTRUCTIVE` configurations that must all agree. A handler whose
   behaviour cannot be classified fails the test rather than defaulting to "read".
-  Current surface: 22 read, 11 write, all axes agreeing. Since 2026-08-29 the hint
-  is also **present on all 33** — the six `comments` writes previously omitted it
+  Current surface: 22 read, 12 write, all axes agreeing. Since 2026-08-29 the hint
+  is also **present on all 34** — the six `comments` writes previously omitted it
   and leaned on the MCP default — and its presence is enforced by the same test, so
   a new tool cannot ship with the annotation silently absent. Behaviour did not
   change (the filter tests `!== true`); what changed is that "absent" is no longer

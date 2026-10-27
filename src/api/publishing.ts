@@ -15,7 +15,8 @@
  *   - `media_publish` is **never** auto-retried (duplicate-post risk).
  *
  * Content publishing works on BOTH auth paths, so host is left to the active
- * auth provider's default (no `host` override, no `paths` restriction).
+ * auth provider's default (no `host` override, no `paths` restriction). The one
+ * exception is {@link deleteMedia}, which Meta documents for Facebook Login only.
  */
 import type { GraphListResponse, IgRequestFn } from '../core/types.js';
 import { InstagramError, isInstagramError } from '../core/types.js';
@@ -412,6 +413,47 @@ export async function getPublishingLimit(
   }
   if (quotaDuration !== undefined) limit.quotaDuration = quotaDuration;
   return limit;
+}
+
+// --- delete_media -----------------------------------------------------------
+
+/** Graph's acknowledgement of a media delete, as far as it disclosed one. */
+export interface DeleteMediaResult {
+  /** `false` when Meta declined the delete; absent when it did not say. */
+  success?: boolean;
+}
+
+/**
+ * `DELETE /{ig-media-id}` — IRREVERSIBLE removal of a published post, reel,
+ * story or whole carousel album (Instagram Platform changelog, 2025-12-03).
+ *
+ * The Instagram Media reference (read 2026-10-27) documents it for Facebook
+ * Login only, on `graph.facebook.com`, with `instagram_basic` +
+ * `instagram_manage_contents`. So unlike the rest of this module the host is
+ * pinned rather than left to the provider default, and the tool carries
+ * `paths: ['fb-login']`. Ad posts and single carousel children are documented
+ * as not deletable; Meta answers those with an error that propagates as an
+ * InstagramError. `[verify — live: Path A host, the exact error for a carousel
+ * child, collab media]`.
+ *
+ * The documented success body is `{ success: true, deleted_id }`. Only
+ * `success` is kept: a bare `false` (Graph's legacy refusal form, which
+ * {@link graphBody} would flatten to an empty object) and `{ success: false }`
+ * both become `success: false` for the tool to refuse; an error envelope on a
+ * 200 is mapped as on a 4xx (CC-PUB-53).
+ */
+export async function deleteMedia(
+  req: IgRequestFn,
+  params: { mediaId: string },
+): Promise<DeleteMediaResult> {
+  const raw = await req<unknown>({
+    method: 'DELETE',
+    host: 'graph.facebook.com',
+    path: `/${encodeURIComponent(params.mediaId)}`,
+  });
+  if (raw === false) return { success: false };
+  const r = graphBody(raw);
+  return typeof r.success === 'boolean' ? { success: r.success } : {};
 }
 
 // --- composite publish flow (create → poll → publish) -----------------------

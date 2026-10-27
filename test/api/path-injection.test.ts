@@ -63,6 +63,7 @@ import {
 } from '../../src/api/insights.js';
 import {
   createMediaContainer,
+  deleteMedia,
   getContainerStatus,
   getPublishingLimit,
   publishMedia,
@@ -322,6 +323,11 @@ const PATH_CALLS: {
     source: 'publishing.ts:publishMedia',
     label: 'publishMedia(igId)',
     call: (req, id) => publishMedia(req, { igId: id, creationId: '17999000000000001' }),
+  },
+  {
+    source: 'publishing.ts:deleteMedia',
+    label: 'deleteMedia(mediaId)',
+    call: (req, id) => deleteMedia(req, { mediaId: id }),
   },
   {
     source: 'publishing.ts:getPublishingLimit',

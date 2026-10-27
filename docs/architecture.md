@@ -24,7 +24,10 @@ src/
   index.ts        # entry: Node guard → CLI subcommands (login, doctor, refresh) → server bootstrap
   core/           # Layer 0: config, settings, auth providers, token refresh, http client,
                   #          host/SSRF, errors, logging (stderr JSON) and its redactor,
-                  #          rate-limit budget, the clock and time seams
+                  #          rate-limit budget, the clock and time seams, and the
+                  #          credential store: config-write.ts (location, key scheme,
+                  #          the write) over env-file.ts (format), store-link.ts
+                  #          (symlinks), atomic-write.ts (I/O) and config-lock.ts (lock)
   api/            # Layer 1: Instagram Graph domain functions (media.ts, media-spec.ts,
                   #          publishing.ts, comments.ts, insights.ts, discovery.ts,
                   #          account.ts)

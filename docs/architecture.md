@@ -88,6 +88,10 @@ export interface ToolSpec<S extends z.ZodRawShape> {
   `reader` is a read-only *boundary*, not a package list: every package it selects
   is forced read-only, so no write tool is registered under it. An explicit list
   naming the same packages is **not** equivalent — it registers their writes.
+- **Always-on diagnostics** (F-19): `ALWAYS_ON_TOOLS` in `mcp/registry.ts`
+  (today only `instagram_token_status`) is registered even when its package is
+  denied or not selected, so every configuration keeps an in-band report of the
+  token. Only read-only tools qualify; auth-path filtering still applies.
 - **Prompts** (`mcp/prompts.ts`) are static workflow templates over these tools,
   registered after them from the list of names `registerTools` actually exposed:
   a prompt is listed only when every tool it names is registered, so it never

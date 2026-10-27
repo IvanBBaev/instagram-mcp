@@ -33,7 +33,7 @@ Mirrors the reference plan-and-apply gate:
 |---|---|---|
 | `instagram_get_account` | RO | Profile of the operated account: `GET /{ig-id}?fields=username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count` |
 | `instagram_list_linked_accounts` | RO | Path B only: enumerate Pages + linked IG accounts: `GET /me/accounts?fields=name,instagram_business_account{id,username}` |
-| `instagram_token_status` | RO | Token metadata: validity, path (A/B), scopes, expires-at, days-left warning; rate-limit budget snapshot from last-seen usage headers |
+| `instagram_token_status` | RO | Token metadata: validity, path (A/B), scopes, expires-at, days-left warning; rate-limit budget snapshot from last-seen usage headers. **Always registered**, even when `account` is denied or not selected (F-19) |
 
 ## Package `media`
 

@@ -17,6 +17,7 @@ import {
   selectPackages,
   registerTools,
   serverConfirmer,
+  ALWAYS_ON_TOOLS,
   PACKAGE_ENV_NAMES,
   PACKAGE_PROFILES,
   READONLY_PROFILES,
@@ -3099,4 +3100,44 @@ test('registerTools registers in declaration order and reports exactly what it r
     registered,
     'the reported list is the list that was actually registered',
   );
+});
+
+// --- Always-on tools (architecture-review F-19) ----------------------------
+
+test('ALWAYS_ON_TOOLS is frozen and holds only real read-only tools', () => {
+  assert.ok(Object.isFrozen(ALWAYS_ON_TOOLS));
+  assert.deepEqual([...ALWAYS_ON_TOOLS], ['instagram_token_status']);
+  for (const name of ALWAYS_ON_TOOLS) {
+    const t = allTools.find((x) => x.name === name);
+    assert.ok(t, `${name} exists`);
+    assert.equal(t.annotations.readOnlyHint, true, `${name} is read-only`);
+    assert.equal(t.paths, undefined, `${name} runs on both auth paths`);
+  }
+});
+
+test('registerTools keeps the token status tool when its package is denied or not selected', () => {
+  const tools = [
+    spec({ name: 'instagram_token_status', package: 'account' }),
+    spec({ name: 'instagram_get_account', package: 'account' }),
+    spec({ name: 'instagram_list_media', package: 'media' }),
+  ];
+  for (const env of [
+    { IG_TOOL_PACKAGES: 'all', IG_PACKAGES_DENY: 'account' },
+    { IG_TOOL_PACKAGES: 'media' },
+  ]) {
+    const { deps } = makeDeps({ tools, env });
+    assert.deepEqual(
+      registerTools(deps).registered,
+      ['instagram_token_status', 'instagram_list_media'],
+      JSON.stringify(env),
+    );
+  }
+});
+
+test('registerTools still applies auth-path filtering to an always-on tool', () => {
+  // The exemption is from package selection only. A tool the configured
+  // profiles cannot run stays off, always-on or not.
+  const tools = [spec({ name: 'instagram_token_status', package: 'account', paths: ['fb-login'] })];
+  const { deps } = makeDeps({ tools, env: { IG_PACKAGES_DENY: 'account' } });
+  assert.deepEqual(registerTools(deps).registered, []);
 });

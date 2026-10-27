@@ -471,6 +471,10 @@ pattern), or document that denying `account` forfeits in-band diagnostics and
 `doctor` becomes the only window. The former is one `if` in the registry and worth
 it.
 
+**Status (2026-10-27): APPLIED** — the former. `ALWAYS_ON_TOOLS` in
+`src/mcp/registry.ts` keeps `instagram_token_status` registered under any
+package selection; auth-path filtering still applies.
+
 ## 5. Architecture-specific deep dives
 
 ### 5.1 The dual auth-path abstraction

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `instagram_token_status` is always registered, whatever `IG_TOOL_PACKAGES`
+  and `IG_PACKAGES_DENY` select (architecture-review finding F-19). Denying
+  `account`, or an explicit package list without it, no longer removes the one
+  in-band report of token expiry; auth-path filtering still applies.
 - MCP prompts: `instagram_weekly_report`, `instagram_caption_to_publish`,
   `instagram_comment_triage` and `instagram_discovery_research` — static
   workflow templates over the existing tools, with bounded arguments. Each one

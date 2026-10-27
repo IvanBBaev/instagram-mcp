@@ -244,7 +244,9 @@ explicit comma list of packages:
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
 packages after the profile resolves, and `IG_PACKAGES_READONLY` forces a
-package's write tools off (its read tools stay).
+package's write tools off (its read tools stay). `instagram_token_status` is
+the one exception: it stays registered even when `account` is denied or left
+out of an explicit list, so the token is always diagnosable in-band.
 
 `reader` is read-only **by name, not by arithmetic**: its `comments` package
 does contain write tools, so selecting it forces every package it resolves

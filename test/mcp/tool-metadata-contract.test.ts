@@ -730,7 +730,9 @@ test('an explicit IG_TOOL_PACKAGES=comments list includes the comment switch', (
   assert.ok(commentsOnly.includes('instagram_set_comments_enabled'));
 
   const mediaOnly = registeredUnder({ IG_TOOL_PACKAGES: 'media' });
+  // The token status tool rides along with every selection (F-19).
   assert.deepEqual(mediaOnly, [
+    'instagram_token_status',
     'instagram_list_media',
     'instagram_list_stories',
     'instagram_get_media',

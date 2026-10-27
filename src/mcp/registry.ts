@@ -170,6 +170,17 @@ export const PACKAGE_PROFILES: Readonly<Record<string, readonly string[]>> = Obj
 export const READONLY_PROFILES: readonly string[] = Object.freeze(['reader']);
 
 /**
+ * Tools registered whatever the package selection says (architecture-review
+ * finding F-19). `instagram_token_status` is the in-band window on token expiry
+ * and the auth path; an `IG_PACKAGES_DENY=account`, or an explicit
+ * `IG_TOOL_PACKAGES` list without `account`, used to take it away and leave
+ * `doctor` as the only diagnostic. Only a read-only tool belongs here: forced
+ * read-only would drop anything else, and an always-on write would make the
+ * package controls a lie. Auth-path filtering (D1) still applies.
+ */
+export const ALWAYS_ON_TOOLS: readonly string[] = Object.freeze(['instagram_token_status']);
+
+/**
  * Every environment variable {@link selectPackages} reads — the tool-selection
  * half of the recognised `IG_*` namespace. The composition root joins it with
  * the halves `core/settings.ts` and `core/config.ts` own to warn about an `IG_*`
@@ -866,9 +877,11 @@ export function registerTools(deps: RegisterToolsDeps): {
 
   const registered: string[] = [];
   for (const pkg of manifest) {
-    if (!active.has(pkg.name)) continue;
+    const pkgActive = active.has(pkg.name);
     const forceReadonly = readonly.has(pkg.name);
     for (const spec of pkg.tools) {
+      // An unselected package contributes only its always-on tools (F-19).
+      if (!pkgActive && !ALWAYS_ON_TOOLS.includes(spec.name)) continue;
       // D1 capability filtering: `paths === undefined` means both auth paths;
       // otherwise keep the tool when any configured profile is on one of them.
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;

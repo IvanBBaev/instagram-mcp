@@ -76,9 +76,15 @@ const IG_TOKEN = /(?<![A-Za-z0-9_])IG_[A-Z][A-Z0-9_]*/g;
  * by the last test in this file.
  */
 const NOT_ENV_VARS: ReadonlyMap<string, string> = new Map([
-  ['IG_AUTHORIZE_URL', 'local const in src/cli/login.ts — the Instagram OAuth authorize endpoint'],
-  ['IG_TOKEN_URL', 'local const in src/cli/login.ts — the Instagram token-exchange endpoint'],
-  ['IG_GRAPH_BASE', 'local const in src/cli/login.ts — the graph.instagram.com base URL'],
+  [
+    'IG_AUTHORIZE_URL',
+    'local const in src/cli/login-exchange.ts — the Instagram OAuth authorize endpoint',
+  ],
+  [
+    'IG_TOKEN_URL',
+    'local const in src/cli/login-exchange.ts — the Instagram token-exchange endpoint',
+  ],
+  ['IG_GRAPH_BASE', 'local const in src/cli/login-exchange.ts — the graph.instagram.com base URL'],
   ['IG_HOST', 'local const in src/core/auth.ts — the Path A Graph host'],
   [
     'IG_PROFILE__ACCESS_TOKEN',

@@ -301,7 +301,11 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
 `src/cli/<name>.ts` module; the entry only resolves the profile and dispatches:
 
 - `login` — interactive browser OAuth to obtain and persist a long-lived token
-  (both auth paths; see [auth.md](auth.md)).
+  (both auth paths; see [auth.md](auth.md)). `src/cli/login.ts` keeps the flow
+  (`runLogin`), the help text and the profile-name rule; the argv parser lives in
+  `src/cli/login-args.ts`, the authorize URL and both token exchanges (each one
+  branching on Path A / Path B) in `src/cli/login-exchange.ts`, and the loopback
+  redirect capture in `src/cli/redirect-capture.ts`.
 - `doctor` — health check: resolved configuration, token validity (`debug_token` on
   Path B, `GET /{ig-id}` or `/me` on Path A), scope inventory and drift (Path B),
   reachability, Meta app mode; exits 1 when unhealthy.

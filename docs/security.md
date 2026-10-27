@@ -158,7 +158,7 @@
   the process-wide allowlist with a cast and a `push`.
 - **The allowlist governs every server-issued Graph request** — `core/http.ts` for
   tool calls, `core/refresh.ts` for the token exchange. There is exactly one
-  documented exception: `src/cli/login.ts` builds six OAuth and token-exchange
+  documented exception: `src/cli/login-exchange.ts` builds six OAuth and token-exchange
   URLs from module-level literals without passing through `buildUrl`. No host
   reaches them from an operator, a config or the model, so a runtime gate there
   would guard compile-time constants; instead the six URLs are pinned by test,

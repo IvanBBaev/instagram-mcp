@@ -1,5 +1,7 @@
 /**
- * Unit tests for the `login` CLI command (src/cli/login.ts).
+ * Unit tests for the `login` CLI command (src/cli/login.ts, with its argv parser,
+ * token exchanges and redirect capture in src/cli/login-args.ts,
+ * src/cli/login-exchange.ts and src/cli/redirect-capture.ts).
  *
  * HONESTY: a live browser login cannot run here — it needs a registered Meta app
  * (app id/secret + a whitelisted redirect URI). These tests therefore exercise
@@ -22,22 +24,23 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import dotenv from 'dotenv';
 
+import { runLogin, type LoginDeps } from '../../src/cli/login.js';
 import {
-  DEFAULT_REDIRECT_URI,
   buildAuthorizeUrl,
-  captureAuthorizationCode,
-  classifyCallbackRequest,
   computeExpiresAtSec,
   exchangeCodeForToken,
   exchangeForLongLivedToken,
+} from '../../src/cli/login-exchange.js';
+import {
+  DEFAULT_REDIRECT_URI,
+  captureAuthorizationCode,
+  classifyCallbackRequest,
   listenHostFor,
-  runLogin,
   type CallbackOutcome,
   type CallbackRequest,
   type CallbackResponse,
   type CreateCallbackServer,
-  type LoginDeps,
-} from '../../src/cli/login.js';
+} from '../../src/cli/redirect-capture.js';
 import { loadProfiles } from '../../src/core/config.js';
 import { ALLOWED_HOSTS, assertAllowedHost } from '../../src/core/host.js';
 import { isInstagramError } from '../../src/core/types.js';

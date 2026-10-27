@@ -270,7 +270,7 @@ test('the operator guides run only npm scripts that exist', () => {
 });
 
 test('the operator guides pass only flags the CLI actually parses', () => {
-  const loginSource = read('src/cli/login.ts');
+  const loginSource = read('src/cli/login-args.ts');
   const declared = new Set(captured(loginSource.matchAll(/'(--[a-z-]+)'/g)));
   // `doctor` contributes nothing today, and that is asserted rather than left to
   // an empty loop. Measured 2026-09-23: `src/cli/doctor.ts` holds no `'--flag'`

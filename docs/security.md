@@ -235,7 +235,7 @@ sentence read "21" while `api/discovery.ts` in fact had none, and
 so that one tool was the single place where *neither* layer held. Both halves are
 now closed, and the count is derived from the tree rather than from the audit note
 that could not see the module it never opened); the tool layer constrains the charset to
-`/^[A-Za-z0-9_-]{1,64}$/` on the 16 id-bearing fields (`src/tools/ids.ts`), which
+`/^[A-Za-z0-9_-]{1,64}$/` on the 23 id-bearing fields (`src/tools/ids.ts`; the `ID_FIELDS` sweep in `test/tools/id-schemas.test.ts` lists them), which
 is the exact complement of the three failures above. `.` is excluded
 deliberately — a single `..` segment is enough to eat the version pin. Pagination
 cursors, hashtag search terms and usernames keep their own rules and are pinned as

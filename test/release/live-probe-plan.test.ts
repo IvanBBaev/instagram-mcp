@@ -3,7 +3,7 @@
  *
  * That script is the only thing in this repository that can take an action
  * against a live account which cannot be taken back: it publishes a feed post
- * (published feed media CANNOT be deleted through the Graph API — only its
+ * (this repository has no call that deletes published feed media — only its
  * comments toggled) and it rotates the profile's access token, persisting the
  * new one over the old. Both are held back by nothing except a flag the operator
  * has to type. 1610 lines, no exports, and until this file nothing in the suite

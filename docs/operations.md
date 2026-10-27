@@ -249,5 +249,6 @@ but v1 clients are still in the field) (CC-DATA-61).
 ## 7. Webhooks — explicit non-goal (v1)
 
 Real-time comment/mention/DM notifications require a public HTTPS webhook endpoint —
-incompatible with a loopback-only local server. v1 is pull-only; a phase-3 option is
-documented in [roadmap.md](roadmap.md) (tunnel or small hosted receiver, opt-in).
+incompatible with a loopback-only local server. v1 is pull-only. A webhook receiver is parked in [roadmap.md](roadmap.md) and is
+NO-GO for 2.0 ([v2-analysis.md](v2-analysis.md) §4.3): it would only fit as a
+separate hosted process, never as a tunnel from this server.

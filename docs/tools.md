@@ -153,7 +153,7 @@ needs its own review. Will ship dark until reviewed.
 
 ## Structured output
 
-Every read-only tool (all 17 of them: account, media and comment reads, `token_status`,
+Every read-only tool (all 21 of them: account, media and comment reads, `token_status`,
 `publishing_limit`, container status, insights, discovery) declares `outputSchema` and
 returns `structuredContent` alongside text; write tools declare none.
 List tools return `{ items, paging: { after?, truncated }, note? }`. `after` is

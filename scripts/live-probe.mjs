@@ -25,8 +25,8 @@
  *     Without the flags the write lanes SKIP; they are never merely "not run".
  *  2. **Nothing is deleted that this harness did not create.** The comment lane
  *     removes its own comments and replies (disable with `--no-cleanup`) and
- *     touches nothing else. Published feed media cannot be deleted through the
- *     API at all, which is exactly why the feed lane has its own flag.
+ *     touches nothing else. Published feed media cannot be deleted by this
+ *     harness (it has no delete call), which is exactly why the feed lane has its own flag.
  *  3. **No secret is ever printed or written.** The token, the app secret and
  *     the computed `appsecret_proof` are registered with the redactor before the
  *     first call; every printed line goes through it; every recorded response
@@ -327,7 +327,7 @@ const LANES = [
   {
     id: 'feed',
     title: 'Feed publish (T-E4)',
-    why: 'A permanent post — published feed media CANNOT be deleted through the API. Exists only to give the comment lane something to comment on when the account has no media yet.',
+    why: 'A permanent post — this harness CANNOT delete published feed media. Exists only to give the comment lane something to comment on when the account has no media yet.',
     gate: (a) =>
       a.allowFeedPost ? undefined : 'a feed post is permanent; needs --allow-feed-post',
   },
@@ -1085,7 +1085,7 @@ const PROBES = [
       ctx.feedMediaId = published.id;
       return {
         finding:
-          'Feed image published. It CANNOT be deleted through the API — remove it from the Instagram app if the junk account is being kept clean.',
+          'Feed image published. This harness CANNOT delete it — remove it from the Instagram app if the junk account is being kept clean.',
         evidence: { container, status, published },
       };
     },

@@ -199,15 +199,21 @@ the 100 % coverage net and the mutants still describe today's behaviour.
 
 ## 10. Doc drift found during this analysis
 
-- corner-cases.md still says feed media cannot be deleted via the API. The
-  changelog has said otherwise since 2025-12-03 (§3.2).
-- The carousel bound (2–10) disagrees with Meta's current guide (up to 20),
-  `[verify]`.
-- tools.md says "all 17" read tools, while security.md counts 18 read and 11
-  write.
-- operations.md points to a webhook "phase-3 option" in roadmap.md that does
-  not exist there. roadmap.md lists the webhook receiver only as a one-line
-  parked item.
+Status 2026-10-27: every item except the carousel bound is fixed.
+
+- **Fixed.** corner-cases.md, live-qa.md and `scripts/live-probe.mjs` said feed
+  media cannot be deleted via the API. The changelog has said otherwise since
+  2025-12-03 (§3.2). They now say this server has no delete tool, which is what
+  keeps the `--allow-feed-post` lane irreversible.
+- **Open, `[verify]`.** The carousel bound (2–10) disagrees with Meta's current
+  guide (up to 20). It waits for the reference-page check (§4.1).
+- **Fixed.** tools.md said "all 17" read tools. The surface is now 21 read and
+  11 write, and tools.md says 21.
+- **Fixed.** operations.md pointed to a webhook "phase-3 option" in roadmap.md
+  that does not exist there. It now points to the roadmap's parked item and
+  the NO-GO verdict in §4.3.
+- **Fixed.** security.md counted 16 id-bearing fields. The `ID_FIELDS` sweep
+  lists 23.
 
 ## 11. Sources (read 2026-10-24)
 

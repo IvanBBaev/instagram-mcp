@@ -95,7 +95,7 @@ With no terminal, the write probes are reported as SKIP and nothing is written.
 `live-probe.mjs`. The two irreversible live-probe lanes are never started from
 here:
 
-- `--allow-feed-post` publishes a feed post, which cannot be deleted through the API.
+- `--allow-feed-post` publishes a feed post, which this server cannot delete (it has no delete tool).
 - `--allow-token-refresh` rotates the credential.
 
 Run those by hand, last, as [workplan.md](workplan.md) §6 describes.

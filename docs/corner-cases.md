@@ -736,8 +736,10 @@ them still resolves.
 Live cases run against a **dedicated junk professional account** during the phase
 that owns them, following the QA review's protocol: stories-first smoke tests
 (stories self-expire in 24 h — no cleanup problem), feed posts kept to a minimum
-(published feed media **cannot be deleted via the API** — only `comment_enabled`
-can be toggled), findings recorded back into this file replacing the `[verify]`
+(this server has **no tool that deletes published feed media** — only
+`comment_enabled` can be toggled; Graph added `DELETE /{ig-media-id}` on
+2025-12-03 `[verify]`, a 2.0 candidate in [v2-analysis.md](v2-analysis.md) §4.1),
+findings recorded back into this file replacing the `[verify]`
 markers with `[verified <date>]` + observed behavior.
 
 **The protocol is executable.** It is not a checklist to work through by hand:
@@ -760,7 +762,7 @@ is the safety design, not ergonomics:
 |---|---|---|
 | *(none)* | `read`, `discovery` | Nothing is created. Safe on any account. |
 | `--allow-writes` | `container`, `story`, `comment` | Stories expire in 24 h and comments are deletable — recoverable. |
-| `--allow-feed-post` | `feed` | A published feed post **cannot be deleted via the API**. Permanent, forever, on that account. |
+| `--allow-feed-post` | `feed` | A published feed post **cannot be deleted by this server or the probe** (no delete tool yet). Treat it as permanent; remove it from the Instagram app. |
 | `--allow-token-refresh` | `auth` | Rotates the live credential and **rewrites the XDG env file**. If the old token dies, concurrent instances break. |
 
 Both `--allow-feed-post` and `--allow-token-refresh` imply `--allow-writes`; neither

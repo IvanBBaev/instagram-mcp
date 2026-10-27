@@ -277,6 +277,37 @@ bound is rejected with `InvalidParams` before the template renders.
   the caption and comment-triage prompts are absent (their write tools are
   forced off); under `publisher` the weekly report is absent (no insights).
 
+## Resources
+
+The server also exposes four MCP **resources** (`resources/list`,
+`resources/read`), defined in [`mcp/resources.ts`](../src/mcp/resources.ts). Each
+is a fixed URI with an `application/json` body, served for the **default**
+profile (the one a tool call without `account` runs as).
+
+| URI | Name | Body | Backing tool |
+|---|---|---|---|
+| `instagram://account/profile` | `instagram_account_profile` | The `instagram_get_account` result | `instagram_get_account` |
+| `instagram://media/recent` | `instagram_recent_media` | The `instagram_list_media` result with `limit: 10` | `instagram_list_media` |
+| `instagram://insights/account` | `instagram_insights_snapshot` | The `instagram_get_account_insights` result with no arguments (default metrics, `period: day`, last 24 h) | `instagram_get_account_insights` |
+| `instagram://reference/metrics` | `instagram_metric_glossary` | Static: account, media and demographic metric names, periods, metric types, breakdowns, timeframes, the per-`media_product_type` media metrics and the 90-day retention, copied from `api/insights.ts` | none (no I/O) |
+
+- **Same path as the tool.** A Graph-backed resource reads through the
+  registered tool's own per-call wrapper, so its body is byte for byte the text
+  block of the tool result: the same projection, the same
+  `[UNTRUSTED source: "instagram-user-content"]` fence around Instagram text, the
+  same secret redaction and invisible-character escaping, the same auth-path
+  guard. A tool error becomes a JSON-RPC error (`-32603`) whose message is the
+  tool's redacted `Instagram error (<kind>): …` text.
+- **Gating.** A Graph-backed resource is registered only when its backing tool
+  is exposed after the package profile, `IG_PACKAGES_DENY`, read-only forcing and
+  auth-path filtering. The glossary is listed when any of
+  `instagram_get_account_insights`, `instagram_get_media_insights` or
+  `instagram_get_audience_demographics` is. Under `publisher` only the profile
+  and recent-media resources are listed.
+- **No `resource_link`.** Tool results do not embed `resource_link` blocks:
+  each resource mirrors a tool result, so the link would point back at data the
+  caller already has.
+
 ## Tool-count budget
 
 Surface: **33 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment` and `instagram_list_recently_searched_hashtags` added since) — deliberately compact; every tool

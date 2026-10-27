@@ -2391,6 +2391,20 @@ test('the stdio transport speaks MCP on stdout and keeps every diagnostic on std
       ['instagram_weekly_report', 'instagram_caption_to_publish', 'instagram_comment_triage'],
     );
 
+    // Resources are wired to the same REGISTERED surface: `core` exposes the
+    // account, media and insights tools they read through, so all four list.
+    send({ jsonrpc: '2.0', id: 4, method: 'resources/list' });
+    const resourced = (await awaitResponse(4)).result as { resources?: { name: string }[] };
+    assert.deepEqual(
+      (resourced.resources ?? []).map((r) => r.name),
+      [
+        'instagram_account_profile',
+        'instagram_recent_media',
+        'instagram_insights_snapshot',
+        'instagram_metric_glossary',
+      ],
+    );
+
     // Every line on stdout parsed as JSON-RPC above; the logs went elsewhere.
     const stderr = running.stderr();
     assert.ok(!stderr.includes(TOKEN), 'the redactor must mask the token in the startup logs');

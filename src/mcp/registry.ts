@@ -700,6 +700,14 @@ function escapeTextBlocks(result: ToolResult): CallToolResult {
   };
 }
 
+/**
+ * The finished per-call wrapper of one registered tool: strict parse, profile
+ * resolution, the call-time capability guard, the handler, then redaction and
+ * invisible-character escaping — exactly what `tools/call` runs. `mcp/resources.ts`
+ * reads through it so a resource can never take a path the tool does not.
+ */
+export type ToolCaller = (rawArgs: Record<string, unknown>) => Promise<CallToolResult>;
+
 /** Register one surviving tool on the server with its strict per-call wrapper. */
 function registerOne(
   server: McpServer,
@@ -707,7 +715,7 @@ function registerOne(
   spec: ToolSpec,
   confirm: WriteConfirmer,
   redact: (value: unknown) => unknown,
-): void {
+): ToolCaller {
   const shape: ToolShape = { ...spec.input, account: accountField };
   const strictSchema = strictInputSchema(shape);
   const validKeys = Object.keys(shape);
@@ -841,13 +849,15 @@ function registerOne(
     escapeTextBlocks(redactResult(await invoke(rawArgs), redact));
 
   server.registerTool(spec.name, config, cb);
+  return cb;
 }
 
 /**
  * Register every surviving tool on the server: build the manifest, resolve the
  * active packages / forced-read-only set, filter by auth path (D1) and by forced
  * read-only, and register the rest. Returns the names actually registered (for
- * logging + tests) and the manifest.
+ * logging + tests), the manifest, and each registered tool's {@link ToolCaller}
+ * (keyed by name — the only tools a resource may read through).
  *
  * D1 filtering uses the **union** of the auth paths of every configured profile,
  * not just the default one: a tool is reachable as long as *some* profile can
@@ -861,6 +871,7 @@ function registerOne(
 export function registerTools(deps: RegisterToolsDeps): {
   registered: string[];
   manifest: PackageManifest[];
+  callers: ReadonlyMap<string, ToolCaller>;
 } {
   const env = deps.env ?? process.env;
   const manifest = buildManifest(deps.tools);
@@ -876,6 +887,7 @@ export function registerTools(deps: RegisterToolsDeps): {
   const redact = deps.redact ?? createRedactor();
 
   const registered: string[] = [];
+  const callers = new Map<string, ToolCaller>();
   for (const pkg of manifest) {
     const pkgActive = active.has(pkg.name);
     const forceReadonly = readonly.has(pkg.name);
@@ -887,10 +899,10 @@ export function registerTools(deps: RegisterToolsDeps): {
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      registerOne(deps.server, deps, spec, confirm, redact);
+      callers.set(spec.name, registerOne(deps.server, deps, spec, confirm, redact));
       registered.push(spec.name);
     }
   }
 
-  return { registered, manifest };
+  return { registered, manifest, callers };
 }

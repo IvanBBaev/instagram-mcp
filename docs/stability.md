@@ -35,6 +35,14 @@ tools and keeps the preview-first and untrusted-data rules. A prompt disappearin
 because the operator's profile no longer exposes one of its tools is configuration,
 not a surface change.
 
+**So are resources.** The MCP resources ([`mcp/resources.ts`](../src/mcp/resources.ts),
+[tools.md](tools.md#resources)) follow the same rules: changing or removing a
+resource URI is **major**; adding a resource is **minor**. A Graph-backed
+resource's body is its backing tool's result text, so it changes exactly when that
+tool's output does. The glossary body follows the metric lists the insights tools
+accept. A resource disappearing because its backing tool is no longer exposed is
+configuration, not a surface change.
+
 The text block of a success result is a *rendering* of `structuredContent`, not a
 second contract: its exact bytes (spacing, which characters are written as `\uXXXX`
 escapes — CC-DATA-102) may change in a patch release as long as it still parses to the

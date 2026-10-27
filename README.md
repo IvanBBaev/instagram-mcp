@@ -322,6 +322,17 @@ profile, so the discovery prompt needs `reader` or `all` with a Path B profile,
 and `reader` (read-only) hides the two prompts that write. Arguments and details:
 [docs/tools.md](docs/tools.md#prompts).
 
+## Resources
+
+Four read-only MCP resources: `instagram://account/profile` (the operated
+account's profile), `instagram://media/recent` (the 10 latest posts),
+`instagram://insights/account` (account insights for the last 24 hours) and
+`instagram://reference/metrics` (the metric names, periods and breakdowns the
+insights tools accept). The first three read through the matching tool for the
+default profile, with the same fencing of Instagram text and the same redaction,
+and are listed only when that tool is exposed. Details:
+[docs/tools.md](docs/tools.md#resources).
+
 ## Configuration
 
 All settings are environment variables with the uniform `IG_` prefix; the

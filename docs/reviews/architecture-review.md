@@ -457,6 +457,13 @@ or a "publish checklist" prompt later doesn't disturb the manifest shape.
 **Recommendation**: Add a sentence to architecture.md §3: "Resources and prompts
 are deliberately out of scope for v1; `PackageSpec` reserves the extension point."
 
+**Status (2026-10-27): APPLIED** — both halves were built instead of stated out
+of scope. Prompts: `mcp/prompts.ts` (749c947). Resources: `mcp/resources.ts`
+exposes the account profile, recent media, an account-insights snapshot and a
+static metric glossary. Both are gated on the registered tool surface instead of
+a `PackageSpec.resources` slot, and a Graph-backed resource reads through its
+backing tool's own wrapper (architecture.md §3).
+
 ### F-19 (Low) — Diagnostics surface can be configured away
 **Affected**: architecture.md §3/§4, tools.md (`account`), operations.md §6.
 

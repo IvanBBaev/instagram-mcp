@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preview-first (`apply: false`, then `apply: true` only after the user
   confirms). A prompt is listed only when every tool it names is exposed under
   the active profile, deny list and auth path.
+- MCP resources: `instagram://account/profile`, `instagram://media/recent`,
+  `instagram://insights/account` and the static `instagram://reference/metrics`
+  glossary (architecture-review finding F-18). The first three read through
+  `instagram_get_account`, `instagram_list_media` (`limit: 10`) and
+  `instagram_get_account_insights` for the default profile — the same fencing,
+  redaction and auth-path guard as the tool — and each is listed only when its
+  backing tool is exposed.
 - Image alt text: `instagram_create_media_container` takes `altText` (sent as
   `alt_text`, image containers only) and `instagram_post_image` takes
   `altTexts`, one entry per image in order — each lands on its own image or

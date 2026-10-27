@@ -98,8 +98,18 @@ export interface ToolSpec<S extends z.ZodRawShape> {
 - **Prompts** (`mcp/prompts.ts`) are static workflow templates over these tools,
   registered after them from the list of names `registerTools` actually exposed:
   a prompt is listed only when every tool it names is registered, so it never
-  points the model at a tool it cannot call. Rendering is pure (no I/O). The
-  server exposes no MCP resources.
+  points the model at a tool it cannot call. Rendering is pure (no I/O).
+- **Resources** (`mcp/resources.ts`) are four fixed URIs served for the default
+  profile: `instagram://account/profile`, `instagram://media/recent`,
+  `instagram://insights/account` and the static `instagram://reference/metrics`
+  glossary. A Graph-backed resource reads through the registered tool's own
+  per-call wrapper (`registerTools().callers`) — strict parse, profile resolution,
+  the auth-path guard, the per-profile request seam, the tool's projection and
+  untrusted-text fence, redaction and escaping — and its body is that result's
+  text block. A resource is registered only when its backing tool is; the
+  glossary, which performs no I/O, only when an insights tool it describes is.
+  Tool results carry no `resource_link` blocks: each resource mirrors a tool, so
+  a link from the tool's result would point back at the same data.
 
 ## 4. Planned packages
 

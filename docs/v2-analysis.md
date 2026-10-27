@@ -102,7 +102,7 @@ Effort: S < ½ day, M ≈ 1–2 days, L ≥ 3 days.
 |---|---|---|---|
 | **2026-07-28 conformance**: `resultType`, `server/discover`, `ttlMs`/`cacheScope` on lists, deterministic tool order, and the D3 confirmation moved onto multi-round-trip `input_required` with a 2025-11-25 fallback | M | GO (first) | Server-initiated `elicitation/create` is replaced in the new revision. The D3 write gate must keep refusing safely when a client cannot elicit. Check what SDK v2 already provides before writing code. |
 | Tasks extension for video / reel / carousel publishing (progress plus cancel) | M | GO | This replaces in-call polling and is the natural fit for container `IN_PROGRESS` → `FINISHED`. |
-| Resources plus `resource_link` (profile, recent media, insights snapshot, metric glossary) | M | GO | Closes architecture-review finding F-18 (no resources or prompts). |
+| Resources plus `resource_link` (profile, recent media, insights snapshot, metric glossary) | M | GO | Closes architecture-review finding F-18 (no resources or prompts). **Done 2026-10-27** (`src/mcp/resources.ts`; resources only, `resource_link` left out because each resource mirrors a tool result). |
 | Prompts: weekly report, caption → publish, comment triage, discovery research | S | GO | Closes the other half of F-18. The leading competitor ships these. |
 | MCP Apps post preview (`ui://`): render the preview→apply plan and an insights chart | L | COND | A strong differentiator, since no competitor has it. Do it only if the target clients render MCP Apps by 2.0. The preview must stay complete as text, because a UI must never be the only place a write is described. |
 | Icons on server and tools (`server.json`, MCPB manifest) | S | GO | Cheap polish that directories display. |

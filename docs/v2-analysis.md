@@ -100,7 +100,7 @@ Effort: S < ½ day, M ≈ 1–2 days, L ≥ 3 days.
 
 | Candidate | Effort | Verdict | Notes |
 |---|---|---|---|
-| **2026-07-28 conformance**: `resultType`, `server/discover`, `ttlMs`/`cacheScope` on lists, deterministic tool order, and the D3 confirmation moved onto multi-round-trip `input_required` with a 2025-11-25 fallback | M | GO (first) | Server-initiated `elicitation/create` is replaced in the new revision. The D3 write gate must keep refusing safely when a client cannot elicit. Check what SDK v2 already provides before writing code. |
+| **2026-07-28 conformance**: `resultType`, `server/discover`, `ttlMs`/`cacheScope` on lists, deterministic tool order, and the D3 confirmation moved onto multi-round-trip `input_required` with a 2025-11-25 fallback | M | GO (first) | Server-initiated `elicitation/create` is replaced in the new revision. The D3 write gate must keep refusing safely when a client cannot elicit. Check what SDK v2 already provides before writing code. **Done 2026-10-28 on stdio, with SDK v2 as pinned (server 2.3.1, no upgrade).** `serveStdio` classifies the era per connection: a legacy `initialize` is served the instance registered at startup, and a modern envelope gets a `'modern'` registration (`src/mcp/transport.ts`, `src/index.ts`). The SDK's modern codec stamps `resultType`, `ttlMs` and `cacheScope`, and answers `server/discover` itself. D3 uses `inputRequired` / `inputResponse` / `createRequestStateCodec` (`src/mcp/confirm-modern.ts`). The tool, prompt and resource order is pinned by `test/mcp/conformance.test.ts`. **Not done, left as owner questions:** (1) modern **HTTP**: the HTTP transport stays 2025-11-25 and answers a 2026-07-28 header with 400, because a per-process `requestState` key does not span stateless exchanges; (2) `cacheHints` are left at the SDK defaults (`ttlMs: 0`, `cacheScope: 'private'`), because the list surface depends on per-profile env; (3) the SDK's `legacy` shim option of `serveStdio` is unused, because the existing 2025 path is kept as it was. Corner cases CC-PROC-216 … CC-PROC-220. |
 | Tasks extension for video / reel / carousel publishing (progress plus cancel) | M | GO | This replaces in-call polling and is the natural fit for container `IN_PROGRESS` → `FINISHED`. |
 | Resources plus `resource_link` (profile, recent media, insights snapshot, metric glossary) | M | GO | Closes architecture-review finding F-18 (no resources or prompts). **Done 2026-10-27** (`src/mcp/resources.ts`; resources only, `resource_link` left out because each resource mirrors a tool result). |
 | Prompts: weekly report, caption → publish, comment triage, discovery research | S | GO | Closes the other half of F-18. The leading competitor ships these. |
@@ -167,6 +167,12 @@ the 100 % coverage net and the mutants still describe today's behaviour.
    tests can be cleaned up.
 3. A 2026-07-28 client and a 2025-11-25 client both pass the D3 confirmation
    path (an elicitation fallback, and refusal when the client cannot elicit).
+   **Met offline on stdio (2026-10-28):** `test/mcp/confirm-modern.test.ts`
+   drives both eras through the SDK client (accept, decline, cancel, manual
+   retry, replay, tamper, expiry, no-elicitation fallback), and
+   `test/index.test.ts` checks that the built entry hands a 2026-07-28 client
+   `input_required` without touching the network. HTTP remains 2025-11-25
+   only (see §4.2).
 4. The usual gate: `npm run check` green, manifest snapshot reviewed,
    stability.md §1 updated for every surface change, and the CHANGELOG
    breaking section complete.

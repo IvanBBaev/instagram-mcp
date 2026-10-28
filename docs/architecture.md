@@ -283,6 +283,23 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
   loop drains. That includes a composite publish in its status poll, which can
   keep the process up to its 60 s poll budget and journals `in_progress` with the
   container id so the run can be resumed (CC-PROC-207).
+- **stdio serves both MCP eras (2025-11-25 and 2026-07-28).** `startStdio` hands
+  the connection to the SDK's `serveStdio` entry. The entry builds the server
+  **lazily** from the opening message, so no instance exists before the client
+  speaks. A 2025-11-25 `initialize` is served the instance whose registration
+  the startup line logged, so the legacy wire is unchanged. A 2026-07-28 client
+  (per-request `_meta` envelope, optional `server/discover` probe) gets a
+  second registration built with `era: 'modern'` from the same inputs. Its
+  results carry `resultType`, and its lists `ttlMs` / `cacheScope` at the SDK
+  defaults.
+  - On the modern era a D3 write is confirmed by **returning**
+    `input_required`, not by a server→client request. The sealed,
+    call-bound, single-use `requestState` makes the retry safe
+    (`mcp/confirm-modern.ts`, CC-PROC-217).
+  - Errors the entry reports, such as a factory that throws, are answered
+    by the SDK as `-32603 Internal server error` and logged at `debug`.
+  - "ready" is still logged only after the transport has actually started
+    (CC-PROC-216 … CC-PROC-220).
 - **Streamable HTTP** opt-in via `IG_TRANSPORT=http` (`IG_HTTP_HOST`/`IG_HTTP_PORT`).
   It binds loopback unless a bearer token is configured: a **non-loopback** bind
   with no `IG_HTTP_TOKEN` is refused at startup, a loopback bind without one starts

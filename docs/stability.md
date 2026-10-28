@@ -43,6 +43,18 @@ tool's output does. The glossary body follows the metric lists the insights tool
 accept. A resource disappearing because its backing tool is no longer exposed is
 configuration, not a surface change.
 
+**Protocol revisions are not tool surface.**
+- Serving an additional MCP revision is **minor**. Today stdio serves
+  2025-11-25 and 2026-07-28, and HTTP serves 2025-11-25 only.
+- Dropping a revision a release served is **major**.
+- How a D3 confirmation travels is fixed by the revision, not by this server:
+  a server-initiated `elicitation/create` on 2025-11-25, and `input_required`
+  plus a retry on 2026-07-28. The gate's outcomes (`applied`, `refused` with
+  its `reason`) are the same on both and follow the table above.
+- List order is deterministic: tools in sorted-package then source order,
+  prompts and resources in their static order. A reorder is a **patch** that
+  shows up as a manifest diff, because no list position is a contract.
+
 The text block of a success result is a *rendering* of `structuredContent`, not a
 second contract: its exact bytes (spacing, which characters are written as `\uXXXX`
 escapes — CC-DATA-102) may change in a patch release as long as it still parses to the

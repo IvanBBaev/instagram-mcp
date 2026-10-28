@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP 2026-07-28 on stdio, next to 2025-11-25. The stdio connection now goes
+  through the SDK's `serveStdio` entry, which picks the protocol era from the
+  client's opening message. A 2026-07-28 client (per-request `_meta` envelope,
+  optional `server/discover` probe) gets results carrying `resultType`, and
+  lists carrying `ttlMs` / `cacheScope` (SDK defaults: `0` and `private`).
+  A 2025-11-25 client sees no change. The Streamable HTTP transport stays on
+  2025-11-25 and answers a 2026-07-28 `MCP-Protocol-Version` with the SDK's
+  400 "Unsupported protocol version".
+- D3 write confirmation on 2026-07-28 travels as a multi-round-trip
+  `input_required` result instead of a server-initiated `elicitation/create`.
+  Round 1 returns the prompt and a sealed `requestState` and writes nothing.
+  The client retries with the human's answer, and only an `accept` with
+  `confirm: true` performs the write.
+  - The state is HMAC-sealed under a per-process key and expires after 120 s.
+  - It is bound to the tool, account, arguments and prompt, and is single-use.
+  - A tampered, replayed, expired or mismatched state is refused as
+    `unavailable`, never taken as consent.
+  - A client that declares no form elicitation falls back to the existing
+    env-flag gates, as on 2025-11-25.
+- `tools/list`, `prompts/list` and `resources/list` order is pinned by tests:
+  tools follow the sorted package manifest, prompts and resources their
+  static arrays, independent of the order the specs are supplied in.
+
 - `instagram_delete_media` (package `publishing`, Path B only) permanently
   deletes a published post, reel, story or whole carousel album
   (`DELETE /{ig-media-id}` on `graph.facebook.com`). It previews by default and

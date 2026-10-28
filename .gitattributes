@@ -6,3 +6,9 @@
 
 # Binary assets git must never touch.
 *.png binary
+
+# CHANGELOG.md is appended to by parallel branches (docs/v3-workplan.md §3): every
+# branch adds bullets at the end of an [Unreleased] subsection, so two appends to the
+# same subsection are both wanted. `union` keeps both sides' lines instead of raising
+# a conflict; the order of the kept bullets is checked by hand after the rebase.
+CHANGELOG.md merge=union

@@ -145,7 +145,7 @@ goes into that task or waits for it to merge.
 
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
-| **V3-F1** | Multi-account fan-out: one report across profiles, per-profile write gates | new `src/tools/fanout.ts`, new `test/tools/fanout.test.ts`, one line in `src/tools/index.ts`, `test/mcp/registry.test.ts` (append), `src/core/settings.ts`, `test/core/settings.test.ts`, `.env.example` and `test/env-catalog.test.ts` (append), `docs/tools.md` (new section) | V3-01, V3-S2 | S–M | NOT STARTED |
+| **V3-F1** | Multi-account fan-out: one report across profiles, per-profile write gates | new `src/tools/fanout.ts`, new `test/tools/fanout.test.ts`, one line in `src/tools/index.ts`, `test/mcp/registry.test.ts` (append), `src/core/settings.ts`, `test/core/settings.test.ts`, `.env.example` and `test/env-catalog.test.ts` (append), `docs/tools.md` (new section) | V3-01, V3-S2 | S–M | **DONE** 2026-10-28: read-only `instagram_get_accounts_overview` behind `IG_FANOUT_PROFILES` (`*` or names); `ctx.profiles` populated in `registry.ts` only when on; per-profile failures stay in their row; no writes fanned out yet (each derived context carries its own write gate) |
 
 ### Lane D — distribution (`2.x-safe`)
 

@@ -29,7 +29,7 @@
  * ## How "actually performs a write" is derived
  *
  * Not from a list of tool names — a list rots and would only restate the
- * annotation it is supposed to check. Each of the 34 specs is **executed**
+ * annotation it is supposed to check. Each of the 35 specs is **executed**
  * against an injected `WriteGateContext` whose seams are instrumented, and the
  * verdict is read off what the handler did with them:
  *
@@ -78,6 +78,7 @@ import { insightsTools } from '../../src/tools/insights.js';
 import { publishingTools } from '../../src/tools/publishing.js';
 import { commentsTools } from '../../src/tools/comments.js';
 import { discoveryTools } from '../../src/tools/discovery.js';
+import { fanoutTools } from '../../src/tools/fanout.js';
 import { registerTools, type RegisterToolsDeps } from '../../src/mcp/registry.js';
 import type { ToolResult, ToolSpec } from '../../src/mcp/define.js';
 import type { WriteConfirmer, WriteGateContext } from '../../src/mcp/write-mode.js';
@@ -421,7 +422,7 @@ async function classifyAll(): Promise<Classification[]> {
   return out;
 }
 
-/** Probes are executed once and shared: 34 tools x 4 configurations. */
+/** Probes are executed once and shared: 35 tools x 4 configurations. */
 let classification: Promise<Classification[]> | undefined;
 function classified(): Promise<Classification[]> {
   classification ??= classifyAll();
@@ -432,7 +433,7 @@ function classified(): Promise<Classification[]> {
 
 test('every tool classifies the same way under every write-mode configuration', async () => {
   const results = await classified();
-  assert.equal(results.length, 34, 'the probe must cover the whole v1 surface');
+  assert.equal(results.length, 35, 'the probe must cover the whole surface');
 
   for (const { spec, perProbe } of results) {
     const disagreement = perProbe.map((p) => `${p.config.label}: ${p.verdict}`);
@@ -490,7 +491,7 @@ test('no tool that declares readOnlyHint: true goes through the write gate', asy
   assert.deepEqual(gated, [], 'a tool advertised as read-only reached the write gate');
 });
 
-test('the two axes agree for all 34 tools, in both directions', async () => {
+test('the two axes agree for all 35 tools, in both directions', async () => {
   // The summary form: one table, so a failure shows which tool moved and which
   // way, rather than only that some set was non-empty.
   const table = (await classified()).map((c) => ({
@@ -513,7 +514,7 @@ test('every tool declares readOnlyHint explicitly, write tools included', async 
   // added in. Requiring the literal makes the omission a test failure instead of
   // a silent default, so annotating a new write tool is a step you cannot skip.
   //
-  // Stated over all 34 rather than only the write ones: it costs nothing (every
+  // Stated over all 35 rather than only the write ones: it costs nothing (every
   // read tool already declares `true`) and it also catches a read tool whose
   // hint is present but `undefined`. Writes are where it bites in practice.
   const undeclared = (await classified())
@@ -678,6 +679,9 @@ const MODULES: readonly (readonly [string, readonly ToolSpec[]])[] = [
   ['publishing', publishingTools],
   ['comments', commentsTools],
   ['discovery', discoveryTools],
+  // A second `account` module, deliberately (V3-F1): the cross-account tools
+  // live apart from the single-account ones but are selected with `account`.
+  ['account', fanoutTools],
 ];
 
 /** The module a spec is defined in, by object identity — not by its own tag. */

@@ -34,6 +34,7 @@ import { insightsTools } from '../../src/tools/insights.js';
 import { publishingTools } from '../../src/tools/publishing.js';
 import { commentsTools } from '../../src/tools/comments.js';
 import { discoveryTools } from '../../src/tools/discovery.js';
+import { fanoutTools } from '../../src/tools/fanout.js';
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = () => {
@@ -90,6 +91,8 @@ const V1_SURFACE: readonly string[] = [
   'instagram_get_hashtag_media',
   'instagram_list_recently_searched_hashtags',
   'instagram_discover_business',
+  // account, fan-out module (1, V3-F1)
+  'instagram_get_accounts_overview',
 ];
 
 /**
@@ -106,9 +109,10 @@ const V1_PACKAGE_TAGS: readonly string[] = [
   ...Array<string>(8).fill('publishing'),
   ...Array<string>(12).fill('comments'),
   ...Array<string>(4).fill('discovery'),
+  'account',
 ];
 
-/** The six package arrays in the order the barrel is supposed to spread them. */
+/** The package arrays (six packages plus the fan-out module) in the order the barrel is supposed to spread them. */
 const SPREADS: readonly (readonly [string, readonly ToolSpec[]])[] = [
   ['accountTools', accountTools],
   ['mediaTools', mediaTools],
@@ -116,6 +120,7 @@ const SPREADS: readonly (readonly [string, readonly ToolSpec[]])[] = [
   ['publishingTools', publishingTools],
   ['commentsTools', commentsTools],
   ['discoveryTools', discoveryTools],
+  ['fanoutTools', fanoutTools],
 ];
 
 test('allTools is exactly the v1 surface, in registration order', () => {
@@ -124,7 +129,7 @@ test('allTools is exactly the v1 surface, in registration order', () => {
     [...V1_SURFACE],
     'the exposed tool surface changed — update V1_SURFACE only if the change is intended',
   );
-  assert.equal(allTools.length, 34, 'the v1 surface is 34 tools');
+  assert.equal(allTools.length, 35, 'the surface is 35 tools');
 });
 
 test('allTools carries the pinned package tag for every position', () => {
@@ -138,7 +143,7 @@ test('allTools carries the pinned package tag for every position', () => {
   );
 });
 
-test('allTools is the six package arrays concatenated, by identity and in order', () => {
+test('allTools is the package arrays concatenated, by identity and in order', () => {
   // Identity, not deep equality: the barrel must hand the registry the very
   // spec objects its packages exported. A barrel that mapped, cloned or
   // re-wrapped them would still list the same names while shipping handlers
@@ -169,7 +174,7 @@ test('every package contributes all of its tools exactly once', () => {
     }
     counted += tools.length;
   }
-  assert.equal(allTools.length, counted, 'allTools holds specs from outside the six packages');
+  assert.equal(allTools.length, counted, 'allTools holds specs from outside the package arrays');
 });
 
 test('no tool name appears twice in the surface', () => {
@@ -264,7 +269,7 @@ test('the published surface is frozen: allTools cannot be grown, shrunk or reord
 });
 
 test('every published spec is frozen, with its annotations and its input/output shapes', () => {
-  assert.equal(allTools.length, 34, 'guard: an empty surface would pass this test vacuously');
+  assert.equal(allTools.length, 35, 'guard: an empty surface would pass this test vacuously');
   for (const spec of allTools) {
     assert.throws(
       () => {

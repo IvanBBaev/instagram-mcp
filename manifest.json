@@ -175,6 +175,10 @@
     {
       "name": "instagram_discover_business",
       "description": "Fetch another business/creator's PUBLIC profile and recent media by handle via GET /{ig-id}?fields=business_discovery.username(<handle>){followers_count,media_count,media{...}}."
+    },
+    {
+      "name": "instagram_get_accounts_overview",
+      "description": "One report across the configured account profiles: for each profile the operator opted in with IG_FANOUT_PROFILES, its IG handle and follower / following / media counts, plus totals."
     }
   ],
   "user_config": {

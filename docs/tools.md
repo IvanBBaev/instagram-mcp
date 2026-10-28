@@ -35,6 +35,7 @@ Mirrors the reference plan-and-apply gate:
 | `instagram_get_account` | RO | Profile of the operated account: `GET /{ig-id}?fields=username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count` |
 | `instagram_list_linked_accounts` | RO | Path B only: enumerate Pages + linked IG accounts: `GET /me/accounts?fields=name,instagram_business_account{id,username}` |
 | `instagram_token_status` | RO | Token metadata: validity, path (A/B), scopes, expires-at, days-left warning; rate-limit budget snapshot from last-seen usage headers. **Always registered**, even when `account` is denied or not selected (F-19) |
+| `instagram_get_accounts_overview` | RO | Cross-account report (V3-F1, module `src/tools/fanout.ts`): for every profile opted in with `IG_FANOUT_PROFILES` (`*` or a comma list of profile names; an unknown name refuses the start), `GET /{ig-id}?fields=...` through that profile's own context (its own token, `accountId` or `me`), one profile at a time in configuration order. One row per profile (`name`, `authPath`, `accountId`, fenced `username`, follower / following / media counts) plus `totals` over the rows that succeeded. A failing profile is a row with `ok: false` and its `error` (`kind`, `message`), not a failed call. Without `IG_FANOUT_PROFILES` only the selected profile is read, `fanout` is `false` and `note` names the variable. Reads only: no write is fanned out, and any future fan-out write goes through each profile's own write gate |
 
 ## Package `media`
 
@@ -342,7 +343,7 @@ package's [`skills/`](../skills) folder. A skills-aware client finds them with
 
 ## Tool-count budget
 
-Surface: **34 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment`, `instagram_list_recently_searched_hashtags` and `instagram_delete_media` added since) — deliberately compact; every tool
+Surface: **35 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment`, `instagram_list_recently_searched_hashtags`, `instagram_delete_media` and `instagram_get_accounts_overview` added since) — deliberately compact; every tool
 earns its context-window cost. Composites (`post_image`, `post_reel`, `post_story`)
 exist because the container flow is a multi-step protocol the model otherwise gets
 wrong; the primitive tools remain exposed for advanced control.

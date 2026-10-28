@@ -176,7 +176,12 @@ test('buildManifest snapshot: package -> sorted tool names', () => {
   for (const pkg of manifest) snapshot[pkg.name] = pkg.tools.map((t) => t.name).sort();
 
   assert.deepEqual(snapshot, {
-    account: ['instagram_get_account', 'instagram_list_linked_accounts', 'instagram_token_status'],
+    account: [
+      'instagram_get_account',
+      'instagram_get_accounts_overview',
+      'instagram_list_linked_accounts',
+      'instagram_token_status',
+    ],
     comments: [
       'instagram_create_comment',
       'instagram_delete_comment',
@@ -554,7 +559,7 @@ test('selectPackages: the read-only profile check is case-insensitive (IG_TOOL_P
 
 test("IG_TOOL_PACKAGES=Reader registers the same write-free surface as 'reader'", () => {
   // The end-to-end half of the case above: the capitalised spelling must reach
-  // the same 20-tool read-only surface, not a 25-tool one with write tools.
+  // the same 21-tool read-only surface, not a 26-tool one with write tools.
   const { deps } = makeDeps({
     tools: allTools,
     profiles: [fbProfile],
@@ -563,7 +568,7 @@ test("IG_TOOL_PACKAGES=Reader registers the same write-free surface as 'reader'"
   const { registered } = registerTools(deps);
   const byName = new Map(allTools.map((t) => [t.name, t]));
 
-  assert.equal(registered.length, 20, 'reader exposes 20 read-only tools (README table)');
+  assert.equal(registered.length, 21, 'reader exposes 21 read-only tools (README table)');
   for (const name of registered) {
     assert.equal(byName.get(name)?.annotations.readOnlyHint, true, `'${name}' is not read-only`);
   }
@@ -629,7 +634,7 @@ test('IG_TOOL_PACKAGES=reader registers a write-free surface (no write/destructi
     assert.ok(registered.includes(name), `reader must still expose '${name}'`);
   }
 
-  assert.equal(registered.length, 20, 'reader exposes 20 read-only tools (README table)');
+  assert.equal(registered.length, 21, 'reader exposes 21 read-only tools (README table)');
 });
 
 // --- D1 capability filtering ----------------------------------------------
@@ -1070,14 +1075,14 @@ test('the wrapper fallback labels a root-level failure `(root)` rather than an e
 
 test('real McpServer: the whole v1 surface registers, lists and stays closed', async () => {
   // `all` + a Path-B profile keeps every tool past D1 filtering, so this is the
-  // full 34-tool surface end to end on a real server.
+  // full 35-tool surface end to end on a real server.
   const live = await liveServer(allTools, {
     profiles: [fbProfile],
     env: { IG_TOOL_PACKAGES: 'all' },
   });
   try {
     assert.equal(live.registered.length, allTools.length, 'every v1 tool registers');
-    assert.equal(allTools.length, 34, 'the v1 surface is 34 tools');
+    assert.equal(allTools.length, 35, 'the surface is 35 tools');
 
     const { tools } = await live.client.listTools();
     assert.deepEqual([...tools.map((t) => t.name)].sort(), [...live.registered].sort());
@@ -1780,7 +1785,7 @@ test('PACKAGE_ENV_NAMES cannot be edited at runtime', () => {
   assert.deepEqual(PACKAGE_ENV_NAMES, before, 'a write got through');
 });
 
-test('IG_TOOL_PACKAGES=publisher registers exactly the documented 26-tool surface', () => {
+test('IG_TOOL_PACKAGES=publisher registers exactly the documented 27-tool surface', () => {
   // fb-login so the Path-B-only tools (instagram_list_linked_accounts) survive
   // D1 filtering; publisher is the profile a posting deployment runs with.
   const { deps } = makeDeps({
@@ -1798,6 +1803,7 @@ test('IG_TOOL_PACKAGES=publisher registers exactly the documented 26-tool surfac
       'instagram_delete_comment',
       'instagram_delete_media',
       'instagram_get_account',
+      'instagram_get_accounts_overview',
       'instagram_get_comment',
       'instagram_get_container_status',
       'instagram_get_media',
@@ -1820,7 +1826,7 @@ test('IG_TOOL_PACKAGES=publisher registers exactly the documented 26-tool surfac
       'instagram_token_status',
       'instagram_unhide_comment',
     ],
-    'publisher exposes exactly these 26 tools (README table)',
+    'publisher exposes exactly these 27 tools (README table)',
   );
   // The two packages the profile deliberately withholds: analytics and the
   // third-party discovery surface a publishing deployment has no business
@@ -3157,4 +3163,122 @@ test('registerTools attaches the Skills extension to a real server, gated by its
   } finally {
     await live.close();
   }
+});
+
+// --- multi-account fan-out: ctx.profiles (V3-F1) -----------------------------
+
+const brandProfile: ResolvedProfile = {
+  name: 'brand',
+  authPath: 'fb-login',
+  accessToken: 'tok-brand',
+  accountId: '17841400000000002',
+};
+const shopProfile: ResolvedProfile = {
+  name: 'shop',
+  authPath: 'ig-login',
+  accessToken: 'tok-shop',
+};
+
+/** Register one spec that captures its context, call it, and return that context. */
+async function fanoutCtx(
+  env: Record<string, string>,
+  over: Partial<RegisterToolsDeps> = {},
+): Promise<{ ctx: WriteGateContext | undefined; seen: ResolvedProfile[] }> {
+  let received: WriteGateContext | undefined;
+  const t = spec({
+    name: 'instagram_get_accounts_overview',
+    handler: (_args, ctx) => {
+      received = ctx;
+      return text('ok');
+    },
+  });
+  const { deps, calls, seen } = makeDeps({
+    tools: [t],
+    profiles: [igProfile, brandProfile, shopProfile],
+    env,
+    ...over,
+  });
+  registerTools(deps);
+  await calls[0]!.cb({});
+  return { ctx: received, seen };
+}
+
+test('fan-out: without IG_FANOUT_PROFILES no tool context carries a profile directory', async () => {
+  // Off by default: every deployment before 3.0 keeps one profile per call.
+  const { ctx } = await fanoutCtx({});
+  assert.ok(ctx, 'the handler ran');
+  assert.equal(ctx.profiles, undefined);
+});
+
+test('fan-out: IG_FANOUT_PROFILES=* lists every configured profile, default first, no secrets', async () => {
+  const { ctx } = await fanoutCtx({ IG_FANOUT_PROFILES: '*' });
+  const directory = ctx?.profiles;
+  assert.ok(directory, 'the directory is attached');
+  assert.equal(directory.defaultName, 'default');
+  assert.deepEqual(directory.list(), [
+    { name: 'default', authPath: 'ig-login' },
+    { name: 'brand', authPath: 'fb-login', accountId: '17841400000000002' },
+    { name: 'shop', authPath: 'ig-login' },
+  ]);
+  assert.equal(JSON.stringify(directory.list()).includes('tok'), false, 'no token leaves');
+});
+
+test('fan-out: a name list opts in only those profiles, in configuration order', async () => {
+  const { ctx } = await fanoutCtx({ IG_FANOUT_PROFILES: 'shop, Brand' });
+  assert.deepEqual(
+    ctx?.profiles?.list().map((p) => p.name),
+    ['brand', 'shop'],
+  );
+});
+
+test("fan-out: contextFor builds that profile's own request, log and confirmation seam", async () => {
+  const confirm: WriteConfirmer = {
+    isSupported: () => true,
+    ask: () => Promise.resolve({ action: 'decline' as const }),
+  };
+  const { log, records } = recordingLog();
+  const { ctx, seen } = await fanoutCtx({ IG_FANOUT_PROFILES: '*' }, { confirm, log });
+  const derived = (await ctx!.profiles!.contextFor('BRAND')) as WriteGateContext;
+
+  // The lookup is case-insensitive like `account`, and the request is built for
+  // that profile — never the caller's.
+  assert.equal(derived.profile, brandProfile);
+  assert.equal(seen.at(-1), brandProfile);
+  assert.equal(derived.settings, baseSettings);
+  // The confirmation seam is attached, so withWriteGate never skips D3 for a
+  // derived context.
+  assert.equal(derived.confirm, confirm);
+  // Fan-out does not nest.
+  assert.equal(derived.profiles, undefined);
+  derived.log.info('probe');
+  assert.deepEqual(records.at(-1)?.fields, {
+    tool: 'instagram_get_accounts_overview',
+    account: 'brand',
+  });
+});
+
+test('fan-out: contextFor refuses a configured profile the operator left out', async () => {
+  const { ctx } = await fanoutCtx({ IG_FANOUT_PROFILES: 'brand' });
+  await assert.rejects(
+    ctx!.profiles!.contextFor('shop'),
+    (err: unknown) =>
+      isInstagramError(err) && err.kind === 'validation' && err.message.includes("'shop'"),
+  );
+});
+
+test('fan-out: registerTools fails fast on IG_FANOUT_PROFILES naming an unknown profile', () => {
+  const { deps } = makeDeps({
+    tools: [spec({ name: 'instagram_get_account' })],
+    profiles: [igProfile, brandProfile],
+    env: { IG_FANOUT_PROFILES: 'brand,brnad' },
+  });
+  assert.throws(
+    () => registerTools(deps),
+    (err: unknown) =>
+      isInstagramError(err) &&
+      err.kind === 'validation' &&
+      err.message.includes('IG_FANOUT_PROFILES') &&
+      err.message.includes('brnad') &&
+      err.message.includes('default, brand'),
+  );
 });

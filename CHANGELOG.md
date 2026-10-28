@@ -132,6 +132,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read them as `skill://<name>/SKILL.md` resources. A skill is served only when
   every tool it names is exposed, the same gate the prompts use. Built on the
   SDK's `SkillsExtension`, whose `attach` is still experimental in SDK 2.4.0.
+- `instagram_get_accounts_overview` (package `account`, read-only): one report
+  across the configured account profiles, with each profile's handle and
+  follower / following / media counts plus totals. Cross-account reads are
+  opt-in through the new `IG_FANOUT_PROFILES` (`*` for every profile, or a
+  comma-separated list of profile names); a name that matches no configured
+  profile refuses the start. Each profile is read through its own context,
+  token and write gates, one at a time, and a failing profile is reported in
+  its row without failing the others. Unset, the tool reports only the
+  selected profile and says how to opt in.
 
 ### Changed
 

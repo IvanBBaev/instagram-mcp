@@ -17,6 +17,7 @@ import { insightsTools } from './insights.js';
 import { publishingTools } from './publishing.js';
 import { commentsTools } from './comments.js';
 import { discoveryTools } from './discovery.js';
+import { fanoutTools } from './fanout.js';
 
 /**
  * Freeze one spec on its way onto the published surface: the spec object, its
@@ -90,5 +91,6 @@ export const allTools: readonly ToolSpec[] = Object.freeze(
     ...publishingTools,
     ...commentsTools,
     ...discoveryTools,
+    ...fanoutTools,
   ].map(publish),
 );

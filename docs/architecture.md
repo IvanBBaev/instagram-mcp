@@ -408,6 +408,7 @@ hand-maintained and sync-tested against the source (`test/env-catalog.test.ts`,
 | `IG_ENV_FILE` | XDG path | Env-file location override |
 | `IG_PROFILE_<NAME>_*` | — | Additional account profiles (same keys, prefixed). A `<NAME>` outside `[A-Z0-9_]` still loads but warns at startup; 2.0 refuses it |
 | `IG_ACTIVE_PROFILE` | `default` | Profile used when a tool call passes no `account` |
+| `IG_FANOUT_PROFILES` | — | Profiles `instagram_get_accounts_overview` reads across: `*` or a comma-separated list of profile names; unset, the tool reports only the selected profile. A malformed value or an unknown name refuses the start |
 | `IG_TOOL_PACKAGES` | `core` | Package profile `core` \| `reader` \| `publisher` \| `all`, or explicit list |
 | `IG_PACKAGES_DENY` | — | Packages to remove after profile resolution |
 | `IG_PACKAGES_READONLY` | — | Packages forced read-only |

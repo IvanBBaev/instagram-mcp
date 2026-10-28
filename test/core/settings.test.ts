@@ -6,9 +6,12 @@ import { join } from 'node:path';
 
 import {
   DEFAULT_SETTINGS,
+  FANOUT_ALL,
   SETTINGS_ENV_NAMES,
   isLoopbackHost,
+  loadFanoutProfiles,
   loadSettings,
+  selectFanoutProfiles,
   settingsWarnings,
 } from '../../src/core/settings.js';
 import { InstagramError, type Settings } from '../../src/core/types.js';
@@ -997,4 +1000,62 @@ test('DEFAULT_SETTINGS resolves its journal when read, so a bad home cannot fail
   );
   assert.equal(assigned, false);
   assert.equal(journal, join('/srv/state', 'instagram-mcp-ai', 'writes.jsonl'));
+});
+
+// --- IG_FANOUT_PROFILES (V3-F1) ---------------------------------------------
+
+test('IG_FANOUT_PROFILES: unset or blank means fan-out is off', () => {
+  assert.equal(loadFanoutProfiles({}), undefined);
+  assert.equal(loadFanoutProfiles({ IG_FANOUT_PROFILES: '   ' }), undefined);
+});
+
+test('IG_FANOUT_PROFILES: * opts every profile in, even repeated', () => {
+  assert.equal(loadFanoutProfiles({ IG_FANOUT_PROFILES: '*' }), FANOUT_ALL);
+  assert.equal(loadFanoutProfiles({ IG_FANOUT_PROFILES: ' * , *,' }), FANOUT_ALL);
+});
+
+test('IG_FANOUT_PROFILES: a list is trimmed, lower-cased, de-duplicated and frozen', () => {
+  const names = loadFanoutProfiles({ IG_FANOUT_PROFILES: ' Brand, shop_2,,brand,my-shop, ' });
+  assert.deepEqual(names, ['brand', 'shop_2', 'my-shop']);
+  assert.ok(Object.isFrozen(names));
+});
+
+test('IG_FANOUT_PROFILES: a value that names no profile, mixes * or holds bad names is refused', () => {
+  for (const raw of [',', ' , ,', '*,brand', 'brand,*', 'my brand', 'brand;shop', 'shop/2']) {
+    assertValidationError(
+      () => loadFanoutProfiles({ IG_FANOUT_PROFILES: raw }),
+      'IG_FANOUT_PROFILES',
+    );
+  }
+});
+
+test('loadSettings validates IG_FANOUT_PROFILES without adding a Settings field', () => {
+  assertValidationError(
+    () => loadSettings({ IG_FANOUT_PROFILES: '*,brand' }),
+    'IG_FANOUT_PROFILES',
+  );
+  assert.deepEqual(loadSettings({ IG_FANOUT_PROFILES: 'brand' }), loadSettings({}));
+});
+
+test('selectFanoutProfiles: off, all, and a list kept in configuration order', () => {
+  const profiles = [{ name: 'default' }, { name: 'brand' }, { name: 'shop' }];
+  assert.equal(selectFanoutProfiles(undefined, profiles), undefined);
+  const all = selectFanoutProfiles(FANOUT_ALL, profiles);
+  assert.deepEqual(all, profiles);
+  assert.notEqual(all, profiles, 'a copy, never the caller array');
+  assert.deepEqual(selectFanoutProfiles(['shop', 'default'], profiles), [
+    { name: 'default' },
+    { name: 'shop' },
+  ]);
+});
+
+test('selectFanoutProfiles: an unconfigured name is refused with the configured names', () => {
+  assert.throws(
+    () => selectFanoutProfiles(['brand', 'brnad', 'x'], [{ name: 'default' }, { name: 'brand' }]),
+    (err: unknown) =>
+      err instanceof InstagramError &&
+      err.kind === 'validation' &&
+      err.message ===
+        'IG_FANOUT_PROFILES names unknown profile(s) brnad, x; configured profiles: default, brand',
+  );
 });

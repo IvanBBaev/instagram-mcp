@@ -16,6 +16,7 @@
  *   IG_HTTP_HOST        -> httpHost          (default '127.0.0.1', loopback only)
  *   IG_HTTP_PORT        -> httpPort          (default 3000; `IG_PORT` is the deprecated alias)
  *   IG_WRITE_JOURNAL    -> writeJournal      (default `<state home>/instagram-mcp-ai/writes.jsonl`)
+ *   IG_FANOUT_PROFILES  -> (not a Settings field; see {@link loadFanoutProfiles}) (default off)
  *
  * Note: the HTTP port env var is `IG_HTTP_PORT`, grouped with `IG_HTTP_HOST` and
  * `IG_HTTP_TOKEN`. Until 2026-10-28 it was `IG_PORT`, which 1.x still reads under
@@ -376,6 +377,7 @@ export const SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'IG_HTTP_PORT',
   'IG_PORT',
   'IG_WRITE_JOURNAL',
+  'IG_FANOUT_PROFILES',
 ]);
 
 /**
@@ -449,6 +451,9 @@ export function settingsWarnings(env: NodeJS.ProcessEnv = process.env): Settings
  */
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   const d = DEFAULT_SETTINGS;
+  // Validated here so a malformed value refuses the start like every other
+  // knob; the value itself is not a `Settings` field (see loadFanoutProfiles).
+  loadFanoutProfiles(env);
   return {
     maxConcurrent: parseIntEnv(env, 'IG_MAX_CONCURRENT', d.maxConcurrent, { min: 1, max: 64 }),
     maxItems: parseIntEnv(env, 'IG_MAX_ITEMS', d.maxItems, { min: 1, max: 100_000 }),
@@ -468,4 +473,84 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     // `XDG_STATE_HOME`/`$HOME`, which only this env knows.
     writeJournal: resolveWriteJournal(env),
   };
+}
+
+// --- multi-account fan-out (V3-F1) -------------------------------------------
+
+/** The `IG_FANOUT_PROFILES` value that opts every configured profile in. */
+export const FANOUT_ALL = '*';
+
+/**
+ * The parsed `IG_FANOUT_PROFILES` opt-in: {@link FANOUT_ALL} for every
+ * configured profile, or the lower-cased profile names the operator listed.
+ */
+export type FanoutProfiles = typeof FANOUT_ALL | readonly string[];
+
+/**
+ * Parse `IG_FANOUT_PROFILES`, the opt-in for cross-account tools
+ * (`instagram_get_accounts_overview`). Unset or blank means OFF: no tool sees
+ * any profile but its own, which is every deployment before 3.0. `*` opts every
+ * configured profile in; a comma-separated list opts in only the profiles it
+ * names, so an operator can keep an account out of every cross-account report.
+ *
+ * Names are matched like `account` (case-insensitive) and de-duplicated. An
+ * empty entry (`a,,b`, a trailing comma) is dropped. `*` beside a name is
+ * refused rather than read as either one, and so is a value that names no
+ * profile at all (`,`). Whether each name is a CONFIGURED profile is checked by
+ * {@link selectFanoutProfiles}, because this loader never sees the profiles.
+ *
+ * Not a {@link Settings} field: `Settings` is a frozen contract
+ * (`core/types.ts`), so the value travels separately and only
+ * {@link loadSettings} validates it at start-up.
+ *
+ * @throws {InstagramError} `kind: 'validation'` naming the variable.
+ */
+export function loadFanoutProfiles(
+  env: NodeJS.ProcessEnv = process.env,
+): FanoutProfiles | undefined {
+  const raw = read(env, 'IG_FANOUT_PROFILES');
+  if (raw === undefined) return undefined;
+  const names = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((n) => n.trim().toLowerCase())
+        .filter((n) => n !== ''),
+    ),
+  ];
+  if (names.length === 1 && names[0] === FANOUT_ALL) return FANOUT_ALL;
+  if (names.length === 0 || names.includes(FANOUT_ALL) || names.some((n) => !/^[\w-]+$/.test(n))) {
+    fail(
+      'IG_FANOUT_PROFILES must be * or a comma-separated list of profile names, got ' +
+        describeValue(raw),
+    );
+  }
+  return Object.freeze(names);
+}
+
+/**
+ * The configured profiles `setting` opts into fan-out, in configuration order
+ * (the default first), or `undefined` when fan-out is off.
+ *
+ * A listed name that is not a configured profile refuses the start: a typo
+ * would otherwise drop that account from every report without a word.
+ *
+ * @throws {InstagramError} `kind: 'validation'` naming the variable and the
+ *   configured profiles (names only).
+ */
+export function selectFanoutProfiles<P extends { name: string }>(
+  setting: FanoutProfiles | undefined,
+  profiles: readonly P[],
+): P[] | undefined {
+  if (setting === undefined) return undefined;
+  if (setting === FANOUT_ALL) return [...profiles];
+  const configured = profiles.map((p) => p.name);
+  const unknown = setting.filter((n) => !configured.includes(n));
+  if (unknown.length > 0) {
+    fail(
+      `IG_FANOUT_PROFILES names unknown profile(s) ${unknown.join(', ')}; configured ` +
+        `profiles: ${configured.join(', ')}`,
+    );
+  }
+  return profiles.filter((p) => setting.includes(p.name));
 }

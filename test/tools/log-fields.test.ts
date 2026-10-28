@@ -274,6 +274,13 @@ const CASES: LogCase[] = [
     args: { username: 'competitor', mediaLimit: 5 },
     expect: { username: 'competitor', mediaLimit: 5 },
   },
+
+  // --- account, fan-out module (V3-F1) -------------------------------------
+  {
+    name: 'instagram_get_accounts_overview',
+    args: { account: 'brand' },
+    expect: { account: 'brand' },
+  },
 ];
 
 /** Tools that deliberately declare no `logFields` (their input carries nothing worth logging). */

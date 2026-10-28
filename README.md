@@ -8,7 +8,7 @@
   expected (the block matches the published sibling servicenow-mcp-ai).
 -->
 
-| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-34-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
+| [![npm version](https://img.shields.io/npm/v/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=npm)](https://www.npmjs.com/package/instagram-mcp-ai) | [![npm downloads](https://img.shields.io/npm/dm/instagram-mcp-ai?style=flat-square&logo=npm&logoColor=white&label=downloads)](https://www.npmjs.com/package/instagram-mcp-ai) | [![node](https://img.shields.io/node/v/instagram-mcp-ai?style=flat-square&logo=nodedotjs&logoColor=white&label=node)](https://www.npmjs.com/package/instagram-mcp-ai) | [![tools](https://img.shields.io/badge/tools-35-blue?style=flat-square)](#tools) | [![License: MIT](https://img.shields.io/npm/l/instagram-mcp-ai?style=flat-square&color=blue&label=license)](LICENSE) |
 | :--: | :--: | :--: | :--: | :--: |
 | [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/instagram-mcp/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/instagram-mcp/actions/workflows/ci.yml) | [![coverage](https://img.shields.io/codecov/c/github/IvanBBaev/instagram-mcp/main?style=flat-square&logo=codecov&logoColor=white&label=coverage)](https://codecov.io/gh/IvanBBaev/instagram-mcp) | [![last commit](https://img.shields.io/github/last-commit/IvanBBaev/instagram-mcp?style=flat-square&logo=git&logoColor=white&label=last%20commit)](https://github.com/IvanBBaev/instagram-mcp/commits/main) | [![MCP](https://img.shields.io/badge/MCP-server-orange?style=flat-square)](https://modelcontextprotocol.io) | [![Known Vulnerabilities](https://snyk.io/test/npm/instagram-mcp-ai/badge.svg)](https://snyk.io/test/npm/instagram-mcp-ai) |
 
@@ -238,10 +238,10 @@ explicit comma list of packages:
 
 | Profile | `IG_TOOL_PACKAGES=…` | Packages | Tools |
 | ------- | -------------------- | -------- | :---: |
-| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 30 |
-| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 20 |
-| `publisher` | `account, media, publishing, comments` | publish and moderate | 26 |
-| `all` | every package | the full surface | 34 |
+| `core` (default) | `account, media, publishing, comments, insights` | the everyday read + publish + moderate set | 31 |
+| `reader` | `account, media, insights, comments, discovery` | read, insights and discovery — **forced read-only** (Path B for discovery) | 21 |
+| `publisher` | `account, media, publishing, comments` | publish and moderate | 27 |
+| `all` | every package | the full surface | 35 |
 
 The six packages are `account`, `media`, `insights`, `publishing`, `comments`
 and `discovery`. Two more knobs refine a selection: `IG_PACKAGES_DENY` removes
@@ -276,6 +276,7 @@ and `Write` for mutating ones (writes preview by default — see
 | Tool | Package | Auth paths | Access | Summary |
 | --- | --- | --- | --- | --- |
 | `instagram_get_account` | account | both | Read | Fetch the profile of the operated Instagram professional account: username, display name, biography, website, profile-picture URL, and follower / following / media counts. |
+| `instagram_get_accounts_overview` | account | both | Read | One report across the configured account profiles: for each profile the operator opted in with IG_FANOUT_PROFILES, its IG handle and follower / following / media counts, plus totals. |
 | `instagram_list_linked_accounts` | account | fb-login | Read | Enumerate the Facebook Pages this token can act on and the Instagram business account linked to each (GET /me/accounts). |
 | `instagram_token_status` | account | both | Read | Report the active credential: auth path (A = ig-login / B = fb-login), whether a token is configured, the resolved account ID, and — on Path B, via debug_token — validity, granted scopes, absolute expiry and days-left (with a refresh warning as the threshold nears). |
 | `instagram_get_media` | media | both | Read | Fetch a single media object by id, including its carousel children (album items) under `children`. |
@@ -357,6 +358,7 @@ client that supports MCP elicitation is asked to confirm each applied write.
 | `IG_APP_SECRET` |  | Meta app secret (secret) |
 | `IG_ENV_FILE` |  | Env-file location override (default: XDG path); read alone, and written by login/refresh; must be absolute (a leading ~ is the home directory) |
 | `IG_ACTIVE_PROFILE` | `default` | Profile used when a tool call passes no `account` |
+| `IG_FANOUT_PROFILES` |  | Opt-in for cross-account reports: * (every profile) or a comma list of profile names; unset = off |
 | `IG_TOOL_PACKAGES` | `core` | core \| reader \| publisher \| all, or an explicit list |
 | `IG_PACKAGES_DENY` |  | Packages to remove after profile resolution |
 | `IG_PACKAGES_READONLY` |  | Packages forced read-only |

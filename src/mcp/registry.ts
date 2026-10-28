@@ -41,6 +41,7 @@
  */
 import { z } from 'zod';
 import type {
+  ProfileDirectory,
   ToolAnnotationSet,
   ToolInputArgs,
   ToolResult,
@@ -54,11 +55,12 @@ import {
   type WriteConfirmer,
   type WriteGateContext,
 } from './write-mode.js';
-import { InstagramError } from '../core/types.js';
+import { InstagramError, toProfileSummary } from '../core/types.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../core/types.js';
 import { resolveProfile, withAccount } from '../core/config.js';
 import { toInstagramError } from '../core/errors.js';
 import { createRedactor } from '../core/redact.js';
+import { loadFanoutProfiles, selectFanoutProfiles } from '../core/settings.js';
 import { escapeInvisible } from '../core/untrusted.js';
 import type { Clock } from '../core/clock.js';
 import type {
@@ -726,6 +728,42 @@ function escapeTextBlocks(result: ToolResult): CallToolResult {
  */
 export type ToolCaller = (rawArgs: Record<string, unknown>) => Promise<CallToolResult>;
 
+/**
+ * The {@link ProfileDirectory} a call sees when fan-out is on (V3-F1): the
+ * opted-in `fanout` profiles, default first, and for each the context the
+ * wrapper below builds for `account: name` — that profile's `req`, the same
+ * settings and clock, a log line tagged with that account, and a confirmer
+ * bound to that account, so `withWriteGate` gates each profile on its own and
+ * the human confirmation (D3) is never skipped. Lookup follows
+ * `resolveProfile`, over the opted-in profiles only, so a profile the operator
+ * left out of `IG_FANOUT_PROFILES` is unknown here. The D1 auth-path check is
+ * not applied (the contract leaves it to the caller), and the derived context
+ * carries no `profiles` of its own: fan-out does not nest.
+ */
+function profileDirectory(
+  deps: RegisterToolsDeps,
+  spec: ToolSpec,
+  fanout: ResolvedProfile[],
+  confirmFor: (account: string) => WriteConfirmer,
+): ProfileDirectory {
+  return {
+    defaultName: deps.defaultProfileName,
+    list: () => fanout.map(toProfileSummary),
+    contextFor: (name) =>
+      Promise.resolve().then((): WriteGateContext => {
+        const profile = resolveProfile(fanout, name);
+        return {
+          req: deps.makeRequest(profile),
+          settings: deps.settings,
+          clock: deps.clock,
+          profile,
+          log: deps.log.child({ tool: spec.name, account: profile.name }),
+          confirm: confirmFor(profile.name),
+        };
+      }),
+  };
+}
+
 /** Register one surviving tool on the server with its strict per-call wrapper. */
 function registerOne(
   server: McpServer,
@@ -734,6 +772,7 @@ function registerOne(
   confirm: WriteConfirmer,
   redact: (value: unknown) => unknown,
   modern: ModernConfirmFlow | undefined,
+  fanout: ResolvedProfile[] | undefined,
 ): ToolCaller {
   const shape: ToolShape = { ...spec.input, account: accountField };
   const strictSchema = strictInputSchema(shape);
@@ -849,6 +888,11 @@ function registerOne(
           profile,
           log,
           confirm: confirmFor(name, args),
+          // V3-F1: only when the operator opted in with IG_FANOUT_PROFILES, and
+          // listing only the profiles it allows.
+          ...(fanout !== undefined && {
+            profiles: profileDirectory(deps, spec, fanout, (p) => confirmFor(p, args)),
+          }),
         };
 
         // 5. Run the handler; it returns a ready ToolResult.
@@ -927,6 +971,10 @@ export function registerTools(deps: RegisterToolsDeps): {
   const redact = deps.redact ?? createRedactor();
   // One sealing key and spent-nonce ledger per registration (one server).
   const modern = deps.era === 'modern' ? createModernConfirmFlow() : undefined;
+  // The profiles cross-account tools may read (V3-F1); `undefined` = fan-out
+  // off. A name that is not a configured profile fails the start, like the
+  // default profile above.
+  const fanout = selectFanoutProfiles(loadFanoutProfiles(env), deps.profiles);
 
   const registered: string[] = [];
   const callers = new Map<string, ToolCaller>();
@@ -941,7 +989,7 @@ export function registerTools(deps: RegisterToolsDeps): {
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      callers.set(spec.name, registerOne(deps.server, deps, spec, confirm, redact, modern));
+      callers.set(spec.name, registerOne(deps.server, deps, spec, confirm, redact, modern, fanout));
       registered.push(spec.name);
     }
   }

@@ -36,6 +36,7 @@ import { InstagramError, isInstagramError } from '../../src/core/types.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { IgRequestFn, Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
 import { Client } from '@modelcontextprotocol/client';
+import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { allTools } from '../../src/tools/index.js';
@@ -3142,4 +3143,18 @@ test('registerTools still applies auth-path filtering to an always-on tool', () 
   const tools = [spec({ name: 'instagram_token_status', package: 'account', paths: ['fb-login'] })];
   const { deps } = makeDeps({ tools, env: { IG_PACKAGES_DENY: 'account' } });
   assert.deepEqual(registerTools(deps).registered, []);
+});
+
+test('registerTools attaches the Skills extension to a real server, gated by its tools', async () => {
+  // Only `instagram_get_account` is exposed, so no bundled skill qualifies, but
+  // the extension is still declared and answers `skills/list`.
+  const live = await liveServer([spec({ name: 'instagram_get_account' })]);
+  try {
+    const extensions = live.client.getServerCapabilities()?.extensions ?? {};
+    assert.ok('io.modelcontextprotocol/skills' in extensions);
+    const skills = new SkillsClient(live.client);
+    assert.deepEqual((await skills.list()).skills, []);
+  } finally {
+    await live.close();
+  }
 });

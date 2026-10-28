@@ -125,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links it in `privacy_policies`, and the plugin folder gains the README the
   directory requires, with a Privacy Policy section. Tests now also require
   every tool to carry a unique, non-empty `title`.
+- Workflow skills over the MCP Skills extension (`io.modelcontextprotocol/skills`,
+  SEP-2640). The four prompt workflows also ship as Agent Skills in `skills/`
+  (weekly report, caption to publish, comment triage, discovery research), so a
+  skills-aware client can find them with `skills/list` and `skills/get` and
+  read them as `skill://<name>/SKILL.md` resources. A skill is served only when
+  every tool it names is exposed, the same gate the prompts use. Built on the
+  SDK's `SkillsExtension`, whose `attach` is still experimental in SDK 2.4.0.
 
 ### Changed
 

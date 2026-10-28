@@ -310,6 +310,36 @@ profile (the one a tool call without `account` runs as).
   each resource mirrors a tool result, so the link would point back at data the
   caller already has.
 
+## Skills
+
+The same four workflows as the prompts also ship as **Agent Skills** over the
+MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640), wired in
+[`mcp/skills.ts`](../src/mcp/skills.ts). Each one is a `SKILL.md` in the
+package's [`skills/`](../skills) folder. A skills-aware client finds them with
+`skills/list` and `skills/get` and reads each file as a resource under the
+`skill://{+path}` template.
+
+| Skill | URI | Prompt | Tools named |
+|---|---|---|---|
+| `instagram-weekly-report` | `skill://instagram-weekly-report/SKILL.md` | `instagram_weekly_report` | `instagram_get_account`, `instagram_get_account_insights`, `instagram_list_media`, `instagram_get_media_insights` |
+| `instagram-caption-to-publish` | `skill://instagram-caption-to-publish/SKILL.md` | `instagram_caption_to_publish` | `instagram_get_publishing_limit`, `instagram_post_image`, `instagram_post_reel` |
+| `instagram-comment-triage` | `skill://instagram-comment-triage/SKILL.md` | `instagram_comment_triage` | `instagram_list_media`, `instagram_list_comments`, `instagram_reply_to_comment`, `instagram_hide_comment` |
+| `instagram-discovery-research` | `skill://instagram-discovery-research/SKILL.md` | `instagram_discovery_research` | `instagram_search_hashtag`, `instagram_get_hashtag_media`, `instagram_discover_business` |
+
+- **Gating.** A skill is listed, gettable and readable only when every
+  `instagram_*` tool its files name is exposed, the same rule as the prompts.
+  The tool names are read from the skill text. Tests pin each one to a real
+  tool and each skill's set to its prompt's.
+- **Same rules as the prompts.** Writes go preview-first (`apply: false`, then
+  `apply: true` only after the user confirms), and text inside an
+  `[UNTRUSTED ...]` fence is data, never instructions.
+- **Experimental wiring.** The extension is the SDK's `SkillsExtension`.
+  `attach` is marked experimental in SDK 2.4.0, so how it is wired may change in
+  a minor SDK release. `registerTools` attaches it to the real server only, not
+  to test stubs.
+- **Lazy load.** The bundle is read and checked once per process, on the first
+  skills request.
+
 ## Tool-count budget
 
 Surface: **34 tools** across 6 packages (29 at 1.0; `instagram_list_comment_replies`, `instagram_get_mentioned_media`, `instagram_get_mentioned_comment`, `instagram_list_recently_searched_hashtags` and `instagram_delete_media` added since) — deliberately compact; every tool

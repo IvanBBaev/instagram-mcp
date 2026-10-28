@@ -70,6 +70,7 @@ import type {
   ServerContext,
 } from '@modelcontextprotocol/server';
 import { createModernConfirmFlow, modernConfirmer } from './confirm-modern.js';
+import { attachSkills } from './skills.js';
 import type { ModernConfirmFlow } from './confirm-modern.js';
 
 // --- PACKAGES manifest ------------------------------------------------------
@@ -945,5 +946,6 @@ export function registerTools(deps: RegisterToolsDeps): {
     }
   }
 
+  attachSkills(deps.server, registered);
   return { registered, manifest, callers };
 }

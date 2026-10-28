@@ -15,6 +15,7 @@
     "dist/src/**/*.js",
     "dist/src/**/*.d.ts",
     "bin/",
+    "skills/",
     "server.json",
     "README.md",
     "LICENSE"

@@ -101,7 +101,7 @@ Verdicts and effort classes as in v2-analysis §4. XL means a separate project.
 | Branded content / paid partnership on publish | B (C `[verify]`) | S | COND | The publishing guide now says Facebook Login only. Optional input, only on an operator ask. |
 | Resumable upload (`rupload.facebook.com`) | B (C?) | M | COND | GO only if Path C lands and the 2.0 upload helper does not cover the case. Adds an allowlisted host. |
 | Audio API (`/ig_audio`) | B | S | DEFER | Facebook Login apps only. No operator ask. |
-| `enable_fb_login` OAuth parameter in the login CLI | A | S | GO | Re-added 2026-02-06 after a 2025 deprecation `[verify]`. |
+| `enable_fb_login` OAuth parameter in the login CLI | A | S | GO | Re-added 2026-02-06 after a 2025-06-14 deprecation (Instagram Platform changelog, read 2026-10-28). Shipped as `login --hide-fb-login` (V3-P4). |
 | Likes | A+B | S | DEFER | Unchanged since 2.0. |
 | `connected_threads_user`, `live_media`, `upcoming_events` | B | S | DEFER | Low operator value. `upcoming_events` reference did not render `[verify]`. |
 | Creator Marketplace discovery | B | M | DEFER | Brand-side, off-mission for an operator tool. |

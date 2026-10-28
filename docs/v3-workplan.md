@@ -118,7 +118,7 @@ The three share no files and can run together from day one.
 |---|---|---|---|---|---|
 | **V3-P1** | Credential-provider port: profiles load through a provider; the file provider is the default; refresh writes back through it | `src/core/config.ts`, `src/core/refresh.ts`, new `src/core/credentials.ts`, `src/index.ts` (`loadProfiles` only), `test/core/config.test.ts`, `test/core/refresh.test.ts`, new `test/core/credentials.test.ts`, `test/index.test.ts`, `docs/architecture.md` (credentials section) | V3-01 | L | NOT STARTED |
 | **V3-P2** | Stop mutating `process.env` during bootstrap | `src/index.ts`, `test/index.test.ts` | V3-P1 | M | NOT STARTED |
-| **V3-P4** | `enable_fb_login` parameter in the login CLI (`2.x-safe`) | `src/cli/login-args.ts`, `test/cli/login.test.ts`, `docs/auth.md` (login section) | — | S | NOT STARTED |
+| **V3-P4** | `enable_fb_login` parameter in the login CLI (`2.x-safe`) | `src/cli/login-args.ts`, `test/cli/login.test.ts`, `docs/auth.md` (login section) | — | S | **DONE** 2026-10-28: `login --hide-fb-login`; also touched `src/cli/login.ts`, `src/cli/login-exchange.ts`, `docs/setup-guide.md` |
 | **V3-P3** | Path C: Unified Login token shape, login flow without a Page lookup, doctor and scope checks | `src/cli/login.ts`, `src/cli/login-exchange.ts`, `src/cli/login-args.ts`, `src/cli/scopes.ts`, `src/cli/doctor.ts`, `src/core/auth.ts`, `src/core/token-shapes.ts`, `test/cli/*`, `test/core/auth.test.ts`, `test/core/token-shapes.test.ts`, `docs/auth.md`, `docs/setup-guide.md` | V3-P1, V3-P4, G3, owner decision §9.2 | L | BLOCKED (owner decision, live app for `[verify]` rows) |
 
 V3-P4 can run in Wave 1 alongside V3-P1: they share no files. V3-P3 comes

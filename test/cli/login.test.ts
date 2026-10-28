@@ -4184,7 +4184,7 @@ test('the option list is one indented block under its own heading, in the order 
   // mandatory entry; a heading that called the block optional -- the natural
   // edit for someone tidying a flag list -- contradicts the only flag `login`
   // cannot start without, and the operator who believes it gets exit 2 with no
-  // idea which of the eight flags they were supposed to pass.
+  // idea which of the nine flags they were supposed to pass.
   const heading = lines.indexOf('Options:');
   assert.notEqual(heading, -1, 'the option list is introduced by a heading of its own');
 
@@ -4198,7 +4198,7 @@ test('the option list is one indented block under its own heading, in the order 
   // operator is told which URI to register verbatim in the Meta app, and an
   // expectation built from the same constant the help prints would agree with
   // whatever value that constant took -- including one no Meta app has.
-  assert.deepEqual(lines.slice(heading + 1, heading + 9), [
+  assert.deepEqual(lines.slice(heading + 1, heading + 10), [
     '  --path, -p <ig|fb>     Auth path: ig (Instagram Login) or fb (Facebook Login). Required.',
     '  --profile <name>       Account profile to write (default: "default").',
     '  --app-id <id>          Meta app id       (or env IG_APP_ID).',
@@ -4206,9 +4206,10 @@ test('the option list is one indented block under its own heading, in the order 
     '  --redirect-uri <uri>   OAuth redirect URI (default: http://127.0.0.1:8723/callback).',
     '  --account-id <id>      IG professional-account id (optional).',
     '  --scopes <csv>         Comma-separated scope override (default: per path).',
+    '  --hide-fb-login        Path ig only: hide the Facebook option (enable_fb_login=false).',
     '  --help, -h             Show this help.',
   ]);
-  assert.equal(lines[heading + 9], '', 'the list ends where the prose below it begins');
+  assert.equal(lines[heading + 10], '', 'the list ends where the prose below it begins');
 });
 
 // --- a detached value is never echoed by a refusal --------------------------
@@ -4705,4 +4706,96 @@ test('runLogin masks the long-lived token in its form-encoded spelling (CC-AUTH-
   });
   assert.equal(code, 1);
   assert.match(out(), /^login failed: store refused t=\[REDACTED\]$/m);
+});
+
+// --- --hide-fb-login (Meta's enable_fb_login, Path A only) ------------------
+
+test('buildAuthorizeUrl sends enable_fb_login on ig-login only, and only when given', () => {
+  const base = {
+    appId: '55500',
+    redirectUri: 'http://localhost:8723/callback',
+    scopes: ['instagram_business_basic'],
+    state: 'xyz',
+  };
+  // Omitted: byte-identical to the URL built before the parameter existed.
+  assert.equal(
+    buildAuthorizeUrl('ig-login', base),
+    'https://www.instagram.com/oauth/authorize?client_id=55500' +
+      '&redirect_uri=http%3A%2F%2Flocalhost%3A8723%2Fcallback&response_type=code' +
+      '&scope=instagram_business_basic&state=xyz',
+  );
+  assert.equal(
+    buildAuthorizeUrl('ig-login', { ...base, enableFbLogin: false }),
+    `${buildAuthorizeUrl('ig-login', base)}&enable_fb_login=false`,
+  );
+  assert.equal(
+    new URL(buildAuthorizeUrl('ig-login', { ...base, enableFbLogin: true })).searchParams.get(
+      'enable_fb_login',
+    ),
+    'true',
+  );
+  // The Facebook dialog has no such parameter.
+  assert.equal(
+    buildAuthorizeUrl('fb-login', { ...base, enableFbLogin: false }),
+    buildAuthorizeUrl('fb-login', base),
+  );
+});
+
+test('--hide-fb-login puts enable_fb_login=false on the Path A authorize URL', async () => {
+  for (const argv of [
+    ['--path', 'ig', '--hide-fb-login'],
+    ['--hide-fb-login', 'ig'],
+  ]) {
+    const { fetchFn } = igRoutes();
+    const { persist } = fakePersist();
+    const { deps, out } = stderrSink();
+    const code = await runLogin([...argv, '--app-id=55500', `--app-secret=${APP_SECRET}`], {
+      ...deps,
+      env: {},
+      fetchFn,
+      persist,
+      now: () => 0,
+      captureCode: async () => 'auth-code',
+    });
+    assert.equal(code, 0, argv.join(' '));
+    assert.equal(authorizeUrlFrom(out()).searchParams.get('enable_fb_login'), 'false');
+  }
+});
+
+test('without --hide-fb-login the Path A authorize URL carries no enable_fb_login', async () => {
+  const { fetchFn } = igRoutes();
+  const { persist } = fakePersist();
+  const { deps, out } = stderrSink();
+  const code = await runLogin(['--path', 'ig', '--app-id=55500', `--app-secret=${APP_SECRET}`], {
+    ...deps,
+    env: {},
+    fetchFn,
+    persist,
+    now: () => 0,
+    captureCode: async () => 'auth-code',
+  });
+  assert.equal(code, 0);
+  assert.equal(authorizeUrlFrom(out()).searchParams.has('enable_fb_login'), false);
+});
+
+test('--hide-fb-login is refused on Path B before anything is opened or sent', async () => {
+  // Both the flag path and the env default reach the same refusal.
+  for (const [argv, env] of [
+    [['--path', 'fb', '--hide-fb-login'], {}],
+    [['--hide-fb-login'], { IG_AUTH_PATH: 'fb' }],
+  ] as const) {
+    const { deps, out, steps } = mustStopAtParsing({ ...env });
+    const code = await runLogin([...argv, '--app-id=55500', `--app-secret=${APP_SECRET}`], deps);
+    assert.equal(code, 2, argv.join(' '));
+    assert.equal(out(), 'login: --hide-fb-login applies only to --path ig (Instagram Login).\n');
+    assert.deepEqual(steps, []);
+  }
+});
+
+test('--hide-fb-login takes no value: an inline one is refused as an unknown argument', async () => {
+  const { deps, out, steps } = mustStopAtParsing();
+  const code = await runLogin(['--path', 'ig', '--hide-fb-login=false'], deps);
+  assert.equal(code, 2);
+  assert.ok(out().startsWith("login: unknown argument '--hide-fb-login'.\n"), out());
+  assert.deepEqual(steps, []);
 });

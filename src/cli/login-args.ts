@@ -22,6 +22,11 @@ export interface LoginOptions {
   redirectUri: string;
   accountId?: string;
   scopes?: string[];
+  /**
+   * `--hide-fb-login`: send `enable_fb_login=false` on the Path A authorize
+   * URL. Unset (not `false`) without the flag, so the URL stays as before.
+   */
+  hideFbLogin?: boolean;
   help: boolean;
 }
 
@@ -202,6 +207,13 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv): LoginOptions 
         if (v !== undefined) opts.redirectUri = v;
         break;
       }
+      case '--hide-fb-login':
+        // A bare switch: Meta's default (`true`) needs no flag, so the only
+        // value worth sending is `false`. An inline value (`--hide-fb-login=x`)
+        // is refused like any other unknown spelling (see `default`).
+        if (inline !== undefined) return { unknownArgument: flag };
+        opts.hideFbLogin = true;
+        break;
       case '--account-id':
         opts.accountId = clean(value());
         accountIdOnArgv = true;

@@ -182,6 +182,7 @@ Useful flags (`login --help` for the full list):
 | `--account-id <id>` | Pre-set the IG professional-account id to store (otherwise Path A stores the `user_id` its code exchange returns, and Path B stores none). |
 | `--profile <name>` | Which account profile to write (default `default`); letters, digits, `_`, `.` and `-` only — any other name is refused with exit code 2. |
 | `--scopes <csv>` | Override the per-path scope defaults. |
+| `--hide-fb-login` | Path `ig` only: send `enable_fb_login=false`, so the Instagram login page does not offer "Log in with Facebook". Refused with exit code 2 on `--path fb`. |
 
 The long flags also take the inline form (`--path=ig`), and the path may be given
 as a bare word (`login ig`). Anything else on the line is refused with exit code 2

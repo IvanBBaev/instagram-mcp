@@ -40,6 +40,12 @@ export interface AuthorizeParams {
   redirectUri: string;
   scopes: readonly string[];
   state: string;
+  /**
+   * Path A only: Meta's `enable_fb_login` (default `true` — the Instagram
+   * login page offers "Log in with Facebook"). Omitted ⇒ the parameter is not
+   * sent. Ignored for `fb-login`, whose dialog has no such parameter.
+   */
+  enableFbLogin?: boolean;
 }
 
 /**
@@ -55,6 +61,9 @@ export function buildAuthorizeUrl(path: AuthPath, params: AuthorizeParams): stri
     scope: params.scopes.join(','),
     state: params.state,
   });
+  if (path === 'ig-login' && params.enableFbLogin !== undefined) {
+    query.append('enable_fb_login', String(params.enableFbLogin));
+  }
   const base =
     path === 'ig-login' ? IG_AUTHORIZE_URL : `${FB_WWW_BASE}/${GRAPH_VERSION}/dialog/oauth`;
   return `${base}?${query.toString()}`;

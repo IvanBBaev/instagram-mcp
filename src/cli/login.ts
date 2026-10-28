@@ -86,6 +86,7 @@ Options:
   --redirect-uri <uri>   OAuth redirect URI (default: ${DEFAULT_REDIRECT_URI}).
   --account-id <id>      IG professional-account id (optional).
   --scopes <csv>         Comma-separated scope override (default: per path).
+  --hide-fb-login        Path ig only: hide the Facebook option (enable_fb_login=false).
   --help, -h             Show this help.
 
 The long flags also take the --flag=value form, and the path may be given as
@@ -179,6 +180,13 @@ export async function runLogin(argv: string[], deps: LoginDeps = {}): Promise<nu
     stderr(`login: --path <ig|fb> is required.\n\n${HELP_TEXT}`);
     return 2;
   }
+  // Path-specific: the Facebook dialog has no `enable_fb_login`, so the flag
+  // there is refused rather than dropped — the operator asked for a login page
+  // this path cannot show.
+  if (opts.hideFbLogin === true && path !== 'ig-login') {
+    stderr('login: --hide-fb-login applies only to --path ig (Instagram Login).\n');
+    return 2;
+  }
   const appId = opts.appId;
   const appSecret = opts.appSecret;
   if (appId === undefined || appSecret === undefined) {
@@ -207,7 +215,13 @@ export async function runLogin(argv: string[], deps: LoginDeps = {}): Promise<nu
   const secrets: string[] = [...surfaceForms(appSecret)];
 
   try {
-    const authorizeUrl = buildAuthorizeUrl(path, { appId, redirectUri, scopes, state });
+    const authorizeUrl = buildAuthorizeUrl(path, {
+      appId,
+      redirectUri,
+      scopes,
+      state,
+      ...(opts.hideFbLogin === true ? { enableFbLogin: false } : {}),
+    });
     stderr(`Open this URL in a browser to authorize (${path}):\n${authorizeUrl}\n`);
     if (deps.openUrl !== undefined) await deps.openUrl(authorizeUrl);
 

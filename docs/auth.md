@@ -35,6 +35,18 @@ in `src/core/config.ts`).
   - `instagram_business_manage_messages` — supported by the path, **not requested
     by `login`** (no messaging tool ships; M6 is DEFER — see
     [messaging.md](messaging.md)). Pass it via `login --scopes` if you need it.
+- **Facebook option on the login page.** The Instagram authorization window
+  offers "Log in with Facebook" by default. `login --path ig --hide-fb-login`
+  adds Meta's `enable_fb_login=false` to the authorize URL to hide it. Without
+  the flag the URL carries no `enable_fb_login` at all, so Meta's default
+  (`true`) applies. The page with that option appears only when the browser is
+  not already logged in to Instagram. The parameter belongs to the Instagram
+  window only, so `--hide-fb-login` with `--path fb` is refused (exit 2) before
+  anything is opened. Meta deprecated the parameter on 2025-06-14 and added it
+  back on 2026-02-06 *[verified 2026-10-28 — Business Login for Instagram
+  reference, authorization URL parameters, and the Instagram Platform
+  changelog: developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login,
+  developers.facebook.com/docs/instagram-platform/changelog]*.
 - **Token lifecycle**: browser OAuth yields a short-lived token (~1 h) → exchange
   for a **long-lived token (60 days)**. The code exchange on `api.instagram.com`
   answers either flat (`{access_token, user_id, …}`) or wrapped as

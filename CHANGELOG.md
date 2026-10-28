@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opt-in, so the defaults are unchanged, and no accepted value was removed
   (CC-INS-31). Path A support of `link_clicks`, `facebook_views` and
   `crossposted_views` is *[verify]*.
+- `login --hide-fb-login` (Path A only) adds Meta's `enable_fb_login=false`
+  to the Instagram authorize URL, so the login page does not offer
+  "Log in with Facebook". Meta re-added the parameter on 2026-02-06. Without
+  the flag the URL is unchanged. With `--path fb` the flag is refused (exit 2).
 
 ### Changed
 

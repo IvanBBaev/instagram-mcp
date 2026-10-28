@@ -33,8 +33,9 @@ src/
                   #          account.ts)
   mcp/            # Layer 2: MCP glue — define.ts (ToolSpec), registry.ts, result.ts,
                   #          transport.ts, write-mode.ts
-  tools/          # Layer 3: tool specs as data — one file per package, plus ids.ts
-                  #          (the shared object-id charset rule), arrays.ts
+  tools/          # Layer 3: tool specs as data — one file per package (comments.ts
+                  #          aggregates comments-read.ts and comments-write.ts),
+                  #          plus ids.ts (the shared object-id charset rule), arrays.ts
                   #          (item-count bounds checked only on a real array) and
                   #          publish-flow.ts (the create → poll → publish flow the
                   #          three composite post tools share)
@@ -126,7 +127,7 @@ export interface ToolSpec<S extends z.ZodRawShape> {
 | `messaging` | IG DMs via Messenger Platform | no (phase 2, `all`) |
 
 **Where `instagram_set_comments_enabled` lives, and why it matters.** It is
-implemented in `src/tools/comments.ts` and, since 2026-09-30, tagged `comments`
+implemented in `src/tools/comments-write.ts` and, since 2026-09-30, tagged `comments`
 (**CC-PROC-9** in [corner-cases.md](corner-cases.md)). The call it makes is
 `POST /{media-id}?comment_enabled=…` — it edits the media object, not a comment —
 so until then it was tagged `media`. The table above follows the **tag**, since

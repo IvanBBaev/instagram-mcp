@@ -484,7 +484,7 @@ test('§4 states the item cap DEFAULT_SETTINGS actually applies', () => {
   // no list tool gives `limit` a default and none forwards one it was not handed,
   // so the 25 was Graph's choice, not ours (CC-CFG-45). The no-default half is
   // derived from the tool sources below rather than taken on trust.
-  const listTools = ['media', 'comments', 'discovery'].map((name) => ({
+  const listTools = ['media', 'comments-read', 'discovery'].map((name) => ({
     name,
     body: read(`src/tools/${name}.ts`),
   }));

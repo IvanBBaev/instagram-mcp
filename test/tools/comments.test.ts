@@ -1,5 +1,8 @@
 /**
- * Unit tests for the comment tool specs (Layer 3). A hand-built fake
+ * Unit tests for the comment tool specs (Layer 3): the read tools in
+ * `tools/comments-read.ts` and the write tools in `tools/comments-write.ts`,
+ * driven through the aggregate `commentsTools` that `tools/comments.ts`
+ * exports. A hand-built fake
  * {@link ToolContext} drives each handler. Read tools are asserted to fence
  * untrusted `text`/`username` and cap with maxItems; write tools are asserted
  * to PREVIEW without `apply` (issuing no mutating request) and to PERFORM with
@@ -30,6 +33,8 @@ import { fence } from '../../src/mcp/result.js';
 import { buildConfirmPrompt } from '../../src/mcp/write-mode.js';
 import { fakeClock } from '../helpers/fake-clock.js';
 import { commentsTools } from '../../src/tools/comments.js';
+import { commentsReadTools } from '../../src/tools/comments-read.js';
+import { commentsWriteTools } from '../../src/tools/comments-write.js';
 import { testSettings } from '../helpers/settings.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { Client } from '@modelcontextprotocol/client';
@@ -1959,7 +1964,7 @@ async function liveCommentsServer(
 }
 
 /**
- * Strip the two things `tools/comments.ts` does not own from a published schema:
+ * Strip the two things the comment modules do not own from a published schema:
  * the `$schema` dialect marker the SDK emits, and the `account`
  * argument `mcp/registry.ts` injects into every tool for multi-account
  * selection. Everything that remains is this module's own statement.
@@ -3338,4 +3343,20 @@ test('a mention answer without its nested object fails the call rather than retu
     async () => tool('instagram_get_mentioned_comment').handler({ commentId: 'C1' }, makeCtx(req)),
     (e: unknown) => e instanceof InstagramError && e.kind === 'upstream',
   );
+});
+
+test('commentsTools is the read tools then the write tools, split by readOnlyHint', () => {
+  // The package is defined in two modules by concern and re-joined in
+  // `tools/comments.ts`; the aggregate's order is what the registry and the
+  // pinned tool-order tests see, so the join must not reorder or drop a tool.
+  assert.deepEqual(commentsTools, [...commentsReadTools, ...commentsWriteTools]);
+  assert.ok(Object.isFrozen(commentsTools));
+  assert.equal(commentsReadTools.length, 6);
+  assert.equal(commentsWriteTools.length, 6);
+  for (const spec of commentsReadTools) {
+    assert.equal(spec.annotations?.readOnlyHint, true, spec.name);
+  }
+  for (const spec of commentsWriteTools) {
+    assert.equal(spec.annotations?.readOnlyHint, false, spec.name);
+  }
 });

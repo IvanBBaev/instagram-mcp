@@ -77,6 +77,11 @@ const NON_GRAPH_VERSIONS: ReadonlyMap<string, string> = new Map([
   ['v1.0', "the workplan document's own version"],
   ['v1', "this server's own first generation, and the MCP SDK major it was first built on"],
   ['v2', 'the MCP SDK major this project builds on since 2026-10-10'],
+  [
+    'v3',
+    "this package's third major, in the file names of the 3.0 scoping documents " +
+      '(`docs/v3-analysis.md`, `docs/v3-workplan.md`)',
+  ],
   ['v4', 'IPv4, in the phrases "v4-mapped form" and "the v4 address"'],
   [
     'v8',

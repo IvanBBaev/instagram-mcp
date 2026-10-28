@@ -259,8 +259,13 @@ test('a tampered state is refused as unavailable, never as consent', async () =>
   const h = await harness({ manual: true });
   try {
     const pending = await roundOne(h);
-    const last = pending.requestState.at(-1) === 'A' ? 'B' : 'A';
-    const forged = { requestState: `${pending.requestState.slice(0, -1)}${last}` };
+    // Flip the FIRST character of the MAC (after the last `.`): it carries six
+    // full bits, so the decoded MAC always changes. The last character carries
+    // unused padding bits, and swapping it could decode to the same MAC.
+    const state = pending.requestState;
+    const at = state.lastIndexOf('.') + 1;
+    const flipped = state[at] === 'A' ? 'B' : 'A';
+    const forged = { requestState: `${state.slice(0, at)}${flipped}${state.slice(at + 1)}` };
     const payload = await retry(h, forged, ACCEPT);
     assert.equal(payload.reason, 'unavailable');
     const garbage = await retry(h, { requestState: 'not-a-state' }, ACCEPT);

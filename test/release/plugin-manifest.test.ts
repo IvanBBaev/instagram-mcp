@@ -927,3 +927,26 @@ test('no credential prompt ships a default, and every default is a plain setting
     );
   }
 });
+
+// --- Directory listing ------------------------------------------------------
+
+test('the plugin folder carries the README and privacy link a directory listing requires', () => {
+  // The Claude plugin directory blocks a submission whose plugin folder has no
+  // README of at least 40 words, and its policy requires a privacy policy link for
+  // software that connects to a remote service. `plugin.json` has no privacy field
+  // (and the field allowlist above refuses an invented one), so the link lives in
+  // the README the reviewer and the operator both read.
+  const file = join(PLUGIN_ROOT, 'README.md');
+  assert.ok(existsSync(join(repoRoot, file)), `${file} must exist`);
+  const text = readRepoText(file);
+  const words = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split(/\s+/)
+    .filter((word) => /[A-Za-z]/.test(word));
+  assert.ok(words.length >= 40, `${file} has ${words.length} words; the directory needs 40`);
+  assert.match(text, /^## Privacy Policy$/m, `${file} must carry a "Privacy Policy" section`);
+  assert.ok(
+    text.includes('https://github.com/IvanBBaev/instagram-mcp/blob/main/docs/privacy.md'),
+    `${file} must link docs/privacy.md, the policy manifest.json declares`,
+  );
+});

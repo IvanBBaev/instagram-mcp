@@ -13,6 +13,7 @@
     "type": "git",
     "url": "https://github.com/IvanBBaev/instagram-mcp"
   },
+  "privacy_policies": ["https://github.com/IvanBBaev/instagram-mcp/blob/main/docs/privacy.md"],
   "icon": "icon.png",
   "icons": [
     {

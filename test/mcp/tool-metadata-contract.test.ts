@@ -548,6 +548,26 @@ test('every write tool declares destructiveHint, and it matches what the gate is
   assert.deepEqual(mismatched, []);
 });
 
+test('every tool carries the unique, non-empty title a directory listing requires', () => {
+  // The Claude directory policy requires every tool to ship a `title` alongside
+  // its readOnlyHint / destructiveHint (the two tests above hold the hints).
+  // `ToolSpec.title` is a plain `string`, so the type system accepts `''` or a
+  // whitespace-only title, and nothing stops two tools sharing one, which would
+  // leave a user unable to tell them apart in the client's approval prompt.
+  const blank = allTools.filter((spec) => spec.title.trim() === '').map((spec) => spec.name);
+  assert.deepEqual(blank, [], 'these tools have an empty title');
+
+  const seen = new Map<string, string>();
+  const duplicates: string[] = [];
+  for (const spec of allTools) {
+    const key = spec.title.trim().toLowerCase();
+    const first = seen.get(key);
+    if (first === undefined) seen.set(key, spec.name);
+    else duplicates.push(`${spec.name} repeats the title of ${first}: "${spec.title}"`);
+  }
+  assert.deepEqual(duplicates, []);
+});
+
 test('no handler issued a mutating HTTP request outside the gate', async () => {
   // An independent axis. The gate fingerprint above cannot see a handler that
   // mutates through `ctx.req` without consulting `withWriteGate` at all — that

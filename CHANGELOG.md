@@ -119,6 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the Instagram authorize URL, so the login page does not offer
   "Log in with Facebook". Meta re-added the parameter on 2026-02-06. Without
   the flag the URL is unchanged. With `--path fb` the flag is refused (exit 2).
+- Claude directory listing readiness. `docs/privacy.md` is the project's
+  privacy policy: what the server handles, where it sends it (Meta's Graph API
+  hosts only), what it stores locally and how to delete it. `manifest.json`
+  links it in `privacy_policies`, and the plugin folder gains the README the
+  directory requires, with a Privacy Policy section. Tests now also require
+  every tool to carry a unique, non-empty `title`.
 
 ### Changed
 

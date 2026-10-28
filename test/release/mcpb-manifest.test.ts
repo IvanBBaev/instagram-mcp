@@ -862,3 +862,40 @@ test('the manifest does not claim the server generates tools beyond the declared
       'is already declared in `tools`',
   );
 });
+
+// --- Privacy policy ---------------------------------------------------------
+
+/** The GitHub blob prefix a policy URL in this repository's `main` branch carries. */
+const REPO_BLOB_PREFIX = 'https://github.com/IvanBBaev/instagram-mcp/blob/main/';
+
+test('the manifest links a privacy policy that exists in this repository', () => {
+  // The MCPB spec makes `privacy_policies` required for an extension that connects
+  // to an external service which processes user data, and this one sends every call
+  // to Meta's Graph API. A URL that 404s satisfies a key-presence check and nothing
+  // else, so each entry must be an https URL into this repository's `main` branch
+  // whose path is a file the release actually ships in the repo.
+  const policies = manifest.privacy_policies;
+  assert.ok(
+    Array.isArray(policies) && policies.length > 0,
+    'manifest.json must declare a non-empty privacy_policies array (MCPB spec: required ' +
+      'when the extension connects to an external service that processes user data)',
+  );
+  for (const url of policies) {
+    assert.equal(typeof url, 'string', `privacy_policies entry ${JSON.stringify(url)}`);
+    const text = String(url);
+    assert.ok(
+      text.startsWith(REPO_BLOB_PREFIX),
+      `privacy_policies entry ${text} must link this repository's main branch ` +
+        `(${REPO_BLOB_PREFIX}…), where the policy is versioned with the code it describes`,
+    );
+    const file = text.slice(REPO_BLOB_PREFIX.length);
+    assert.ok(
+      existsSync(join(repoRoot, file)),
+      `privacy_policies links ${file}, which does not exist in the repository`,
+    );
+  }
+  assert.ok(
+    policies.includes(`${REPO_BLOB_PREFIX}docs/privacy.md`),
+    'privacy_policies must include docs/privacy.md, the policy for this server',
+  );
+});

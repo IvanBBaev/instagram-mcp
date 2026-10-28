@@ -61,7 +61,16 @@ import { toInstagramError } from '../core/errors.js';
 import { createRedactor } from '../core/redact.js';
 import { escapeInvisible } from '../core/untrusted.js';
 import type { Clock } from '../core/clock.js';
-import type { CallToolResult, McpServer, Server } from '@modelcontextprotocol/server';
+import type {
+  CallToolResult,
+  InputRequiredResult,
+  McpServer,
+  ProtocolEra,
+  Server,
+  ServerContext,
+} from '@modelcontextprotocol/server';
+import { createModernConfirmFlow, modernConfirmer } from './confirm-modern.js';
+import type { ModernConfirmFlow } from './confirm-modern.js';
 
 // --- PACKAGES manifest ------------------------------------------------------
 
@@ -328,6 +337,14 @@ export interface RegisterToolsDeps {
    * `core/errors.ts`.
    */
   redact?: (value: unknown) => unknown;
+  /**
+   * The protocol era `server` will serve (MCP 2025-11-25 = `legacy`, 2026-07-28
+   * = `modern`); defaults to `legacy`. On `modern` the write gate confirms
+   * through a multi-round-trip `input_required` result built per call
+   * (`mcp/confirm-modern.ts`) and `confirm` is not consulted — the push-style
+   * elicitation it wraps does not exist on that revision.
+   */
+  era?: ProtocolEra;
 }
 
 /**
@@ -715,6 +732,7 @@ function registerOne(
   spec: ToolSpec,
   confirm: WriteConfirmer,
   redact: (value: unknown) => unknown,
+  modern: ModernConfirmFlow | undefined,
 ): ToolCaller {
   const shape: ToolShape = { ...spec.input, account: accountField };
   const strictSchema = strictInputSchema(shape);
@@ -742,7 +760,10 @@ function registerOne(
   // own results harder to evolve.
   if (spec.output !== undefined) config.outputSchema = z.object(spec.output);
 
-  const invoke = async (rawArgs: Record<string, unknown>): Promise<ToolResult> => {
+  const invoke = async (
+    rawArgs: Record<string, unknown>,
+    confirmFor: (account: string, args: unknown) => WriteConfirmer,
+  ): Promise<ToolResult> => {
     // 1. Strict parse. Against a real McpServer this is a second line of
     //    defense — the SDK has already parsed with this exact schema and
     //    rejected unknown keys (strictInputSchema). It stays because
@@ -826,7 +847,7 @@ function registerOne(
           clock: deps.clock,
           profile,
           log,
-          confirm,
+          confirm: confirmFor(name, args),
         };
 
         // 5. Run the handler; it returns a ready ToolResult.
@@ -845,11 +866,29 @@ function registerOne(
   //    client except through here.
   // 8. Then escape the invisible characters in every text block — CC-DATA-102,
   //    see escapeTextBlocks. After the redactor, never before it.
-  const cb = async (rawArgs: Record<string, unknown>): Promise<CallToolResult> =>
-    escapeTextBlocks(redactResult(await invoke(rawArgs), redact));
+  const finish = (result: ToolResult): CallToolResult =>
+    escapeTextBlocks(redactResult(result, redact));
+  const legacyCb: ToolCaller = async (rawArgs) => finish(await invoke(rawArgs, () => confirm));
 
-  server.registerTool(spec.name, config, cb);
-  return cb;
+  // 9. On the 2026-07-28 revision the confirmation is a second round trip: a
+  //    per-call confirmer parks an `input_required` result when the gate asks,
+  //    and that result replaces the gate's (fail-closed) refusal. It carries no
+  //    content blocks and its prompt was scrubbed by buildConfirmPrompt, the
+  //    same text the 2025 path sends through `elicitInput` unredacted here.
+  const modernCb = async (
+    rawArgs: Record<string, unknown>,
+    ctx: ServerContext,
+  ): Promise<CallToolResult | InputRequiredResult> => {
+    let call: ReturnType<typeof modernConfirmer> | undefined;
+    const result = await invoke(rawArgs, (account, args) => {
+      call = modernConfirmer(modern as ModernConfirmFlow, ctx, { tool: spec.name, account, args });
+      return call;
+    });
+    return call?.pending() ?? finish(result);
+  };
+
+  server.registerTool(spec.name, config, modern === undefined ? legacyCb : modernCb);
+  return legacyCb;
 }
 
 /**
@@ -885,6 +924,8 @@ export function registerTools(deps: RegisterToolsDeps): {
   // global secret registry live on each call, so a redactor made here still
   // masks tokens minted (and registered) later at runtime.
   const redact = deps.redact ?? createRedactor();
+  // One sealing key and spent-nonce ledger per registration (one server).
+  const modern = deps.era === 'modern' ? createModernConfirmFlow() : undefined;
 
   const registered: string[] = [];
   const callers = new Map<string, ToolCaller>();
@@ -899,7 +940,7 @@ export function registerTools(deps: RegisterToolsDeps): {
       if (spec.paths !== undefined && !spec.paths.some((p) => authPaths.has(p))) continue;
       // Forced read-only: drop any non-read-only tool in the package.
       if (forceReadonly && spec.annotations.readOnlyHint !== true) continue;
-      callers.set(spec.name, registerOne(deps.server, deps, spec, confirm, redact));
+      callers.set(spec.name, registerOne(deps.server, deps, spec, confirm, redact, modern));
       registered.push(spec.name);
     }
   }

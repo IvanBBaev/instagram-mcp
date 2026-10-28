@@ -231,9 +231,17 @@ export interface ConfirmPrompt {
   };
 }
 
-/** The client's answer, mirroring the MCP `ElicitResult` fields this gate reads. */
+/**
+ * The client's answer, mirroring the MCP `ElicitResult` fields this gate reads.
+ *
+ * `defer` is not a human answer: a 2026-07-28 confirmer (`mcp/confirm-modern.ts`)
+ * returns it when the question has been handed to the client as an
+ * `input_required` result instead of asked inline. The gate treats it as a
+ * refusal — the write does not run on this round — and the registry replaces
+ * that refusal with the `input_required` result.
+ */
 export interface ConfirmAnswer {
-  action: 'accept' | 'decline' | 'cancel';
+  action: 'accept' | 'decline' | 'cancel' | 'defer';
   content?: Record<string, unknown>;
 }
 
@@ -487,6 +495,15 @@ async function confirmWithHuman(
   if (answer.action === 'accept' && answer.content?.confirm === true) {
     ctx.log.info('write confirmed by the operator', { action: intent.action });
     return { approved: true };
+  }
+
+  if (answer.action === 'defer') {
+    // Fails closed on its own: if no caller swaps in the `input_required`
+    // result, the client sees an ordinary refusal and nothing was sent.
+    ctx.log.info('write confirmation handed to the client (input_required)', {
+      action: intent.action,
+    });
+    return { approved: false, reason: 'unavailable' };
   }
 
   const reason: RefusalReason = answer.action === 'cancel' ? 'cancelled' : 'declined';

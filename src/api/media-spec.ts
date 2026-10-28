@@ -366,9 +366,9 @@ export function imageUrlFormatWarning(url: string): string | undefined {
   // `/pic%2Epng` has no extension here. That is deliberate: this is a hint, never
   // proof, and the absence of a warning must not be read as "the URL is a JPEG".
   //
-  // Caller-order dependency: every caller in `src/tools/publishing.ts` runs
-  // `assertHttpsUrl` BEFORE this function, and an `https:` pathname always begins
-  // with `/`, so in production the segment is the text after the final `/` and
+  // Caller-order dependency: every caller in `src/tools/publishing-containers.ts`
+  // and `src/tools/publishing-composites.ts` runs `assertHttpsUrl` BEFORE this
+  // function, and an `https:` pathname always begins with `/`, so in production the segment is the text after the final `/` and
   // `dot === -1` only means "file name with no dot". A path with no `/` at all
   // (`data:.png`) is reachable only through some other scheme; it is handled for
   // the general case because this function is exported and pure — `lastIndexOf`

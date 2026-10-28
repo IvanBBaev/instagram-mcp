@@ -1,6 +1,6 @@
 /**
  * The create → poll → publish flow shared by the three composite post tools in
- * `tools/publishing.ts` (`instagram_post_image`, `_post_reel`, `_post_story`).
+ * `tools/publishing-composites.ts` (`instagram_post_image`, `_post_reel`, `_post_story`).
  *
  * Each composite owns only what differs between them — its validation, the
  * preview `details` of a NEW post, its summary sentence and the container

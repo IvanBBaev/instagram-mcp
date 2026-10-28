@@ -1,5 +1,5 @@
 /**
- * Unit tests for the publishing tool specs (src/tools/publishing.ts). A minimal
+ * Unit tests for the publishing tool specs (src/tools/publishing*.ts). A minimal
  * fake {@link ToolContext} drives each handler; assertions cover the write gate
  * (preview issues NO network call — no container create, no media_publish),
  * apply behavior, the composite create→poll→publish flow, its in-progress /
@@ -27,13 +27,13 @@ import type {
 import type { ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js';
 import { testSettings } from '../helpers/settings.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+import { publishingTools } from '../../src/tools/publishing.js';
 import {
   CAPTION_EXCERPT_MAX,
-  publishingTools,
   runPostImage,
   runPostReel,
   runPostStory,
-} from '../../src/tools/publishing.js';
+} from '../../src/tools/publishing-composites.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
@@ -3812,7 +3812,7 @@ test('an empty status string is passed through rather than swallowed', async () 
 // object, so rewording one runs every line of this file exactly as before. Each
 // is pinned because a model that read the opposite would spend the call
 // differently (CC-PROC-74), and each was mutation-proved by deleting that clause
-// alone from `src/tools/publishing.ts`.
+// alone from the publishing tool source (then the one file `src/tools/publishing.ts`).
 
 /** The `.describe()` text of one declared argument (the model-facing contract). */
 function describeOf(shape: Record<string, z.ZodType>, key: string): string {
@@ -4174,7 +4174,7 @@ async function livePublishingServer(
 }
 
 /**
- * Strip the two things `tools/publishing.ts` does not own from a published
+ * Strip the two things the publishing modules do not own from a published
  * schema: the `$schema` dialect marker the SDK emits, and the
  * `account` argument `mcp/registry.ts` injects into every tool for
  * multi-account selection. Everything that remains is this module's own

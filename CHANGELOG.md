@@ -140,6 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   input, which [docs/stability.md](docs/stability.md) §1 classes as major.
 - An empty `NO_COLOR=` no longer turns off `doctor` colours; only a non-empty
   value does, per no-color.org (CC-PROC-215).
+- MCP TypeScript SDK bumped to 2.4 (`@modelcontextprotocol/server`, `client`
+  and `core` 2.4.0, `node` 2.1.2). No tool schema uses the features 2.4
+  changes (`x-mcp-header`, a root `$ref` from `.meta({ id })`, a custom
+  `$id`/`$ref` URI scheme), so tool listings and results are unchanged.
 
 ### Deprecated
 

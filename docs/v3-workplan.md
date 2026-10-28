@@ -135,7 +135,7 @@ last in the lane because it owns the files of both.
 
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
-| **V3-M1** | SDK 2.4.x bump and the schema audit (v3-analysis §4.2). On 2026-10-28 `src/` used none of the three changed features (`.meta`, `x-mcp-header`, `$id`), so the audit is expected to be a test run | `package.json` and `package-lock.json` (SDK lines), `plugins/instagram-mcp-ai/package*.json` | — | S | NOT STARTED |
+| **V3-M1** | SDK 2.4.x bump and the schema audit (v3-analysis §4.2). On 2026-10-28 `src/` used none of the three changed features (`.meta`, `x-mcp-header`, `$id`), so the audit is expected to be a test run | `package.json` and `package-lock.json` (SDK lines; the plugin has no `package.json`) | — | S | **DONE** 2026-10-28: server/client/core ^2.4.0, node ^2.1.2; audit found no `.meta`, `x-mcp-header`, `$id` or root `$ref` output schema, so no source change |
 | **V3-M2** | Skills extension (`skill://`): ship workflow skills next to the prompts | new `src/mcp/skills.ts`, new skill content directory, one line in `src/mcp/registry.ts`, `test/mcp/registry.test.ts` (append), new `test/mcp/skills.test.ts`, `docs/tools.md` (new section), `package.json` `files` | V3-M1 | S–M | NOT STARTED |
 
 If V3-M1's audit does find a fix in a file another open task owns, the fix

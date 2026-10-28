@@ -567,7 +567,7 @@ const PROBES = [
         return {
           finding:
             `Meta rejected the shipped ACCOUNT_METRICS set: ${io.errorLabel(r.err)}. ` +
-            'The error names the offending metric — remove it from src/api/insights.ts and re-run.',
+            'The error names the offending metric — remove it from src/api/insights-catalogue.ts and re-run.',
           evidence: io.errorEvidence(r.err),
         };
       }
@@ -589,7 +589,7 @@ const PROBES = [
     answers: ['T-D5 follower_count [verify — live probe]'],
     describe: 'GET /{ig-id}/insights?metric=follower_count — is it a real post-2025 metric',
     overrides: INSIGHTS_OVERRIDES,
-    // src/api/insights.ts deliberately withholds `follower_count` from the enum
+    // src/api/insights-catalogue.ts deliberately withholds `follower_count` from the enum
     // pending this answer. Either outcome closes the note above ACCOUNT_METRICS.
     run: async (ctx, io) => {
       const r = await attempt(() =>
@@ -607,7 +607,7 @@ const PROBES = [
       }
       return {
         finding:
-          'follower_count IS accepted as an account metric — add it to ACCOUNT_METRICS and drop the NOTE in src/api/insights.ts.',
+          'follower_count IS accepted as an account metric — add it to ACCOUNT_METRICS and drop the NOTE in src/api/insights-catalogue.ts.',
         evidence: r.value,
       };
     },

@@ -28,6 +28,7 @@ import {
   TIME_SERIES_ACCOUNT_METRICS,
 } from '../../src/api/insights.js';
 import * as insightsModule from '../../src/api/insights.js';
+import * as catalogueModule from '../../src/api/insights-catalogue.js';
 import { isInstagramError } from '../../src/core/types.js';
 import type { IgRequestFn, IgRequestOptions } from '../../src/core/types.js';
 
@@ -1418,8 +1419,9 @@ const VOCABULARIES: readonly (readonly [string, readonly string[]])[] = [
 test('the list above is every array this module exports', () => {
   // A hand-written list fails on the member its author did not name
   // (CC-PROC-114), so the list is checked against the module rather than
-  // against a count: a vocabulary added to `src/api/insights.ts` without a
-  // freeze test fails here, naming itself.
+  // against a count: a vocabulary added to `src/api/insights-catalogue.ts`
+  // (re-exported by `src/api/insights.ts`, which is the module read here)
+  // without a freeze test fails here, naming itself.
   const exported = Object.entries(insightsModule)
     .filter(([, value]) => Array.isArray(value))
     .map(([name]) => name)
@@ -1429,6 +1431,23 @@ test('the list above is every array this module exports', () => {
     VOCABULARIES.map(([name]) => name).sort(),
     'a vocabulary was added or renamed without a freeze test',
   );
+});
+
+test('api/insights re-exports the whole metric catalogue, binding for binding', () => {
+  // The catalogue split keeps `api/insights.js` as the one path importers name
+  // (the tools, the metric glossary, the scripts). A catalogue export the fetch
+  // module stopped re-exporting would break them only at their next build, so
+  // the facade is held here: every catalogue export is the same binding on both.
+  const names = Object.keys(catalogueModule).sort();
+  assert.ok(names.length > 0, 'the catalogue exports nothing');
+  for (const name of names) {
+    assert.ok(name in insightsModule, `${name} is not re-exported by api/insights`);
+    assert.equal(
+      (insightsModule as Record<string, unknown>)[name],
+      (catalogueModule as Record<string, unknown>)[name],
+      `${name} is a different binding on api/insights`,
+    );
+  }
 });
 
 test('every insights vocabulary refuses a runtime write, not just a compile-time one', () => {

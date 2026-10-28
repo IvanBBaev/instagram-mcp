@@ -30,7 +30,8 @@ src/
                   #          (symlinks), atomic-write.ts (I/O) and config-lock.ts (lock)
   api/            # Layer 1: Instagram Graph domain functions (media.ts, media-spec.ts,
                   #          publishing.ts, comments.ts, insights.ts, discovery.ts,
-                  #          account.ts)
+                  #          account.ts), plus insights-catalogue.ts (the metric
+                  #          vocabularies, matrix and checks insights.ts re-exports)
   mcp/            # Layer 2: MCP glue — define.ts (ToolSpec), registry.ts, result.ts,
                   #          transport.ts, write-mode.ts
   tools/          # Layer 3: tool specs as data — one file per package (comments.ts

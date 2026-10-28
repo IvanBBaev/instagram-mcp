@@ -108,7 +108,7 @@ owner declines the freeze, skip V3-00 and keep the "before V3-00" rule in §3.
 |---|---|---|---|---|---|
 | **V3-H1** | Split comment tools into read and write modules | `src/tools/comments.ts` (keeps the aggregate export), new `src/tools/comments-read.ts`, `src/tools/comments-write.ts`, `test/tools/comments.test.ts` (may split the same way) | — | M | **DONE** 2026-10-28: `comments-read.ts` + `comments-write.ts`, aggregate kept; test file not split; also touched `test/docs-design.test.ts`, `docs/architecture.md` |
 | **V3-H2** | Split publishing tools into container tools, composites and delete | `src/tools/publishing.ts` (keeps the aggregate export), new `src/tools/publishing-*.ts`, `test/tools/publishing.test.ts` | — | M | **DONE** 2026-10-28: `publishing-containers.ts`, `-composites.ts`, `-delete.ts`, `-shared.ts`, aggregate kept; test file not split |
-| **V3-H3** | Split the insights metric catalogue from the fetch code | `src/api/insights.ts`, new `src/api/insights-catalogue.ts`, `test/api/insights.test.ts` | — | S | NOT STARTED |
+| **V3-H3** | Split the insights metric catalogue from the fetch code | `src/api/insights.ts`, new `src/api/insights-catalogue.ts`, `test/api/insights.test.ts` | — | S | **DONE** 2026-10-28: tables + validators in `insights-catalogue.ts`, re-exported from `insights.ts`; also touched `scripts/live-probe.mjs` hints, `docs/architecture.md` |
 
 The three share no files and can run together from day one.
 

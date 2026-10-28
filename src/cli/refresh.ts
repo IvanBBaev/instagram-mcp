@@ -1,18 +1,20 @@
 /**
  * `refresh` CLI command (Layer: cli), split out of `src/index.ts`
  * (docs/v2-analysis.md §6): exchange the active profile's long-lived token for a
- * fresh one, persist it to the profile's env file and report where it went on
- * stderr. The composition root resolves the profile and injects the clock;
+ * fresh one, persist it through the credential provider (the env file by
+ * default) and report where it went on stderr. The composition root resolves
+ * the profile and injects the provider and the clock;
  * this module owns the order of mint → register → persist (F-4).
  */
 import { refreshToken } from '../core/refresh.js';
 import { registerSecret } from '../core/redact.js';
-import { writeCredentials } from '../core/config-write.js';
 import { expiryLabel } from '../core/time.js';
-import type { ResolvedProfile } from '../core/types.js';
+import type { CredentialProvider, ResolvedProfile } from '../core/types.js';
 
 export interface RefreshDeps {
   profile: ResolvedProfile;
+  /** Where the refreshed token is written back (architecture §13). */
+  credentials: Pick<CredentialProvider, 'store'>;
   /** Wall-clock milliseconds, from the entry's clock. */
   nowMs: number;
 }
@@ -62,16 +64,15 @@ export async function runRefresh(deps: RefreshDeps): Promise<number> {
   // passed through a redactor built there from the app secret, the code and
   // every token that run minted.
   registerSecret(refreshed.accessToken);
-  const written = await writeCredentials(profile.name, {
+  // Only the token and its expiry change; `store` keeps the profile's stored
+  // auth path, account id and app credentials, and an absent expiry clears the
+  // old record, as `writeCredentials` always did here.
+  const receipt = await deps.credentials.store(profile.name, {
     accessToken: refreshed.accessToken,
-    authPath: profile.authPath,
-    accountId: profile.accountId,
-    appId: profile.appId,
-    appSecret: profile.appSecret,
     expiresAtSec: refreshed.expiresAtSec,
   });
   process.stderr.write(
-    `Refreshed ${profile.authPath} token for profile '${profile.name}' -> ${written.path} ` +
+    `Refreshed ${profile.authPath} token for profile '${profile.name}' -> ${receipt.location} ` +
       `(expires: ${expiryLabel(refreshed.expiresAtSec)}).\n`,
   );
   return 0;

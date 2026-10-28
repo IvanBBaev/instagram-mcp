@@ -46,10 +46,12 @@
  * stale one from the config channel and may serve an already-expired token. This
  * module deliberately does **not** persist: it returns the freshly exchanged
  * `{ accessToken, expiresAtSec }` and leaves durability to the caller. The
- * `refresh` CLI is the sole writer — it calls `writeCredentials` to atomically
- * update the XDG env file (the only token home per D2 option (a)) — or, when
- * `IG_ENV_FILE` names an absolute file, that file, since it is the only one the
- * server then reads (CC-CFG-63). Tokens
+ * `refresh` CLI is the sole writer — it hands the result to the credential
+ * provider's `store` (`core/credentials.ts`, architecture §13), whose default
+ * env-file backend calls `writeCredentials` to atomically update the XDG env
+ * file (the only token home per D2 option (a)) — or, when `IG_ENV_FILE` names
+ * an absolute file, that file, since it is the only one the server then reads
+ * (CC-CFG-63). Tokens
  * injected via the MCP client's `env` are static: they cannot be persisted here,
  * so `token_status` warns instead of auto-refreshing (docs/auth.md §3 design
  * gate). Keeping the exchange pure also keeps it deterministically testable.
@@ -74,7 +76,7 @@ import type { AuthPath, GraphHost } from './types.js';
  * claim the type system then enforces nowhere. It was written that way, and the
  * `!wire.access_token` truthiness guard that went with it accepted `12345`,
  * `true` and `{}` as a token and returned them typed `string` — a shape the
- * caller (`writeCredentials`) meets with a raw `TypeError` from `.trim()`, after
+ * persist path (`writeCredentials`) meets with a raw `TypeError` from `.trim()`, after
  * which the operator is told their local config is at fault. Typing the wire
  * honestly forces {@link refreshToken} to narrow before it promises anything.
  */

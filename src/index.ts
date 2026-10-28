@@ -10,7 +10,8 @@
  *   3. Build settings, profiles, the secret redactor, and the stderr logger.
  *   4. Construct the `McpServer`, register the tool surface (packages resolved
  *      from env, D1 capability-filtered per the active profile), and inject the
- *      per-profile network seam `createIgRequest(createAuthProvider(profile))`.
+ *      per-profile network seam `createIgRequest(resolvingAuthProvider(...))`,
+ *      which reads the profile's current token through the credential provider.
  *   5. Route CLI subcommands (argv discipline in `cli/argv.ts`, each command in
  *      its own `cli/<name>.ts`), else start the configured transport.
  *
@@ -27,13 +28,11 @@ import { SETTINGS_ENV_NAMES, loadSettings, settingsWarnings } from './core/setti
 import {
   blankKeys,
   isProfileEnvName,
-  loadProfiles,
   nonPortableProfileNames,
-  resolveProfile,
   strayExpiryKeys,
   unsetPlaceholderKeys,
 } from './core/config.js';
-import { createAuthProvider } from './core/auth.js';
+import { envFileCredentialProvider, resolvingAuthProvider } from './core/credentials.js';
 import { createLogger } from './core/log.js';
 import { createRedactor, registerSecret } from './core/redact.js';
 import { createIgRequest } from './core/http.js';
@@ -191,12 +190,12 @@ function loadEnvFiles(): Map<string, string> {
   return setBy;
 }
 
-/** Register every secret value so the redactor masks it in all log output. */
-function registerProfileSecrets(profiles: ResolvedProfile[]): void {
-  for (const p of profiles) {
-    registerSecret(p.accessToken);
-    if (p.appSecret !== undefined) registerSecret(p.appSecret);
-  }
+/**
+ * Register the HTTP bearer so the redactor masks it in all log output. Profile
+ * tokens and app secrets are registered by the credential provider itself,
+ * before it returns them (core/credentials.ts).
+ */
+function registerHttpTokenSecret(): void {
   // Equivalent-mutant note: neither half of this guard is observable on its own.
   // `registerSecret` already ignores a non-string and anything shorter than eight
   // characters, so both `undefined` and `''` are no-ops if they reach it. The
@@ -255,22 +254,6 @@ function unrecognisedEnvNames(env: NodeJS.ProcessEnv): string[] {
     .sort();
 }
 
-/**
- * Resolve the profile named by `IG_ACTIVE_PROFILE` (or the default profile when
- * it is unset or blank).
- *
- * Deliberately the SAME resolver the tool path uses, so an explicitly named but
- * unknown profile fails here exactly as it fails on a tool call — naming the bad
- * value and listing the configured profiles. Falling back to the first profile
- * instead is what let a typo in `IG_ACTIVE_PROFILE` make `doctor` report a
- * healthy `default` account while every tool call rejected the typo'd name.
- *
- * @throws InstagramError `kind: 'validation'` — unknown profile name.
- */
-function activeProfile(profiles: ResolvedProfile[], defaultName: string): ResolvedProfile {
-  return resolveProfile(profiles, defaultName);
-}
-
 async function main(): Promise<void> {
   assertNodeVersion();
   assertUsage(process.argv.slice(2));
@@ -320,8 +303,8 @@ async function main(): Promise<void> {
   // their token/secret values registered: every field is still scrubbed at the
   // sink from the first registration on. It has to exist first, because the one
   // line logged before the profiles is the unrecognised-name warning, and the
-  // operator it is for is exactly the one whose misspelt token key makes
-  // `loadProfiles` refuse to start on the next line.
+  // operator it is for is exactly the one whose misspelt token key makes the
+  // profile load below refuse to start.
   const log = createLogger({
     level: settings.logLevel,
     clock,
@@ -338,8 +321,12 @@ async function main(): Promise<void> {
   // beside the unrecognised-name warning and BEFORE the profiles load, so the
   // operator whose start then fails still learns the port name changed.
   for (const { msg, fields } of settingsWarnings(process.env)) log.warn(msg, fields);
-  const { profiles, defaultName } = loadProfiles();
-  registerProfileSecrets(profiles);
+  // Profiles load through the credential-provider port (architecture §13); the
+  // env-file provider reads the env the files above were loaded into, and
+  // registers every token and app secret before it returns them.
+  const credentials = envFileCredentialProvider();
+  const { profiles, defaultName } = await credentials.load();
+  registerHttpTokenSecret();
   // A profile name a shell `export` cannot spell is still accepted in 1.x and
   // warned about once here; 2.0 restricts names to [A-Z0-9_] (CC-CFG-86).
   const nonPortable = nonPortableProfileNames(profiles);
@@ -360,7 +347,9 @@ async function main(): Promise<void> {
       // Equivalent-mutant note: dropping it falls back to `systemClock`, which is
       // this very `clock`; the wiring stays because this is the one place that
       // injects it, as for `doctor` and `refresh` below.
-      auth: createAuthProvider(profile, clock),
+      // Each attempt re-reads the profile through the provider, so a token
+      // rotated by `store` is used without a restart.
+      auth: resolvingAuthProvider(credentials, profile, clock),
       settings,
       clock,
       log,
@@ -368,9 +357,15 @@ async function main(): Promise<void> {
     });
 
   // `doctor` / `refresh` operate on the resolved active profile via that seam,
-  // then exit — they never start a transport.
+  // then exit — they never start a transport. The active profile is the one
+  // `IG_ACTIVE_PROFILE` names (else `default`), resolved by the SAME lookup the
+  // tool path uses, so an explicitly named but unknown profile fails here
+  // exactly as it fails on a tool call — naming the bad value and listing the
+  // configured profiles. Falling back to the first profile instead is what let
+  // a typo in `IG_ACTIVE_PROFILE` make `doctor` report a healthy `default`
+  // account while every tool call rejected the typo'd name.
   if (subcommand === 'doctor') {
-    const profile = activeProfile(profiles, defaultName);
+    const profile = await credentials.resolve();
     const { report, exitCode } = await runDoctor({
       req: makeRequest(profile),
       profile,
@@ -391,7 +386,8 @@ async function main(): Promise<void> {
   if (subcommand === 'refresh') {
     process.exit(
       await runRefresh({
-        profile: activeProfile(profiles, defaultName),
+        profile: await credentials.resolve(),
+        credentials,
         // Equivalent-mutant note: see the one in `cli/refresh.ts`.
         nowMs: clock.now(),
       }),

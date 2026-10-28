@@ -440,3 +440,35 @@ starting. The recognised set is the union of what `core/settings.ts`,
 `core/config.ts` (the profile scheme, plus the `TOKEN_EXPIRES_AT` metadata that
 `login` and `refresh` write back into the env file) and `mcp/registry.ts` each
 publish and pin, joined in `src/index.ts`.
+
+## 13. Credentials (`core/credentials.ts`)
+
+Profiles reach the server through the `CredentialProvider` port
+(`core/types.ts`): `load` reads every profile, `resolve(name)` returns one
+profile's CURRENT credentials, `store(name, update)` persists a refreshed or
+newly minted token. Every implementation registers each token and app secret
+with the secret registry before the value leaves the method, and never puts a
+secret in an error or a `CredentialReceipt` (names only: the location written
+and the keys).
+
+- **Env-file provider (default).** `envFileCredentialProvider()` is a thin port
+  over the existing parser and writer: `load` / `resolve` go through
+  `loadProfiles` / `resolveProfile` (§6), `store` through `writeCredentials`.
+  The env file, its keys and every error message are therefore the same as
+  before the port existed. `store` merges the update with the stored profile:
+  an omitted `authPath`, `accountId`, `appId` or `appSecret` keeps its value, an
+  omitted `expiresAtSec` clears the recorded expiry, and a profile the provider
+  does not hold yet needs `authPath` (else `kind: 'validation'`). A stored
+  profile is kept in an in-process overlay, because the env the server started
+  with is not re-read from disk: without it, a later `load` would return the
+  token `store` just replaced.
+- **Per-call resolve.** `src/index.ts` builds each profile's Graph seam with
+  `resolvingAuthProvider(credentials, profile, clock)`, whose `authParams`
+  calls `credentials.resolve(profile.name)` on every attempt. A token rotated
+  through `store` is used by the next request without a restart. The start-up
+  profile is still validated eagerly (`createAuthProvider`), and the profile
+  metadata a tool sees on `ToolContext` (`tokenExpiresAtSec`) is the start-up
+  snapshot.
+- **Write-back.** The `refresh` CLI (§9) hands the exchanged token and its
+  expiry to `credentials.store` and reports `receipt.location` on stderr. The
+  provider is not on `ToolContext`: tools never read or write credentials.

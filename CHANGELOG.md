@@ -163,6 +163,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sharedSemaphores`, `processSecrets`); a context that carries its own
   `hashtagBudget` counts there, and the HTTP seam takes injected `semaphores`
   and `secrets`. Nothing injects them yet; behaviour is unchanged.
+- Internal: profiles load through the `CredentialProvider` port, with the
+  env-file provider as the default, and `refresh` writes the new token back
+  through it. Each Graph attempt reads the profile's current token, so a token
+  stored by the provider takes effect without a restart. The env file, its keys
+  and the error messages are unchanged.
 
 ### Deprecated
 

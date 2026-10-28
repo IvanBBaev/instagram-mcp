@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 import {
   buildConfirmPrompt,
   CONFIRM_TIMEOUT_MS,
+  fileJournal,
   withWriteGate,
   type ConfirmAnswer,
   type ConfirmPrompt,
@@ -33,12 +34,13 @@ import {
   type WriteGateContext,
   type WriteIntent,
 } from '../../src/mcp/write-mode.js';
-import type { ToolResult } from '../../src/mcp/define.js';
+import type { ToolResult, WriteJournal } from '../../src/mcp/define.js';
 import { fence, json } from '../../src/mcp/result.js';
 import { loadSettings } from '../../src/core/settings.js';
 import { REDACTED, registerSecret } from '../../src/core/redact.js';
 import type { Logger, ResolvedProfile, Settings } from '../../src/core/types.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+import { memoryJournal } from '../helpers/ports.js';
 import { testSettings } from '../helpers/settings.js';
 
 // Isolate the best-effort write journal for the WHOLE file, not just the tests
@@ -104,6 +106,8 @@ function ctxWith(
     log?: Logger;
     profile?: ResolvedProfile;
     confirm?: WriteConfirmer;
+    journal?: WriteJournal;
+    identity?: string;
   } = {},
 ): WriteGateContext {
   const ctx: WriteGateContext = {
@@ -114,6 +118,8 @@ function ctxWith(
     log: over.log ?? noopLog,
   };
   if (over.confirm !== undefined) ctx.confirm = over.confirm;
+  if (over.journal !== undefined) ctx.journal = over.journal;
+  if (over.identity !== undefined) ctx.identity = over.identity;
   return ctx;
 }
 
@@ -2433,4 +2439,219 @@ test('journal: a result that says isError:false explicitly is still audited', as
   const lines = readFileSync(path, 'utf8').trim().split('\n').filter(Boolean);
   assert.equal(lines.length, 1, 'the applied write must be journalled');
   assert.equal((JSON.parse(lines[0]!) as Record<string, unknown>).targetId, 'pub-77');
+});
+
+// --- the journal port (V3-S2) ------------------------------------------------
+
+/** The exact line the pre-port gate appended for `intent` + `performOk('pub-1')`. */
+const LEGACY_LINE =
+  '{"ts":"2023-11-14T22:13:20.000Z","action":"publish_media","account":"default",' +
+  '"authPath":"ig-login","summary":"Publish container 42","targetId":"pub-1","destructive":false}\n';
+
+test('journal port: the default file output is byte-identical to the pre-port line', async () => {
+  // Catches: the port refactor reordering keys, adding an `identity: undefined`
+  // that a different serializer would keep, or changing the line terminator.
+  // A string comparison, not a `JSON.parse` deep-equal: the file is read by
+  // people and by `grep`, so the bytes are the contract.
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-bytes-'));
+  const path = join(dir, 'writes.jsonl');
+  try {
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({ settings: { writeJournal: path } }),
+      performOk('pub-1'),
+    );
+    assert.equal(readFileSync(path, 'utf8'), LEGACY_LINE);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('journal port: fileJournal is the default backend, usable on its own', async () => {
+  // The exported default and the gate's fallback are the same writer: an
+  // embedder that wraps it (say, to tee into a second store) gets the same
+  // bytes, directory and modes.
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-file-'));
+  const path = join(dir, 'nested', 'writes.jsonl');
+  try {
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({
+        journal: fileJournal(path),
+        settings: { writeJournal: join(dir, 'unused.jsonl') },
+      }),
+      performOk('pub-1'),
+    );
+    assert.equal(readFileSync(path, 'utf8'), LEGACY_LINE);
+    assert.equal(
+      existsSync(join(dir, 'unused.jsonl')),
+      false,
+      'an injected journal replaces the file',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('journal port: an injected journal receives the entry, and the file is not written', async () => {
+  const journal = memoryJournal();
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-port-'));
+  const path = join(dir, 'writes.jsonl');
+  try {
+    await withWriteGate(
+      intent,
+      {},
+      ctxWith({ journal, settings: { writeJournal: path } }),
+      performOk(),
+    );
+    assert.deepEqual(journal.entries, [], 'a preview is not journaled through the port either');
+
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({ journal, settings: { writeJournal: path } }),
+      performOk('pub-1'),
+    );
+    assert.deepEqual(journal.entries, [
+      {
+        ts: '2023-11-14T22:13:20.000Z',
+        action: 'publish_media',
+        account: 'default',
+        authPath: 'ig-login',
+        summary: 'Publish container 42',
+        targetId: 'pub-1',
+        destructive: false,
+      },
+    ]);
+    assert.equal(
+      existsSync(path),
+      false,
+      'the default file is not written when a journal is injected',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('journal port: the injected journal receives an already-redacted entry', async () => {
+  // The gate redacts BEFORE `append`, so a backend that redacts nothing (a
+  // remote store, this memory fake) still never sees a secret.
+  const secret = 'JOURNAL-PORT-SECRET-VALUE-0123456789';
+  registerSecret(secret);
+  const journal = memoryJournal();
+  await withWriteGate(
+    { action: 'publish_media', summary: `Publish with ${secret}` },
+    { apply: true },
+    ctxWith({ journal, identity: `tenant-${secret}` }),
+    performOk(`id-${secret}`),
+  );
+  assert.equal(journal.entries.length, 1);
+  assert.equal(
+    JSON.stringify(journal.entries).includes(secret),
+    false,
+    'no field carries the secret',
+  );
+  assert.equal(journal.entries[0]!.summary, `Publish with ${REDACTED}`);
+  assert.equal(journal.entries[0]!.targetId, `id-${REDACTED}`);
+  assert.equal(
+    journal.entries[0]!.identity,
+    `tenant-${REDACTED}`,
+    'identity is inside the boundary too',
+  );
+});
+
+test('journal port: identity is recorded only when the context sets one', async () => {
+  const journal = memoryJournal();
+  await withWriteGate(intent, { apply: true }, ctxWith({ journal }), performOk('a'));
+  await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ journal, identity: 'alice@example' }),
+    performOk('b'),
+  );
+
+  // Absent means absent — not `identity: undefined` — so a backend that keeps
+  // undefined-valued keys still writes today's shape for the local operator.
+  assert.equal(Object.hasOwn(journal.entries[0]!, 'identity'), false);
+  assert.equal(journal.entries[1]!.identity, 'alice@example');
+});
+
+test('journal port: identity reaches the default file as the last key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ig-journal-identity-'));
+  const path = join(dir, 'writes.jsonl');
+  try {
+    await withWriteGate(
+      intent,
+      { apply: true },
+      ctxWith({ identity: 'alice@example', settings: { writeJournal: path } }),
+      performOk('pub-1'),
+    );
+    assert.equal(
+      readFileSync(path, 'utf8'),
+      LEGACY_LINE.replace('}\n', ',"identity":"alice@example"}\n'),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** The warning every journal failure produces, for `intent`. */
+function journalWarn(error: string): { msg: string; fields: Record<string, unknown> } {
+  return {
+    msg: 'write journal append failed — the applied write was NOT audited',
+    fields: { action: 'publish_media', error },
+  };
+}
+
+test('journal port: an async rejection warns and does not fail the write', async () => {
+  const journal = memoryJournal();
+  journal.failWith = new Error('remote journal unavailable');
+  const { log, warns } = recordingLog();
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ journal, log }),
+    performOk('pub-1'),
+  );
+
+  assert.equal(res.isError, undefined);
+  assert.equal(res.structuredContent?.published, 'pub-1', 'the write itself is unaffected');
+  // Awaited by the gate: the warning is already there when the tool returns.
+  assert.deepEqual(warns, [journalWarn('remote journal unavailable')]);
+  assert.deepEqual(journal.entries, []);
+});
+
+test('journal port: a sync throw warns and does not fail the write', async () => {
+  const { log, warns } = recordingLog();
+  const throwing: WriteJournal = {
+    append() {
+      throw new Error('journal backend exploded');
+    },
+  };
+  const res = await withWriteGate(
+    intent,
+    { apply: true },
+    ctxWith({ journal: throwing, log }),
+    performOk('pub-1'),
+  );
+
+  assert.equal(res.isError, undefined);
+  assert.equal(res.structuredContent?.published, 'pub-1');
+  assert.deepEqual(warns, [journalWarn('journal backend exploded')]);
+});
+
+test('journal port: a backend failure message is redacted in the warning', async () => {
+  // An injected backend composes its own messages (a connection string, a
+  // request URL); the gate scrubs them like the `node:fs` ones.
+  const secret = 'JOURNAL-PORT-WARN-SECRET-0123456789';
+  registerSecret(secret);
+  const journal = memoryJournal();
+  journal.failWith = new Error(`POST https://store.example/?key=${secret} failed`);
+  const { log, warns } = recordingLog();
+  await withWriteGate(intent, { apply: true }, ctxWith({ journal, log }), performOk('pub-1'));
+
+  assert.equal(warns.length, 1);
+  assert.equal(JSON.stringify(warns).includes(secret), false);
 });

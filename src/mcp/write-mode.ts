@@ -2,7 +2,8 @@
  * Write gate (Layer 2). The single choke point every mutating tool passes
  * through, implementing the design-gate D3 decision (docs/roadmap.md): a write
  * runs only when explicitly applied, previews are read-only, and every applied
- * write is recorded to a local append-only journal (CC-PROC-5, CC-PUB-16).
+ * write is recorded to an append-only journal (CC-PROC-5, CC-PUB-16) — a local
+ * JSONL file unless an embedder injects another backend (`ctx.journal`).
  *
  * FROZEN seam — imported by the publishing and comments packages. Resolution is
  * env-flag based (`apply` arg + `IG_WRITE_MODE` + `IG_ALLOW_DESTRUCTIVE`), with
@@ -14,7 +15,7 @@
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { ToolContext, ToolResult } from './define.js';
+import type { ToolContext, ToolResult, WriteJournal, WriteJournalEntry } from './define.js';
 import { fence, json } from './result.js';
 import { createRedactor } from '../core/redact.js';
 import type { ResolvedProfile } from '../core/types.js';
@@ -118,7 +119,9 @@ function scrub(value: string, profile: ResolvedProfile): string {
 }
 
 /**
- * Append one applied-write record to the journal.
+ * The default {@link WriteJournal}: today's append-only JSONL file. The gate
+ * uses it whenever `ctx.journal` is absent, so an embedder that injects nothing
+ * gets exactly the pre-port behaviour, byte for byte.
  *
  * The journal location (`IG_WRITE_JOURNAL`, default
  * `<XDG_STATE_HOME|~/.local/state>/instagram-mcp-ai/writes.jsonl`) is owned by
@@ -127,32 +130,54 @@ function scrub(value: string, profile: ResolvedProfile): string {
  * `index.ts` loads the env files before `loadSettings()`, so the value is
  * already final by the time any tool can run.
  *
- * Best-effort audit: any I/O failure is caught so a broken journal never fails a
- * write the operator already authorized — but it is logged at **warn**, not
- * debug, because a silently dead audit trail (full disk, `IG_WRITE_JOURNAL`
- * pointing at a missing mount) is invisible at the default `info` level and the
- * operator would keep believing writes are being recorded.
- *
  * The directory and the file are created owner-only (0700 / 0600): the journal
  * names the account, the target id and the details of every applied mutation, so
  * it deserves the same confidentiality as the credentials file. `mode` only
  * applies at creation time — a journal created by an older version keeps its
  * original permissions.
  *
- * The entry is redacted before it is serialized (see {@link redactJournalEntry}),
- * so the journal is inside the same secret boundary as the log stream (F6).
+ * It does not redact: the gate hands every backend an already-redacted entry
+ * (see {@link recordWrite}), and it does not catch: an I/O error propagates to
+ * the gate, which owns the best-effort policy for every backend alike.
  */
-function recordWrite(
+export function fileJournal(path: string): WriteJournal {
+  return {
+    append(entry) {
+      const dir = dirname(path);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: JOURNAL_DIR_MODE });
+      appendFileSync(path, JSON.stringify(entry) + '\n', { flag: 'a', mode: JOURNAL_FILE_MODE });
+    },
+  };
+}
+
+/**
+ * Append one applied-write record to the journal: `ctx.journal` when one is
+ * injected, otherwise the {@link fileJournal} at `ctx.settings.writeJournal`.
+ *
+ * Best-effort audit: a sync throw and a rejected promise from any backend are
+ * both caught, so a broken journal never fails a write the operator already
+ * authorized — but the failure is logged at **warn**, not debug, because a
+ * silently dead audit trail (full disk, `IG_WRITE_JOURNAL` pointing at a
+ * missing mount, a remote store that is down) is invisible at the default
+ * `info` level and the operator would keep believing writes are being recorded.
+ * The append is awaited so that an async backend's rejection lands in this
+ * `catch` rather than as an unhandled rejection.
+ *
+ * The entry is redacted HERE, before any backend sees it (see
+ * {@link redactJournalEntry}), so every journal — the file or an injected one —
+ * is inside the same secret boundary as the log stream (F6).
+ */
+async function recordWrite(
   intent: WriteIntent,
   ctx: ToolContext,
   targetId: string | undefined,
   status: string | undefined,
-): void {
+): Promise<void> {
   try {
-    const path = ctx.settings.writeJournal;
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: JOURNAL_DIR_MODE });
-    const entry = {
+    // Resolved inside the `try`: reading `settings.writeJournal` is part of the
+    // best-effort append, not a precondition of the write.
+    const journal = ctx.journal ?? fileJournal(ctx.settings.writeJournal);
+    const entry: WriteJournalEntry = {
       ts: new Date(ctx.clock.now()).toISOString(),
       action: intent.action,
       account: ctx.profile.name,
@@ -196,15 +221,21 @@ function recordWrite(
       // as written.
       ...(status !== undefined ? { status } : {}),
       destructive: intent.destructive === true,
+      // WHO asked, for a multi-tenant embedder. Absent for the local operator —
+      // every call today — and then the key is absent too, never `undefined`,
+      // so the line is byte-identical to the pre-port one. Last, so the key
+      // order of every existing field is unchanged as well.
+      ...(ctx.identity !== undefined ? { identity: ctx.identity } : {}),
     };
-    const safe = redactJournalEntry(entry);
-    appendFileSync(path, JSON.stringify(safe) + '\n', { flag: 'a', mode: JOURNAL_FILE_MODE });
+    // `redactJournalEntry` returns `unknown`; handed this plain object it
+    // returns a copy of the same shape with only string values masked.
+    await journal.append(redactJournalEntry(entry) as WriteJournalEntry);
   } catch (err) {
     ctx.log.warn('write journal append failed — the applied write was NOT audited', {
       action: intent.action,
       // The failure text is composed by `node:fs` out of the configured journal
-      // path, so it is operator-supplied data — redacted like every other sink
-      // in this module (see {@link logSafeError}).
+      // path (or by an injected backend), so it is operator-supplied data —
+      // redacted like every other sink in this module (see {@link logSafeError}).
       error: logSafeError(err, ctx.profile),
     });
   }
@@ -604,8 +635,10 @@ function previewResult(intent: WriteIntent, note: string, pretty: boolean): Tool
  *     runs for a preview (no prompt for a call that changes nothing). Without
  *     the capability the behaviour is exactly the env-flag one, unchanged.
  *   - apply → awaits `perform()`, journals the applied write on success
- *     (best-effort: never throws, but logs a warning if the journal could not be
- *     written), and returns `perform()`'s result.
+ *     through `ctx.journal` (default: the JSONL file at
+ *     `ctx.settings.writeJournal`) — best-effort: never throws, but logs a
+ *     warning if the journal could not be written — and returns `perform()`'s
+ *     result.
  */
 export async function withWriteGate(
   intent: WriteIntent,
@@ -661,6 +694,6 @@ export async function withWriteGate(
   }
 
   const { result, targetId, status } = await perform();
-  if (result.isError !== true) recordWrite(intent, ctx, targetId, status);
+  if (result.isError !== true) await recordWrite(intent, ctx, targetId, status);
   return result;
 }

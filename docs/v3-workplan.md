@@ -129,7 +129,7 @@ last in the lane because it owns the files of both.
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
 | **V3-S1** | Inject the process-wide singletons through `ToolContext` | `src/core/http.ts`, `src/core/redact.ts`, `src/tools/discovery.ts`, `test/core/http.test.ts`, `test/core/redact.test.ts`, `test/tools/discovery.test.ts` | V3-01 | M | NOT STARTED |
-| **V3-S2** | Journal port with an identity field | `src/mcp/write-mode.ts`, `test/mcp/write-mode.test.ts` | V3-01 | S–M | NOT STARTED |
+| **V3-S2** | Journal port with an identity field | `src/mcp/write-mode.ts`, `test/mcp/write-mode.test.ts` | V3-01 | S–M | **DONE** 2026-10-28: gate journals through `ctx.journal ?? fileJournal(path)`, redacts before `append`, awaits it best-effort; `identity` written only when set |
 
 ### Lane M — MCP protocol (`2.x-safe`)
 

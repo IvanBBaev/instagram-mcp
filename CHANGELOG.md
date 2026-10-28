@@ -154,6 +154,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WriteJournal`, `ProfileDirectory`, injectable `SemaphoreRegistry`,
   `HashtagBudgetLedger` and `SecretRegistry`) and `ToolContext` gains six
   optional seams. Nothing is wired yet; behaviour is unchanged.
+- Internal: the write gate journals through the `WriteJournal` port
+  (`ctx.journal`, default: the JSONL file, now exported as `fileJournal`) and
+  records `ctx.identity` when an embedder sets one. Without either, the journal
+  line is byte-identical to before.
 
 ### Deprecated
 

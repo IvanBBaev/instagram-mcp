@@ -158,6 +158,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ctx.journal`, default: the JSONL file, now exported as `fileJournal`) and
   records `ctx.identity` when an embedder sets one. Without either, the journal
   line is byte-identical to before.
+- Internal: the hashtag budget, the HTTP semaphores and the secret registry
+  are now default implementations of their ports (`sharedHashtagBudget`,
+  `sharedSemaphores`, `processSecrets`); a context that carries its own
+  `hashtagBudget` counts there, and the HTTP seam takes injected `semaphores`
+  and `secrets`. Nothing injects them yet; behaviour is unchanged.
 
 ### Deprecated
 

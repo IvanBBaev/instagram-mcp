@@ -14,7 +14,7 @@
 import { MAX_RESPONSE_BYTES, readCappedText } from './body.js';
 import { assertAllowedHost, buildUrl } from './host.js';
 import { mapGraphError, toInstagramError } from './errors.js';
-import { registerSecret, surfaceForms } from './redact.js';
+import { processSecrets, surfaceForms } from './redact.js';
 import { InstagramError } from './types.js';
 import type { Clock } from './clock.js';
 import type {
@@ -23,9 +23,18 @@ import type {
   IgRequestFn,
   IgRequestOptions,
   Logger,
+  QueueWait,
+  SecretRegistry,
+  SemaphoreRegistry,
   Settings,
   UsageSnapshot,
 } from './types.js';
+
+// The concurrency ports — the slot registry and the bounded queue wait
+// (CC-RATE-6) — are declared in `core/types.ts` (V3-01), where `mcp/` and
+// `tools/` may import them; this module re-exports them so its importers keep
+// one name and there is no second copy to drift.
+export type { QueueWait, SemaphoreRegistry } from './types.js';
 
 /** Injected collaborators for {@link createIgRequest}. */
 export interface IgRequestDeps {
@@ -44,6 +53,13 @@ export interface IgRequestDeps {
    * to stay hermetic (see {@link createSemaphoreRegistry}).
    */
   semaphores?: SemaphoreRegistry;
+  /**
+   * Where each attempt registers its access token (both surface spellings).
+   * Defaults to the process-wide registry in `core/redact.ts`
+   * ({@link processSecrets}); a context that redacts through its own registry
+   * injects it here so the token is masked where that context looks.
+   */
+  secrets?: SecretRegistry;
 }
 
 // --- Tunables (docs/operations.md §§1–2) -----------------------------------
@@ -100,12 +116,6 @@ const USAGE_FIELDS = ['call_count', 'total_cputime', 'total_time'] as const;
  * `IG_TIMEOUT_MS` does not turn a brief burst into "server busy".
  */
 const QUEUE_WAIT_FLOOR_MS = 30_000;
-
-/** How long a queued call waits for a slot, measured on `clock` (CC-RATE-6). */
-export interface QueueWait {
-  readonly clock: Clock;
-  readonly ms: number;
-}
 
 interface Semaphore {
   /**
@@ -208,29 +218,17 @@ function createSemaphore(max: number): Semaphore {
 }
 
 /**
- * Holder of the per-host semaphores. `IG_MAX_CONCURRENT` is a budget against
- * **Meta**, not against a call site, so the counters must outlive any single
- * {@link createIgRequest} call: the composition root builds a fresh seam per
- * tool call, and a map owned by the factory would silently multiply the limit
- * by the number of in-flight calls.
+ * An independent set of per-host counters — a {@link SemaphoreRegistry}
+ * (declared in `core/types.ts`); one per process, tests make their own.
+ * `IG_MAX_CONCURRENT` is a budget against **Meta**, not against a call site, so
+ * the counters must outlive any single {@link createIgRequest} call: the
+ * composition root builds a fresh seam per tool call, and a map owned by the
+ * factory would silently multiply the limit by the number of in-flight calls.
+ * `max` is used only the first time a host is seen — `maxConcurrent` is
+ * resolved once per process by the composition root, so every caller passes the
+ * same value. A wait longer than `wait.ms` rejects with "server busy"
+ * (CC-RATE-6).
  */
-export interface SemaphoreRegistry {
-  /**
-   * Take a slot for `host`, resolving with its release function. `max` is used
-   * only the first time a host is seen — `maxConcurrent` is resolved once per
-   * process by the composition root, so every caller passes the same value.
-   * An aborted `signal` rejects the wait and removes it from the queue, and so
-   * does a wait longer than `wait.ms` — with a "server busy" error (CC-RATE-6).
-   */
-  acquire(
-    host: GraphHost,
-    max: number,
-    signal: AbortSignal | undefined,
-    wait: QueueWait,
-  ): Promise<() => void>;
-}
-
-/** An independent set of per-host counters (one per process; tests make their own). */
 export function createSemaphoreRegistry(): SemaphoreRegistry {
   // One semaphore per host, created lazily; only allowlisted hosts reach here.
   const semaphores = new Map<GraphHost, Semaphore>();
@@ -251,8 +249,11 @@ export function createSemaphoreRegistry(): SemaphoreRegistry {
   };
 }
 
-/** The registry every seam shares unless one is injected. */
-const sharedSemaphores = createSemaphoreRegistry();
+/**
+ * The registry every seam shares unless one is injected — the default behind
+ * `IgRequestDeps.semaphores` and `ToolContext.semaphores`.
+ */
+export const sharedSemaphores: SemaphoreRegistry = createSemaphoreRegistry();
 
 // --- Usage-header parsing (docs/operations.md §1) ---------------------------
 
@@ -536,6 +537,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
   const { auth, settings, clock, log, onUsage } = deps;
   const doFetch = deps.fetchImpl ?? globalThis.fetch;
   const semaphores = deps.semaphores ?? sharedSemaphores;
+  const secrets = deps.secrets ?? processSecrets;
 
   /** Parse usage headers, notify `onUsage`, and return the snapshot. */
   const reportUsage = (host: GraphHost, headers: Headers): UsageSnapshot => {
@@ -698,7 +700,7 @@ export function createIgRequest(deps: IgRequestDeps): IgRequestFn {
       const authParams = await auth.authParams(host);
       const token = authParams['access_token'];
       if (token !== undefined) {
-        for (const spelling of surfaceForms(token)) registerSecret(spelling);
+        for (const spelling of surfaceForms(token)) secrets.register(spelling);
       }
 
       const query: Record<string, string | number | boolean | undefined> = {

@@ -34,7 +34,7 @@ import {
   type BusinessDiscovery,
   type BusinessMediaPaging,
 } from '../api/discovery.js';
-import { InstagramError } from '../core/types.js';
+import { InstagramError, type HashtagBudgetLedger } from '../core/types.js';
 
 // --- Hashtag-search budget (in-process, advisory only) ---------------------
 // Meta enforces a 30-unique-hashtags / 7-days-per-account budget on
@@ -46,12 +46,49 @@ import { InstagramError } from '../core/types.js';
 // the only case where the count is even approximately right; Meta's own
 // rejection remains the single hard signal. Keyed by account id; each value maps
 // a normalized hashtag to the epoch-ms it was first seen in the rolling window.
+//
+// The storage is a `HashtagBudgetLedger` port (V3-S1): a call whose context
+// carries `ctx.hashtagBudget` counts in that ledger, and one without it counts
+// in the module-level ledger below, which is the behaviour before the port.
+// The limit, the window and the snapshot wording stay here — tool policy, not
+// storage.
 
 const HASHTAG_BUDGET_LIMIT = 30;
 const HASHTAG_BUDGET_WINDOW_DAYS = 7;
 const HASHTAG_BUDGET_WINDOW_MS = HASHTAG_BUDGET_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-const hashtagBudget = new Map<string, Map<string, number>>();
+/**
+ * A ledger over its own private map: the {@link HashtagBudgetLedger} rule
+ * (evict entries at least `windowMs` old, keep the first-seen time, return the
+ * unique count). Each call makes an independent ledger.
+ *
+ * Equivalent-mutant note: no input separates `perAccount === undefined` from a
+ * plain `!perAccount`. The value comes from `Map.prototype.get`, whose only two
+ * outcomes are the stored value — always a `Map`, hence always truthy — and
+ * `undefined` for a key that was never set; nothing falsy is ever stored under
+ * an account id, because the only writer is the branch below. The explicit
+ * comparison stays because it names the case being handled.
+ */
+export function createHashtagBudgetLedger(): HashtagBudgetLedger {
+  const byAccount = new Map<string, Map<string, number>>();
+  return {
+    record(accountId, hashtag, nowMs, windowMs) {
+      let perAccount = byAccount.get(accountId);
+      if (perAccount === undefined) {
+        perAccount = new Map<string, number>();
+        byAccount.set(accountId, perAccount);
+      }
+      for (const [tag, seenAt] of perAccount) {
+        if (nowMs - seenAt >= windowMs) perAccount.delete(tag);
+      }
+      if (!perAccount.has(hashtag)) perAccount.set(hashtag, nowMs);
+      return perAccount.size;
+    },
+  };
+}
+
+/** The ledger every call counts in unless its context injects one. */
+export const sharedHashtagBudget: HashtagBudgetLedger = createHashtagBudgetLedger();
 
 /** Strip a leading `#` and lower-case so `#NoFilter` and `nofilter` are one. */
 function normalizeHashtag(q: string): string {
@@ -86,27 +123,17 @@ interface BudgetSnapshot {
 }
 
 /**
- * Record one hashtag search for `accountId` at `nowMs`, evicting entries older
- * than the rolling window first, and return the resulting budget snapshot.
- *
- * Equivalent-mutant note: no input separates `perAccount === undefined` from a
- * plain `!perAccount`. The value comes from `Map.prototype.get`, whose only two
- * outcomes are the stored value — always a `Map`, hence always truthy — and
- * `undefined` for a key that was never set; nothing falsy is ever stored under
- * an account id, because the only writer is the branch below. The explicit
- * comparison stays because it names the case being handled.
+ * Record one hashtag search for `accountId` at `nowMs` in `ledger` (which
+ * evicts entries older than the rolling window first) and return the
+ * resulting budget snapshot.
  */
-function recordHashtagUsage(accountId: string, hashtag: string, nowMs: number): BudgetSnapshot {
-  let perAccount = hashtagBudget.get(accountId);
-  if (perAccount === undefined) {
-    perAccount = new Map<string, number>();
-    hashtagBudget.set(accountId, perAccount);
-  }
-  for (const [tag, seenAt] of perAccount) {
-    if (nowMs - seenAt >= HASHTAG_BUDGET_WINDOW_MS) perAccount.delete(tag);
-  }
-  if (!perAccount.has(hashtag)) perAccount.set(hashtag, nowMs);
-  const used = perAccount.size;
+function recordHashtagUsage(
+  ledger: HashtagBudgetLedger,
+  accountId: string,
+  hashtag: string,
+  nowMs: number,
+): BudgetSnapshot {
+  const used = ledger.record(accountId, hashtag, nowMs, HASHTAG_BUDGET_WINDOW_MS);
   return {
     uniqueHashtagsUsed: used,
     limit: HASHTAG_BUDGET_LIMIT,
@@ -495,7 +522,12 @@ const searchHashtagTool = defineTool({
       );
     }
     const refs = await searchHashtag(ctx.req, { igId, query });
-    const budget = recordHashtagUsage(igId, query, ctx.clock.now());
+    const budget = recordHashtagUsage(
+      ctx.hashtagBudget ?? sharedHashtagBudget,
+      igId,
+      query,
+      ctx.clock.now(),
+    );
     // Only ids that can be spent as the next call's `hashtagId`: an empty or
     // absent id is not a hashtag reference, and the declared output
     // (`z.array(z.string())`) would reject it and fail the whole call.

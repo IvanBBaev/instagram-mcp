@@ -25,7 +25,12 @@ import type { ToolContext, ToolResult, ToolSpec } from '../../src/mcp/define.js'
 import { fence } from '../../src/mcp/result.js';
 import { registerTools } from '../../src/mcp/registry.js';
 import { fakeClock } from '../helpers/fake-clock.js';
-import { discoveryTools } from '../../src/tools/discovery.js';
+import {
+  createHashtagBudgetLedger,
+  discoveryTools,
+  sharedHashtagBudget,
+} from '../../src/tools/discovery.js';
+import { memoryHashtagLedger } from '../helpers/ports.js';
 import { MEDIA_MORE_NOTE, MEDIA_SAME_CURSOR_NOTE } from '../../src/api/discovery.js';
 import { testSettings } from '../helpers/settings.js';
 import { Client } from '@modelcontextprotocol/client';
@@ -3265,4 +3270,72 @@ test('real McpServer: list_recently_searched_hashtags survives an unreadable lis
   } finally {
     await live.close();
   }
+});
+
+// --- injected hashtag-budget ledger (V3-S1) ----------------------------------
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** `uniqueHashtagsUsed` from one `instagram_search_hashtag` call. */
+async function searchCount(ctx: ToolContext, hashtag: string): Promise<number> {
+  const r = await tool('instagram_search_hashtag').handler({ hashtag }, ctx);
+  return (r.structuredContent as { budget: { uniqueHashtagsUsed: number } }).budget
+    .uniqueHashtagsUsed;
+}
+
+test('two contexts with separate ledgers do not share the hashtag budget', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }] }));
+  const profile = { accountId: 'v3s1-ledger-acct' };
+  const ctxA: ToolContext = { ...makeCtx(req, { profile }), hashtagBudget: memoryHashtagLedger() };
+  const ctxB: ToolContext = {
+    ...makeCtx(req, { profile }),
+    hashtagBudget: createHashtagBudgetLedger(),
+  };
+
+  assert.equal(await searchCount(ctxA, 'alpha'), 1);
+  assert.equal(await searchCount(ctxA, 'beta'), 2);
+  assert.equal(await searchCount(ctxB, 'gamma'), 1, 'the same account in another ledger');
+  assert.equal(await searchCount(ctxB, 'alpha'), 2);
+  assert.equal(await searchCount(ctxA, 'alpha'), 2, 'a repeat in ledger A is still two');
+  // Neither injected ledger touched the module default.
+  assert.equal(sharedHashtagBudget.record('v3s1-ledger-acct', 'probe', 0, SEVEN_DAYS_MS), 1);
+});
+
+test('a context without a ledger counts in sharedHashtagBudget', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }] }));
+  const ctx = makeCtx(req, { profile: { accountId: 'v3s1-default-acct' } });
+  assert.equal(await searchCount(ctx, 'alpha'), 1);
+  assert.equal(sharedHashtagBudget.record('v3s1-default-acct', 'beta', 0, SEVEN_DAYS_MS), 2);
+  assert.equal(await searchCount(ctx, 'gamma'), 3, 'and the default sees the direct record');
+});
+
+test('the tool hands the ledger the account, the normalized tag, the clock and the 7-day window', async () => {
+  const { req } = fakeReq(() => ({ data: [{ id: '1' }] }));
+  const seen: unknown[][] = [];
+  const ctx: ToolContext = {
+    ...makeCtx(req, { profile: { accountId: 'v3s1-spy-acct' }, clock: fakeClock(1234) }),
+    hashtagBudget: {
+      record: (...args) => {
+        seen.push(args);
+        return 31;
+      },
+    },
+  };
+  const r = await tool('instagram_search_hashtag').handler({ hashtag: ' #Sunset ' }, ctx);
+  assert.deepEqual(seen, [['v3s1-spy-acct', 'sunset', 1234, SEVEN_DAYS_MS]]);
+  // The limit and wording stay tool policy: the ledger only returns the count.
+  const budget = (r.structuredContent as { budget: Record<string, unknown> }).budget;
+  assert.equal(budget.uniqueHashtagsUsed, 31);
+  assert.equal(budget.remaining, 0);
+  assert.equal(budget.overBudget, true);
+});
+
+test('createHashtagBudgetLedger evicts at exactly the window and keeps the first-seen time', () => {
+  const ledger = createHashtagBudgetLedger();
+  const w = 1000;
+  assert.equal(ledger.record('a', 'x', 0, w), 1);
+  assert.equal(ledger.record('a', 'x', 500, w), 1, 'a repeat does not move the first-seen time');
+  assert.equal(ledger.record('a', 'y', 999, w), 2, 'x is still inside the window at 999');
+  assert.equal(ledger.record('a', 'z', 1000, w), 2, 'x (seen at 0) is evicted at exactly 1000');
+  assert.equal(ledger.record('b', 'x', 1000, w), 1, 'accounts are counted apart');
 });

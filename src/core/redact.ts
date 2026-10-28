@@ -1,8 +1,9 @@
 /**
- * Secret redaction (Layer 0). A pure redactor, depending on nothing but the
- * sibling token-shape list, that deep-clones its input and masks secret values
- * before anything is serialized to logs, error payloads, or MCP results. See docs/security.md §2 and the security
- * review's finding F-4 (redaction must cover runtime-minted tokens and
+ * Secret redaction (Layer 0). A pure redactor, depending at run time on nothing
+ * but the sibling token-shape list (the port types are type-only imports), that
+ * deep-clones its input and masks secret values before anything is serialized
+ * to logs, error payloads, or MCP results. See docs/security.md §2 and the
+ * security review's finding F-4 (redaction must cover runtime-minted tokens and
  * `appsecret_proof` HMACs, not only statically-configured secrets).
  *
  * Three redaction mechanisms, in order of reliability:
@@ -23,6 +24,7 @@
  */
 
 import { maskTokenShapes } from './token-shapes.js';
+import type { Redactor, SecretRegistry } from './types.js';
 
 /** The fixed marker that replaces every redacted secret. */
 export const REDACTED = '[REDACTED]';
@@ -85,7 +87,7 @@ export function registerSecret(secret: string): void {
 
 export interface RedactorOptions {
   /** Extra exact secrets scoped to this redactor (merged with the global registry). */
-  extraSecrets?: string[];
+  extraSecrets?: readonly string[];
 }
 
 /**
@@ -94,7 +96,7 @@ export interface RedactorOptions {
  * reads the global registry live on each call, so a redactor created at startup
  * still masks tokens registered later at runtime (F-4).
  */
-export function createRedactor(opts?: RedactorOptions): (value: unknown) => unknown {
+export function createRedactor(opts?: RedactorOptions): Redactor {
   const extra = new Set<string>();
   for (const s of opts?.extraSecrets ?? []) {
     if (typeof s === 'string' && s.length >= MIN_REGISTERED_SECRET_LENGTH) extra.add(s);
@@ -105,6 +107,17 @@ export function createRedactor(opts?: RedactorOptions): (value: unknown) => unkn
     return redactValue(value, secrets, new WeakSet<object>());
   };
 }
+
+/**
+ * The module-level registry as a {@link SecretRegistry} port (V3-S1): the
+ * default behind `ToolContext.secrets` and `IgRequestDeps.secrets`. It is the
+ * same set {@link registerSecret} and {@link createRedactor} use, not a copy,
+ * so a secret registered through either spelling is masked by both.
+ */
+export const processSecrets: SecretRegistry = {
+  register: registerSecret,
+  redactor: (opts) => createRedactor(opts),
+};
 
 /**
  * Every spelling of `value` that can appear in a surfaced string: the credential

@@ -20,9 +20,10 @@ import type { Clock } from '../../src/core/clock.js';
 import { createAuthProvider } from '../../src/core/auth.js';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.js';
 import { ALLOWED_HOSTS, GRAPH_VERSION, assertAllowedHost, buildUrl } from '../../src/core/host.js';
-import { createIgRequest, createSemaphoreRegistry } from '../../src/core/http.js';
+import { createIgRequest, createSemaphoreRegistry, sharedSemaphores } from '../../src/core/http.js';
 import { REDACTED, createRedactor } from '../../src/core/redact.js';
 import { fakeClock } from '../helpers/fake-clock.js';
+import { memorySecretRegistry } from '../helpers/ports.js';
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -4009,4 +4010,95 @@ test('the queue-wait timer is cancelled on grant and on abort, and runs only for
   assert.equal(sleeps[0]!.signal?.aborted, true, 'grant cancels the timer');
   gates[1]!();
   await queued;
+});
+
+// --- http.ts: injected singletons (V3-S1) ------------------------------------
+
+test('the default semaphore registry is the exported sharedSemaphores', async () => {
+  // Proved by contention, not identity: once every slot of a host is held
+  // through the export, a seam built without `semaphores` queues on it. Other
+  // tests in this file already met the host, so its `max` is whatever they
+  // passed first; the loop takes slots until one does not come at once.
+  const clock = fakeClock();
+  const wait = { clock, ms: 60_000 };
+  const held: Array<() => void> = [];
+  let blocked: Promise<() => void> | undefined;
+  for (let guard = 0; blocked === undefined; guard++) {
+    assert.ok(guard < 100, 'the shared registry never ran out of slots');
+    let granted: (() => void) | undefined;
+    const next = sharedSemaphores
+      .acquire('graph.facebook.com', 1, undefined, wait)
+      .then((release) => (granted = release));
+    await flush();
+    if (granted === undefined) blocked = next;
+    else held.push(granted);
+  }
+  const { fetchImpl, calls } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth: fbAuth,
+    settings: s(),
+    clock,
+    log: testLogger(),
+    fetchImpl,
+  });
+  const queued = req({ method: 'GET', path: '/me' });
+  await flush();
+  assert.equal(calls.length, 0, 'the seam waits for the slots held through the export');
+  for (const release of held) release();
+  (await blocked)();
+  await queued;
+  assert.equal(calls.length, 1);
+});
+
+test('seams over separate injected registries do not share slots; seams over one do', async () => {
+  const clock = fakeClock();
+  const registryA = createSemaphoreRegistry();
+  const registryB = createSemaphoreRegistry();
+  const holderA = gatedSeam(clock, registryA);
+  const otherA = gatedSeam(clock, registryA);
+  const seamB = gatedSeam(clock, registryB);
+
+  const held = holderA.req({ method: 'GET', path: '/a-holder' });
+  await flush();
+  assert.equal(holderA.calls.length, 1);
+
+  const queuedA = otherA.req({ method: 'GET', path: '/a-queued' });
+  const freeB = seamB.req({ method: 'GET', path: '/b-free' });
+  await flush();
+  assert.equal(otherA.calls.length, 0, 'a seam over the same registry queues behind the holder');
+  assert.equal(seamB.calls.length, 1, 'a seam over another registry is not blocked');
+
+  seamB.gates[0]!();
+  holderA.gates[0]!();
+  await Promise.all([held, freeB]);
+  await flush();
+  assert.equal(otherA.calls.length, 1, 'the freed slot goes to the queued seam');
+  otherA.gates[0]!();
+  await queuedA;
+});
+
+test('an injected secret registry receives the access token in both spellings', async () => {
+  const secrets = memorySecretRegistry();
+  const heldValue = 'inj3cted tok/en+x=';
+  const auth: AuthProvider = {
+    path: 'ig-login',
+    defaultHost: 'graph.instagram.com',
+    authParams: () => Promise.resolve({ access_token: heldValue }),
+  };
+  const { fetchImpl } = mockFetch(() => ({ body: {} }));
+  const req = createIgRequest({
+    auth,
+    settings: s(),
+    clock: recordingClock(),
+    log: testLogger(),
+    fetchImpl,
+    secrets,
+  });
+  await req({ method: 'GET', path: '/me' });
+  assert.deepEqual([...secrets.secrets], [heldValue, 'inj3cted+tok%2Fen%2Bx%3D']);
+  assert.equal(
+    createRedactor()(heldValue),
+    heldValue,
+    'the token went to the injected registry, not the process-wide one',
+  );
 });

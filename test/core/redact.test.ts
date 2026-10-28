@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
-import { createRedactor, registerSecret, REDACTED, surfaceForms } from '../../src/core/redact.js';
+import {
+  createRedactor,
+  processSecrets,
+  registerSecret,
+  REDACTED,
+  surfaceForms,
+} from '../../src/core/redact.js';
+import type { SecretRegistry } from '../../src/core/types.js';
+import { memorySecretRegistry } from '../helpers/ports.js';
 
 test('masks the value of secret-named keys (case-insensitive, substring, nested)', () => {
   const redact = createRedactor();
@@ -1138,4 +1146,34 @@ test('surfaceForms feeds the redactor both spellings, so either is masked (CC-AU
     redact(`raw ${secret} url ?t=sEcReT%2B%2F%3Dvalue+42&x=1`),
     `raw ${REDACTED} url ?t=${REDACTED}&x=1`,
   );
+});
+
+// --- processSecrets: the module registry as a SecretRegistry port (V3-S1) ----
+
+test('processSecrets is the module registry itself: either spelling registers for both', () => {
+  const port: SecretRegistry = processSecrets;
+  const viaPort = 'v3s1-port-registered-secret';
+  const viaFunction = 'v3s1-function-registered-secret';
+  const early = port.redactor();
+  port.register(viaPort);
+  registerSecret(viaFunction);
+  const text = `${viaPort} ${viaFunction}`;
+  assert.equal(early(text), `${REDACTED} ${REDACTED}`, 'a port redactor reads the registry live');
+  assert.equal(createRedactor()(text), `${REDACTED} ${REDACTED}`);
+});
+
+test('processSecrets ignores a short secret and scopes extraSecrets to one redactor', () => {
+  processSecrets.register('short7c');
+  assert.equal(processSecrets.redactor()('x short7c x'), 'x short7c x');
+  const extra = 'v3s1-scoped-extra-secret';
+  assert.equal(processSecrets.redactor({ extraSecrets: [extra] })(extra), REDACTED);
+  assert.equal(processSecrets.redactor()(extra), extra, 'an extra secret is not registered');
+});
+
+test('a secret registered with an injected registry is not added to processSecrets', () => {
+  const injected = memorySecretRegistry();
+  const secret = 'v3s1-injected-only-secret';
+  injected.register(secret);
+  assert.equal(injected.redactor()(secret), REDACTED);
+  assert.equal(processSecrets.redactor()(secret), secret);
 });

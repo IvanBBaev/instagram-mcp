@@ -27,6 +27,7 @@ import { PassThrough, Writable } from 'node:stream';
 import type { AddressInfo, Socket } from 'node:net';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 
 import {
@@ -1017,23 +1018,29 @@ test('a forged Host header is refused: DNS-rebinding protection is ON, not merel
   }
 });
 
-test('startStdio announces readiness only after the connection actually succeeded', async () => {
-  // `connect` is what starts serving. Reporting "ready" without awaiting it
-  // would log a healthy line over a server that never came up, and turn the
-  // failure into an unhandled rejection instead of an error the caller sees.
+test('startStdio announces readiness only after the transport actually started', async () => {
+  // Starting the transport is what starts serving, and the SDK's stdio entry
+  // starts it itself. Reporting "ready" without awaiting that start would log a
+  // healthy line over a server that never came up, and turn the failure into an
+  // unhandled rejection instead of an error the caller sees.
   const records: LogRecord[] = [];
-  const failing = {
-    connect: async (): Promise<void> => {
-      throw new Error('stdio refused');
-    },
-    close: async (): Promise<void> => undefined,
-  } as unknown as McpServer;
-
-  await assert.rejects(() => startStdio(failing, recordingLogger(records)), /stdio refused/);
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalStart = StdioServerTransport.prototype.start;
+  StdioServerTransport.prototype.start = async (): Promise<void> => {
+    throw new Error('stdio refused');
+  };
+  try {
+    await assert.rejects(
+      () => startStdio(realServer, recordingLogger(records), stdioPair()),
+      /stdio refused/,
+    );
+  } finally {
+    StdioServerTransport.prototype.start = originalStart;
+  }
   assert.equal(
     records.some((r) => r.msg === 'mcp server ready'),
     false,
-    'a failed connect must never be announced as ready',
+    'a failed start must never be announced as ready',
   );
 });
 
@@ -1706,15 +1713,10 @@ test('the stdio readiness line names the transport that is actually serving', as
   // listening. This line is the only record of which one a session came up on,
   // and it is what an operator greps when a client sees no server at all — a
   // line that names the wrong one sends them to look for a port that was never
-  // opened. The stub server never starts the transport, so nothing here reads
-  // the real stdin.
+  // opened. The streams are in-memory, so nothing here reads the real stdin.
   const records: LogRecord[] = [];
-  const server = {
-    connect: async (): Promise<void> => undefined,
-    close: async (): Promise<void> => undefined,
-  } as unknown as McpServer;
-
-  await startStdio(server, recordingLogger(records));
+  const running = await startStdio(realServer, recordingLogger(records), stdioPair());
+  await running.close();
 
   const ready = records.filter((r) => r.msg === 'mcp server ready');
   assert.equal(ready.length, 1, 'exactly one readiness line');
@@ -1742,12 +1744,8 @@ test('the stdio readiness line is emitted at info, so a default run still prints
   // fields — because the test above asserts `fields` alone, which a debug-level
   // line satisfies unchanged. The HTTP twin is pinned this way already.
   const records: LogRecord[] = [];
-  const server = {
-    connect: async (): Promise<void> => undefined,
-    close: async (): Promise<void> => undefined,
-  } as unknown as McpServer;
-
-  await startStdio(server, recordingLogger(records));
+  const running = await startStdio(realServer, recordingLogger(records), stdioPair());
+  await running.close();
 
   const ready = records.filter((r) => r.msg === 'mcp server ready');
   assert.equal(ready.length, 1, 'exactly one readiness line');
@@ -1772,6 +1770,24 @@ function frame(message: Record<string, unknown>): string {
   return `${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`;
 }
 
+/** A 2025-era `initialize` frame: the opening that pins a legacy connection. */
+function initializeFrame(id: number): string {
+  return frame({
+    id,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 't', version: '0' },
+    },
+  });
+}
+
+/** In-memory stdio streams, so a test never reads the runner's real stdin. */
+function stdioPair(): { stdin: PassThrough; stdout: PassThrough } {
+  return { stdin: new PassThrough(), stdout: new PassThrough() };
+}
+
 test('a client that closes stdout does not kill the calls still in flight', async () => {
   // The SDK's stdio transport listens for `'error'` on stdin only. A client that
   // exits leaves stdout a dead pipe, and the next response written there fails
@@ -1793,7 +1809,7 @@ test('a client that closes stdout does not kill the calls still in flight', asyn
   const stdin = new PassThrough();
   const stdout = deadPipe();
 
-  await startStdio(server, recordingLogger(records), { stdin, stdout });
+  await startStdio(() => server, recordingLogger(records), { stdin, stdout });
   stdin.write(
     frame({
       id: 1,
@@ -1837,7 +1853,7 @@ test('a stdout failure that is not a closed pipe still reaches Node untouched', 
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const server = realServer();
-  await startStdio(server, recordingLogger(records), { stdin, stdout });
+  await startStdio(() => server, recordingLogger(records), { stdin, stdout });
 
   const full = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
   assert.throws(() => stdout.emit('error', full), /no space left/);
@@ -1901,7 +1917,7 @@ test('stdin EOF closes the transport, so a pending confirmation prompt fails at 
   const stdin = new PassThrough();
   const { stdout, frames } = frameSink();
 
-  await startStdio(server, recordingLogger(records), { stdin, stdout });
+  await startStdio(() => server, recordingLogger(records), { stdin, stdout });
   stdin.write(
     frame({
       id: 1,
@@ -1962,9 +1978,13 @@ test('a stdin closed without EOF closes the transport too, and logs once', async
   let closes = 0;
   server.server.onclose = () => void closes++;
   const stdin = new PassThrough();
-  const { stdout } = frameSink();
-  await startStdio(server, recordingLogger(records), { stdin, stdout });
+  const { stdout, frames } = frameSink();
+  await startStdio(() => server, recordingLogger(records), { stdin, stdout });
   try {
+    // The SDK's stdio entry builds the instance on the first message, so the
+    // connection has to open before there is an instance for the close to reach.
+    stdin.write(initializeFrame(1));
+    await waitFor('the initialize answer', () => frames.some((f) => f.id === 1));
     stdin.destroy();
     await waitFor('the transport to close', () => closes === 1);
     const gone = records.filter((r) => r.msg.startsWith('mcp client closed stdin'));
@@ -1983,7 +2003,7 @@ test('the close that follows a clean EOF does not log the departure a second tim
   const server = new McpServer({ name: 'transport-test', version: '0.0.0' });
   const stdin = new PassThrough();
   const { stdout } = frameSink();
-  await startStdio(server, recordingLogger(records), { stdin, stdout });
+  await startStdio(() => server, recordingLogger(records), { stdin, stdout });
   try {
     const closed = new Promise<void>((resolve) => stdin.once('close', () => resolve()));
     stdin.end();
@@ -1993,6 +2013,105 @@ test('the close that follows a clean EOF does not log the departure a second tim
     assert.equal(gone.length, 1);
   } finally {
     await server.close();
+  }
+});
+
+/** The 2026-07-28 per-request envelope a modern stdio client opens with. */
+const MODERN_META = {
+  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+  'io.modelcontextprotocol/clientInfo': { name: 't', version: '0' },
+  'io.modelcontextprotocol/clientCapabilities': {},
+};
+
+async function frameWith(
+  frames: Record<string, unknown>[],
+  id: number,
+): Promise<Record<string, unknown>> {
+  await waitFor(`the id-${id} frame`, () => frames.some((f) => f.id === id));
+  return frames.find((f) => f.id === id) as Record<string, unknown>;
+}
+
+test('stdio builds the modern-era instance for a 2026-07-28 client and its lists carry cache hints', async () => {
+  const eras: string[] = [];
+  const { stdout, frames } = frameSink();
+  const stdin = new PassThrough();
+  const running = await startStdio(
+    (era) => {
+      eras.push(era);
+      return realServer();
+    },
+    recordingLogger([]),
+    { stdin, stdout },
+  );
+  try {
+    stdin.write(frame({ id: 1, method: 'server/discover', params: { _meta: MODERN_META } }));
+    const discovered = (await frameWith(frames, 1)).result as { supportedVersions?: string[] };
+    assert.ok(discovered.supportedVersions?.includes('2026-07-28'));
+    stdin.write(frame({ id: 2, method: 'tools/list', params: { _meta: MODERN_META } }));
+    const listed = (await frameWith(frames, 2)).result as Record<string, unknown>;
+    assert.deepEqual(
+      (listed.tools as { name: string }[]).map((t) => t.name),
+      ['echo'],
+    );
+    assert.equal(listed.resultType, 'complete');
+    assert.equal(typeof listed.ttlMs, 'number');
+    assert.equal(typeof listed.cacheScope, 'string');
+    assert.deepEqual(eras, ['modern']);
+  } finally {
+    await running.close();
+  }
+});
+
+test('stdio builds the legacy-era instance for a 2025-11-25 client, whose lists stay unchanged', async () => {
+  const eras: string[] = [];
+  const { stdout, frames } = frameSink();
+  const stdin = new PassThrough();
+  const running = await startStdio(
+    (era) => {
+      eras.push(era);
+      return realServer();
+    },
+    recordingLogger([]),
+    { stdin, stdout },
+  );
+  try {
+    stdin.write(initializeFrame(1));
+    await frameWith(frames, 1);
+    stdin.write(frame({ method: 'notifications/initialized' }));
+    stdin.write(frame({ id: 2, method: 'tools/list' }));
+    const listed = (await frameWith(frames, 2)).result as Record<string, unknown>;
+    for (const key of ['resultType', 'ttlMs', 'cacheScope'])
+      assert.equal(key in listed, false, `a legacy tools/list must not carry ${key}`);
+    assert.deepEqual(eras, ['legacy']);
+  } finally {
+    await running.close();
+  }
+});
+
+test('a factory that throws is answered as an internal error and logged at debug', async () => {
+  const records: LogRecord[] = [];
+  const { stdout, frames } = frameSink();
+  const stdin = new PassThrough();
+  const running = await startStdio(
+    () => {
+      throw new Error('cannot build');
+    },
+    recordingLogger(records),
+    { stdin, stdout },
+  );
+  try {
+    stdin.write(initializeFrame(1));
+    const answered = await frameWith(frames, 1);
+    assert.equal((answered.error as { code: number }).code, -32603);
+    assert.doesNotMatch(JSON.stringify(answered), /cannot build/);
+    await waitFor('the entry error to be logged', () =>
+      records.some((r) => r.msg === 'mcp stdio entry reported an error'),
+    );
+    const logged = records.find((r) => r.msg === 'mcp stdio entry reported an error');
+    assert.equal(logged?.level, 'debug');
+    assert.equal(typeof logged?.fields?.error, 'string');
+  } finally {
+    await running.close();
   }
 });
 

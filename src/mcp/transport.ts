@@ -26,8 +26,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { constants as osConstants } from 'node:os';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
-import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import type { McpServer } from '@modelcontextprotocol/server';
+import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import type { McpServer, ProtocolEra } from '@modelcontextprotocol/server';
 import { InstagramError } from '../core/types.js';
 import type { Logger } from '../core/types.js';
 import { isLoopbackHost } from '../core/settings.js';
@@ -39,9 +39,51 @@ export interface StdioStreams {
   stdout: NodeJS.WritableStream;
 }
 
+/** Builds the server instance for one stdio connection, for the era it opened in. */
+export type StdioServerFactory = (era: ProtocolEra) => McpServer;
+
+/** What {@link startStdio} hands back: the connection's own teardown. */
+export interface RunningStdio {
+  close(): Promise<void>;
+}
+
 /**
- * Connect `server` to a stdio transport and start serving. Resolves once the
+ * The SDK stdio transport, with its `start()` observable. `serveStdio` owns the
+ * transport and starts it itself without handing the promise back, so this is
+ * how {@link startStdio} learns whether the transport actually came up before it
+ * announces readiness — and how a start failure still rejects to the caller.
+ */
+class ObservedStdioTransport extends StdioServerTransport {
+  // Assigned synchronously by the `started` initialiser below.
+  private markStarted!: (started: Promise<void>) => void;
+  readonly started = new Promise<void>((resolve) => {
+    this.markStarted = resolve;
+  });
+
+  override start(): Promise<void> {
+    const started = super.start();
+    this.markStarted(started);
+    return started;
+  }
+}
+
+/**
+ * Serve MCP on stdio for both protocol eras and start reading. Resolves once the
  * transport is listening; the process then stays alive on stdin.
+ *
+ * **Dual era (MCP 2026-07-28 conformance).** The connection is handed to the
+ * SDK's `serveStdio` entry, which classifies the client's opening message and
+ * builds the server lazily through `factory`: a 2025-11-25 `initialize` gets a
+ * `'legacy'` instance and the exact behaviour this server always had, while a
+ * 2026-07-28 client (per-request `_meta` envelope, optional `server/discover`
+ * probe) gets a `'modern'` one — its results carry `resultType`, `ttlMs` and
+ * `cacheScope`, and its D3 confirmation runs as `input_required`
+ * (mcp/confirm-modern.ts). A discover probe followed by a legacy `initialize`
+ * discards the probe instance and falls back, so nothing is built twice for a
+ * client that stays on 2025-11-25. Errors the entry reports about the wire (a
+ * discarded frame, a rejected envelope, a factory failure it already answered
+ * with a JSON-RPC error) are logged at debug: each is a protocol answer the
+ * client already received, not an operator problem.
  *
  * **The client leaving must not kill work already in flight.** SDK v1's
  * `StdioServerTransport` subscribed to `'error'` on stdin only. When the client
@@ -70,18 +112,19 @@ export interface StdioStreams {
  * EOF counts as EOF. The two doors share one close, so a client that shuts both ends closes the transport once.
  *
  * **SDK v2 closes on both doors itself** — on any stdout `'error'` and on stdin
- * `'end'`/`'close'`. These listeners are registered before `server.connect`, so
- * they still run first: they log the departure once, close the transport (which
- * makes the SDK's own close a no-op) and rethrow a stdout error that is not a
- * gone pipe before the SDK listener can swallow it. They are defence in depth
- * now, and they pin the order (CC-PROC-198, CC-PROC-206).
+ * `'end'`/`'close'`. These listeners are registered before the transport
+ * starts, so they still run first: they log the departure once, close the
+ * transport (which makes the SDK's own close a no-op; `serveStdio` then closes
+ * the instance it built) and rethrow a stdout error that is not a gone pipe
+ * before the SDK listener can swallow it. They are defence in depth now, and
+ * they pin the order (CC-PROC-198, CC-PROC-206).
  */
 export async function startStdio(
-  server: McpServer,
+  factory: StdioServerFactory,
   log: Logger,
   streams: StdioStreams = { stdin: process.stdin, stdout: process.stdout },
-): Promise<void> {
-  const transport = new StdioServerTransport(
+): Promise<RunningStdio> {
+  const transport = new ObservedStdioTransport(
     streams.stdin as typeof process.stdin,
     streams.stdout as typeof process.stdout,
   );
@@ -116,8 +159,13 @@ export async function startStdio(
   };
   streams.stdin.once('end', stdinGone);
   streams.stdin.once('close', stdinGone);
-  await server.connect(transport);
+  const handle = serveStdio(({ era }) => factory(era), {
+    transport,
+    onerror: (error) => log.debug('mcp stdio entry reported an error', { error: error.message }),
+  });
+  await transport.started;
   log.info('mcp server ready', { transport: 'stdio' });
+  return handle;
 }
 
 export interface HttpTransportOptions {

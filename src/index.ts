@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import { McpServer } from '@modelcontextprotocol/server';
+import type { ProtocolEra } from '@modelcontextprotocol/server';
 import { systemClock } from './core/clock.js';
 import { SETTINGS_ENV_NAMES, loadSettings, settingsWarnings } from './core/settings.js';
 import {
@@ -401,7 +402,9 @@ async function main(): Promise<void> {
   // for the process lifetime; the HTTP transport is stateless and the SDK
   // requires a fresh server + transport PER REQUEST (see mcp/transport.ts), so
   // it gets this as a factory instead.
-  const buildServer = (): { server: McpServer; registered: string[] } => {
+  const buildServer = (
+    era: ProtocolEra = 'legacy',
+  ): { server: McpServer; registered: string[] } => {
     const server = new McpServer({
       name: SERVER_NAME,
       version: SERVER_VERSION,
@@ -416,6 +419,7 @@ async function main(): Promise<void> {
       clock,
       log,
       makeRequest,
+      era,
     });
     // Prompts name tools by their exact names, so each is listed only when every
     // tool it names was exposed above (mcp/prompts.ts).
@@ -455,16 +459,15 @@ async function main(): Promise<void> {
     // a signal would cut off are cut off by `process.exit` just the same, so a
     // handler would only replace Node's default "die by the signal" with an
     // exit code that claims more than happened.
-    // Equivalent-mutant note: handing `startStdio` a second, freshly registered
-    // instance (`buildServer().server`) is indistinguishable by any test —
-    // registration is a pure function of the same inputs and logs nothing of its
-    // own, so the two instances are identical and stdio serves exactly one of
-    // them either way. `built` stays because the line above already LOGGED
-    // `built`: `count` is meant to describe the surface this process serves, and
-    // serving a different instance makes that true only by coincidence. Building
-    // twice would also pay for a full second registration whose only product is
-    // discarded.
-    await startStdio(built.server, log);
+    // The SDK's stdio entry builds the instance lazily, once per connection,
+    // for the era the client opened in (mcp/transport.ts). A 2025-11-25 client
+    // is served `built` — the instance whose registration the line above
+    // logged — so its surface is the one this process announced; the entry pins
+    // one era per connection, so `built` is never handed out twice. A
+    // 2026-07-28 client gets its own `'modern'` registration (same inputs, same
+    // surface), because the era decides how the D3 confirmation travels
+    // (mcp/confirm-modern.ts).
+    await startStdio((era) => (era === 'legacy' ? built.server : buildServer(era).server), log);
   }
 }
 

@@ -2386,6 +2386,105 @@ function startEntry(sandbox: Sandbox, args: string[], opts: RunOptions = {}): Ru
   };
 }
 
+test('a 2026-07-28 client is served the modern era on stdio: discover, then cache-hinted lists', async () => {
+  // The SDK's stdio entry classifies the opening message: a per-request `_meta`
+  // envelope claiming 2026-07-28 pins the modern era, and the entry builds that
+  // instance through the factory with `'modern'`. The answers then carry the
+  // revision's result fields — `resultType`, `ttlMs`, `cacheScope` — which a
+  // 2025-11-25 client (the test below) never sees.
+  const sandbox = await makeSandbox();
+  const running = startEntry(sandbox, [], {
+    env: { IG_ACCESS_TOKEN: TOKEN, IG_LOG_LEVEL: 'info' },
+  });
+  try {
+    const lines: string[] = [];
+    let buffer = '';
+    running.child.stdout.setEncoding('utf8');
+    running.child.stdout.on('data', (chunk: string) => {
+      buffer += chunk;
+      const parts = buffer.split('\n');
+      buffer = parts.pop() ?? '';
+      for (const part of parts) if (part.trim() !== '') lines.push(part);
+    });
+    const awaitResponse = async (id: number): Promise<Record<string, unknown>> => {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const hit = lines
+          .map((l) => JSON.parse(l) as Record<string, unknown>)
+          .find((m) => m.id === id);
+        if (hit !== undefined) return hit;
+        if (Date.now() > deadline) throw new Error(`no response for id ${id}: ${lines.join('|')}`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    };
+    const envelope = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientInfo': { name: 'entry-test', version: '0.0.0' },
+      'io.modelcontextprotocol/clientCapabilities': {},
+    };
+    const send = (msg: unknown): void => void running.child.stdin.write(`${JSON.stringify(msg)}\n`);
+
+    await running.waitForStderr(/mcp server ready/);
+    send({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: envelope } });
+    const discovered = (await awaitResponse(1)).result as {
+      supportedVersions?: string[];
+      serverInfo?: { name?: string };
+    };
+    assert.ok(
+      discovered.supportedVersions?.includes('2026-07-28'),
+      `discover must offer 2026-07-28: ${JSON.stringify(discovered)}`,
+    );
+
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: { _meta: envelope } });
+    const listed = (await awaitResponse(2)).result as {
+      tools?: { name: string }[];
+      resultType?: string;
+      ttlMs?: number;
+      cacheScope?: string;
+    };
+    assert.equal(listed.resultType, 'complete');
+    assert.equal(typeof listed.ttlMs, 'number');
+    assert.equal(typeof listed.cacheScope, 'string');
+    const names = (listed.tools ?? []).map((t) => t.name);
+    assert.ok(names.includes('instagram_get_account'), `modern surface: ${names.join()}`);
+    // The modern instance is a second registration from the same inputs, so it
+    // lists exactly the surface the startup line announced.
+    assert.match(
+      running.stderr(),
+      new RegExp(`"msg":"tools registered",[^\n]*"count":${names.length},`),
+    );
+
+    // The instance must be registered FOR the modern era, not merely served on
+    // it: only then does a D3 write ask the human through `input_required`. A
+    // legacy registration on this wire would find no initialize-time
+    // capabilities, skip the confirmation and write straight away.
+    const formMeta = {
+      ...envelope,
+      'io.modelcontextprotocol/clientCapabilities': { elicitation: { form: {} } },
+    };
+    send({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: {
+        _meta: formMeta,
+        name: 'instagram_reply_to_comment',
+        arguments: { commentId: '17890000000000001', message: 'thanks!', apply: true },
+      },
+    });
+    const pending = (await awaitResponse(3)).result as {
+      resultType?: string;
+      inputRequests?: Record<string, { method: string }>;
+    };
+    assert.equal(pending.resultType, 'input_required', JSON.stringify(pending));
+    assert.equal(pending.inputRequests?.confirm?.method, 'elicitation/create');
+    assert.deepEqual(await recordedRequests(sandbox), [], 'round 1 must reach no network');
+  } finally {
+    await running.stop();
+    await sandbox.cleanup();
+  }
+});
+
 test('the stdio transport speaks MCP on stdout and keeps every diagnostic on stderr', async () => {
   const sandbox = await makeSandbox();
   const running = startEntry(sandbox, [], {
@@ -2461,6 +2560,9 @@ test('the stdio transport speaks MCP on stdout and keeps every diagnostic on std
     const listed = (await awaitResponse(2)).result as { tools?: { name: string }[] };
     const names = (listed.tools ?? []).map((t) => t.name);
     assert.ok(names.length > 0, 'the entry must register the tool surface before serving');
+    // A 2025-era client sees no 2026-07-28 result fields: its wire is unchanged.
+    for (const key of ['resultType', 'ttlMs', 'cacheScope'])
+      assert.equal(key in listed, false, `a legacy tools/list must not carry ${key}`);
     assert.ok(
       names.includes('instagram_get_account'),
       `no account tool registered: ${names.join()}`,

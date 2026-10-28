@@ -236,6 +236,9 @@ pages and directories `[verify]`.
 
 ## 10. Proposed phasing (after 2.0.0)
 
+The task-level breakdown, with file ownership per branch so the work can
+run in parallel, is [v3-workplan.md](v3-workplan.md).
+
 | Phase | Content | Live creds needed |
 |---|---|---|
 | 2.x | SDK 2.4 bump, Graph pin move (if minor), plugin listing polish, deprecation warnings for 3.0 removals | No |

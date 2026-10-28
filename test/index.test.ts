@@ -1615,6 +1615,137 @@ test('a blank IG_ENV_FILE falls back to the standard candidates instead of resol
   }
 });
 
+/**
+ * A `--import` module that snapshots the CHILD's `process.env` before the entry
+ * runs and again as it exits, writing both to `outFile` as JSON.
+ *
+ * Bootstrap resolves the env files into its own copy of the environment (V3-P2),
+ * so the two snapshots must be identical on every path: a successful
+ * subcommand, a start that fails, and `login`, which is dispatched before the
+ * profiles load. A `data:` module, for the reasons given on
+ * {@link redactionProbe}.
+ */
+function envProbe(outFile: string): string {
+  const source =
+    `import { writeFileSync } from 'node:fs';\n` +
+    `const snap = () => Object.fromEntries(Object.entries(process.env).sort(([a], [b]) => (a < b ? -1 : 1)));\n` +
+    `const before = snap();\n` +
+    `process.on('exit', () => writeFileSync(${JSON.stringify(outFile)}, JSON.stringify({ before, after: snap() })));\n`;
+  return `data:text/javascript,${encodeURIComponent(source)}`;
+}
+
+interface EnvSnapshots {
+  before: Record<string, string>;
+  after: Record<string, string>;
+}
+
+async function readEnvProbe(outFile: string): Promise<EnvSnapshots> {
+  return JSON.parse(await readFile(outFile, 'utf8')) as EnvSnapshots;
+}
+
+/**
+ * The names whose value differs between the two snapshots (added, removed or
+ * changed), sorted. Names only: a failure message that diffed the whole map
+ * would print the developer's environment, secrets included, into the test log.
+ */
+function changedEnvNames({ before, after }: EnvSnapshots): string[] {
+  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...names].filter((name) => before[name] !== after[name]).sort();
+}
+
+test('bootstrap never writes process.env, and the client > config home > project .env order holds (V3-P2)', async () => {
+  // Every step that used to edit `process.env` is exercised in one run: the
+  // client's placeholder and blank `IG_*` values (dropped), two
+  // env files merged under the client's environment, an `IG_ENV_FILE` a file
+  // supplied (dropped) and a recorded expiry whose token came from
+  // the client (dropped, stray). The run must still see the merged result —
+  // the client's token on the wire, the project file's log level in effect,
+  // the expiry unknown — while the process's own environment reads exactly as
+  // the client passed it, before and after.
+  const sandbox = await makeSandbox();
+  try {
+    const { writeCredentials } = await import('../src/core/config-write.js');
+    await writeCredentials(
+      'default',
+      {
+        accessToken: TOKEN,
+        authPath: 'ig-login',
+        accountId: '17841400000000000',
+        expiresAtSec: 4_000_000_000,
+      },
+      { configDir: sandbox.configHome },
+    );
+    const home = envFileIn(sandbox.configHome);
+    const elsewhere = path.join(sandbox.configHome, 'elsewhere.env');
+    await writeFile(home, `${await readFile(home, 'utf8')}IG_ENV_FILE=${elsewhere}\n`, 'utf8');
+    await writeFile(
+      path.join(sandbox.cwd, '.env'),
+      `IG_ACCESS_TOKEN=${PROJECT_TOKEN}\nIG_LOG_LEVEL=debug\n`,
+      'utf8',
+    );
+    const routes = [{ match: '/17841400000000000', body: { id: '17841400000000000' } }];
+    const clientEnv = {
+      IG_ACCESS_TOKEN: CLIENT_TOKEN,
+      IG_APP_SECRET: '${user_config.app_secret}',
+      IG_HTTP_TOKEN: '  ',
+    };
+
+    const probe = path.join(sandbox.cwd, 'env-probe.json');
+    const run = runEntry(sandbox, ['doctor'], {
+      env: clientEnv,
+      routes,
+      imports: [envProbe(probe)],
+    });
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+
+    // Precedence: the client's token beats both files, the config home's.
+    const requests = await recordedRequests(sandbox);
+    assert.ok(
+      (requests[0] ?? '').includes(`access_token=${encodeURIComponent(CLIENT_TOKEN)}`),
+      `the client token must win over every env file: ${requests.join(' | ')}`,
+    );
+    assert.ok(!requests.some((url) => url.includes(TOKEN) || url.includes(PROJECT_TOKEN)));
+    // The project file still filled the key nothing above it set...
+    assert.ok(
+      logRecords(run.stderr).some((r) => r.level === 'debug' && r.msg === 'graph request'),
+      `the project .env's IG_LOG_LEVEL never reached the logger: ${run.stderr}`,
+    );
+    // ...and the stray expiry was dropped from what the run reads.
+    assert.match(run.stdout, /Token expiry: unknown/);
+
+    const snaps = await readEnvProbe(probe);
+    assert.deepEqual(changedEnvNames(snaps), [], 'bootstrap must leave process.env as it found it');
+    const { after } = snaps;
+    assert.equal(after.IG_ACCESS_TOKEN, CLIENT_TOKEN);
+    assert.equal(after.IG_APP_SECRET, '${user_config.app_secret}');
+    assert.equal(after.IG_HTTP_TOKEN, '  ');
+    for (const key of ['IG_LOG_LEVEL', 'IG_ACCOUNT_ID', 'IG_ENV_FILE', 'IG_TOKEN_EXPIRES_AT']) {
+      assert.equal(after[key], undefined, `${key} came from a file and must not reach process.env`);
+    }
+
+    // A start that fails (an unknown active profile) and `login`, dispatched
+    // before any profile is read, leave it untouched too.
+    const failedProbe = path.join(sandbox.cwd, 'env-probe-failed.json');
+    const failed = runEntry(sandbox, ['doctor'], {
+      env: { ...clientEnv, IG_ACTIVE_PROFILE: 'nope' },
+      routes,
+      imports: [envProbe(failedProbe)],
+    });
+    assert.equal(failed.status, 1, `stderr: ${failed.stderr}`);
+    assert.deepEqual(changedEnvNames(await readEnvProbe(failedProbe)), []);
+
+    const loginProbe = path.join(sandbox.cwd, 'env-probe-login.json');
+    const login = runEntry(sandbox, ['login', '--help'], {
+      env: clientEnv,
+      imports: [envProbe(loginProbe)],
+    });
+    assert.equal(login.status, 0, `stderr: ${login.stderr}`);
+    assert.deepEqual(changedEnvNames(await readEnvProbe(loginProbe)), []);
+  } finally {
+    await sandbox.cleanup();
+  }
+});
+
 test('doctor on fb-login introspects the token, exits 1 when invalid, and never prints it', async () => {
   const sandbox = await makeSandbox();
   try {

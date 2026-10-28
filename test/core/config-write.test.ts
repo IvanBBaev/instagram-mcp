@@ -3394,6 +3394,27 @@ test('a non-blank absolute IG_ENV_FILE is the file written, and the config home 
   if (process.platform !== 'win32') assert.equal(statSync(named).mode & 0o777, 0o600);
 });
 
+test('without an injected env the IG_ENV_FILE target is read from process.env', async () => {
+  // The entry now always injects its own env (V3-P2), so this default is
+  // pinned here directly rather than through a spawned bootstrap.
+  const home = await tempConfigDir();
+  const named = path.join(home, 'default-env.env');
+  const saved = process.env.IG_ENV_FILE;
+  process.env.IG_ENV_FILE = named;
+  try {
+    const res = await writeCredentials('default', {
+      accessToken: LONG_TOKEN,
+      authPath: 'ig-login',
+      expiresAtSec: 1_900_000_000,
+    });
+    assert.equal(res.path, named);
+  } finally {
+    if (saved === undefined) delete process.env.IG_ENV_FILE;
+    else process.env.IG_ENV_FILE = saved;
+  }
+  assert.equal(loadProfiles(await parseEnvFile(named)).profiles[0]?.accessToken, LONG_TOKEN);
+});
+
 test('IG_ENV_FILE: the named file is merged in place, keeping what the operator put there', async () => {
   const home = await tempConfigDir();
   const named = path.join(home, 'named.env');

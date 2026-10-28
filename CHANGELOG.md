@@ -181,6 +181,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the full lane, and one `CI result` check reports either lane. A new
   `test:shard` script runs one slice of the corpus via Node's `--test-shard`;
   coverage stays one unsharded run. The published package is unchanged.
+- Internal: bootstrap no longer writes `process.env`. It copies the client
+  environment, loads the env files into that copy (client > config home >
+  project `.env`, unchanged) and hands it to the settings, credential, `login`,
+  `doctor` and tool loaders. Child processes would now inherit only the client
+  environment; nothing spawns one today.
 
 ### Deprecated
 

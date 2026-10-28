@@ -309,19 +309,20 @@ test('every knob loadSettings clamps has a documented range, and no other row cl
  * half had no counterpart, and the docstring above `ENTRY_ENV_NAMES` claimed one
  * for it.
  *
- * The `Proxy` technique does not transfer. `src/index.ts` reads `process.env`
- * directly rather than an injected env, and it cannot be imported at all —
- * `main()` runs at module scope, which is why every other test of the entry
- * spawns it as a child process. So this pin is textual, over the same source the
- * build compiles, in the idiom `clampedKnobs` above already uses.
+ * The `Proxy` technique does not transfer. `src/index.ts` builds the env it
+ * reads itself (a copy of `process.env` plus the env files, V3-P2), and it
+ * cannot be imported at all — `main()` runs at module scope, which is why every
+ * other test of the entry spawns it as a child process. So this pin is textual,
+ * over the same source the build compiles, in the idiom `clampedKnobs` above
+ * already uses.
  */
 function entrySource(): string {
   return readFileSync(join(repoRoot, 'src', 'index.ts'), 'utf8');
 }
 
-/** Every `process.env.IG_*` member read in the entry, deduplicated and sorted. */
+/** Every `env.IG_*` member read in the entry, deduplicated and sorted. */
 function entryEnvReads(source: string): string[] {
-  const reads = source.matchAll(/process\.env\.(IG_[A-Z0-9_]+)/g);
+  const reads = source.matchAll(/\benv\.(IG_[A-Z0-9_]+)/g);
   const names = [...reads].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
   return [...new Set(names)].sort();
 }
@@ -347,7 +348,7 @@ test('ENTRY_ENV_NAMES is exactly the IG_* set the composition root reads itself'
   // Both scrapes are floored. If either pattern silently stopped matching, an
   // empty set would compare equal to an empty set and this gate would pass for
   // the one reason that means nothing.
-  assert.ok(read.length > 0, 'found no process.env.IG_* read in src/index.ts — the scrape broke');
+  assert.ok(read.length > 0, 'found no env.IG_* read in src/index.ts — the scrape broke');
   assert.ok(declared.length > 0, 'found no name in the ENTRY_ENV_NAMES literal — the scrape broke');
 
   // Read in both directions, like the two sibling pins. A name the entry reads

@@ -6,8 +6,10 @@
  *
  * Responsibilities:
  *   1. Node version guard (the runtime uses Node ≥ 22 APIs, e.g. `AbortSignal.any`).
- *   2. Env-file resolution + `dotenv` load with `override: false` (client env wins).
- *   3. Build settings, profiles, the secret redactor, and the stderr logger.
+ *   2. Env-file resolution + `dotenv` load with `override: false` (client env wins)
+ *      into the bootstrap env: a copy of `process.env`, which is never written.
+ *   3. Build settings, profiles, the secret redactor, and the stderr logger,
+ *      each handed that env explicitly.
  *   4. Construct the `McpServer`, register the tool surface (packages resolved
  *      from env, D1 capability-filtered per the active profile), and inject the
  *      per-profile network seam `createIgRequest(resolvingAuthProvider(...))`,
@@ -58,6 +60,18 @@ const SERVER_VERSION = '0.8.0';
 const MIN_NODE_MAJOR = 22;
 
 /**
+ * The environment bootstrap resolves and hands down: a COPY of the one the MCP
+ * client passed, with the env files merged in under it (V3-P2). Every loader —
+ * settings, the credential provider and its writer, the registry, `login`,
+ * `doctor` — reads this map, and `process.env` is never written. Before, the
+ * files were loaded into `process.env` itself and the unset spellings deleted
+ * from it, so the process's own environment no longer said what the client had
+ * passed, and a second bootstrap in one process (a hosted runtime, a test)
+ * would have inherited the first one's files.
+ */
+type BootEnv = NodeJS.ProcessEnv;
+
+/**
  * Every option dotenv 18 would otherwise read off the environment, pinned at the
  * call site. dotenv resolves `{ ...optionsFromEnv(), ...options }`, so an option
  * passed here beats `DOTENV_<X>` / `DOTENV_CONFIG_<X>`, while an option left out
@@ -71,6 +85,8 @@ const MIN_NODE_MAJOR = 22;
  *   - `encoding: 'utf8'` — `DOTENV_ENCODING=utf16le` otherwise decodes the file
  *     into keys no code reads, and a configured profile goes missing.
  *   - `override: false` — client env wins (§6).
+ *   - `processEnv: env` — the file's keys land in the bootstrap env, never in
+ *     `process.env` (V3-P2).
  *
  * The first three are held by "a dotenv knob in the environment cannot talk its
  * way onto stdout or into the file". Equivalent-mutant note: `fast: false` is not
@@ -79,8 +95,16 @@ const MIN_NODE_MAJOR = 22;
  * escapes) — and it is pinned so the operator's shell does not pick the parser
  * this server's env files are read with.
  */
-function dotenvOptions(file: string): Parameters<typeof dotenvConfig>[0] {
-  return { path: file, override: false, quiet: true, debug: false, encoding: 'utf8', fast: false };
+function dotenvOptions(file: string, env: BootEnv): Parameters<typeof dotenvConfig>[0] {
+  return {
+    path: file,
+    processEnv: env,
+    override: false,
+    quiet: true,
+    debug: false,
+    encoding: 'utf8',
+    fast: false,
+  };
 }
 
 /** Fail fast on an unsupported runtime before any Node-22-only API is touched. */
@@ -113,7 +137,7 @@ function assertNodeVersion(): void {
  * drift apart: an XDG-only rule sends a Windows server looking in
  * `%USERPROFILE%\.config\…` for a file `login` wrote to `%APPDATA%\…`.
  */
-function loadEnvFiles(): Map<string, string> {
+function loadEnvFiles(env: BootEnv): Map<string, string> {
   // CC-PROC-18: this was `explicit && explicit !== ''`, whose second test could
   // never be false — `''` is falsy, so the first operand had already
   // short-circuited. Spelled out the way the other two optional-string guards in
@@ -127,15 +151,15 @@ function loadEnvFiles(): Map<string, string> {
   // `login` / `refresh` refused it as relative. Now a leading `~` is the home
   // directory on both sides, and a shell-only spelling (`$HOME/…`, `%APPDATA%…`,
   // `~user/…`) stops the start with IG_ENV_FILE named instead of reaching dotenv.
-  const explicit = namedEnvFile({ IG_ENV_FILE: process.env.IG_ENV_FILE });
+  const explicit = namedEnvFile({ IG_ENV_FILE: env.IG_ENV_FILE });
   // Which file supplied each key the load added (a key absent here was already
   // in the environment the client passed). `override: false` means a file only
   // ever adds keys, so the before/after difference is exactly its contribution.
   const setBy = new Map<string, string>();
   const load = (file: string): ReturnType<typeof dotenvConfig> => {
-    const before = new Set(Object.keys(process.env));
-    const loaded = dotenvConfig(dotenvOptions(file));
-    const added = Object.keys(process.env).filter((key) => !before.has(key));
+    const before = new Set(Object.keys(env));
+    const loaded = dotenvConfig(dotenvOptions(file, env));
+    const added = Object.keys(env).filter((key) => !before.has(key));
     // CC-CFG-71: a file value is judged by the rule the client's environment is
     // (CC-CFG-46). An unexpanded `${user_config.X}` template written INTO a file
     // is unset, not a value: it is dropped again, so it neither reaches Graph nor
@@ -143,10 +167,10 @@ function loadEnvFiles(): Map<string, string> {
     // CC-CFG-81: a blank file value is unset too, by the same token, so a
     // config-home `IG_ACCESS_TOKEN=` no longer keeps the project `.env` from
     // supplying the token.
-    const addedEnv = Object.fromEntries(added.map((key) => [key, process.env[key]]));
+    const addedEnv = Object.fromEntries(added.map((key) => [key, env[key]]));
     const unset = new Set([...unsetPlaceholderKeys(addedEnv), ...blankKeys(addedEnv)]);
     for (const key of added) {
-      if (unset.has(key)) delete process.env[key];
+      if (unset.has(key)) delete env[key];
       else setBy.set(key, file);
     }
     return loaded;
@@ -195,7 +219,7 @@ function loadEnvFiles(): Map<string, string> {
  * tokens and app secrets are registered by the credential provider itself,
  * before it returns them (core/credentials.ts).
  */
-function registerHttpTokenSecret(): void {
+function registerHttpTokenSecret(env: BootEnv): void {
   // Equivalent-mutant note: neither half of this guard is observable on its own.
   // `registerSecret` already ignores a non-string and anything shorter than eight
   // characters, so both `undefined` and `''` are no-ops if they reach it. The
@@ -207,19 +231,19 @@ function registerHttpTokenSecret(): void {
   // registered, and an untrimmed registration would leave the bearer the
   // transport actually compares against unmasked. The padded-bearer case in
   // test/index.test.ts pins it.
-  const httpToken = process.env.IG_HTTP_TOKEN?.trim();
+  const httpToken = env.IG_HTTP_TOKEN?.trim();
   if (httpToken !== undefined && httpToken !== '') registerSecret(httpToken);
 }
 
 /**
  * The `IG_*` names this file reads itself, outside every owner module's set.
  *
- * Pinned by `test/env-catalog.test.ts` against the `process.env.IG_*` reads in
+ * Pinned by `test/env-catalog.test.ts` against the `env.IG_*` reads in
  * this file, in both directions: a name here that nothing below reads silences
  * the CC-CFG-13 warning for a variable that does nothing, and a read added
  * below without a name here reports a working knob to the operator as a typo.
  * That pin is textual rather than the recording `Proxy` the two sibling lists
- * use, because this module reads `process.env` directly and cannot be imported
+ * use, because this module reads its env inline and cannot be imported
  * at all — `main()` runs at module scope. Measured 2026-09-23: without it,
  * dropping a name from this list survived the whole suite.
  */
@@ -241,7 +265,7 @@ const ENTRY_ENV_NAMES: readonly string[] = ['IG_ENV_FILE', 'IG_HTTP_TOKEN'];
  * is simply not in the namespace, and on Windows `process.env` folds case before
  * this ever sees the key.
  */
-function unrecognisedEnvNames(env: NodeJS.ProcessEnv): string[] {
+function unrecognisedEnvNames(env: BootEnv): string[] {
   return Object.keys(env)
     .filter(
       (name) =>
@@ -263,26 +287,29 @@ async function main(): Promise<void> {
   // A blank `IG_*` value (`""`, whitespace) is the same "unset" spelled
   // differently and is dropped with it (CC-CFG-81): dotenv never fills a key
   // that exists, so left in place it would shadow every env file.
-  for (const key of [...unsetPlaceholderKeys(process.env), ...blankKeys(process.env)]) {
-    delete process.env[key];
+  // Every step from here on edits `env`, the bootstrap's own copy; the
+  // process's environment stays exactly as the client passed it.
+  const env: BootEnv = { ...process.env };
+  for (const key of [...unsetPlaceholderKeys(env), ...blankKeys(env)]) {
+    delete env[key];
   }
-  const setBy = loadEnvFiles();
+  const setBy = loadEnvFiles(env);
   // `IG_ENV_FILE` is read once, above, from the environment the client passed.
   // One that an env file supplied was never followed — the load was already
   // under way — yet `login` / `refresh` write to whatever `IG_ENV_FILE` names
   // (CC-CFG-63). Left in place it would send a fresh token to a file this
   // server does not read, so it is dropped and the write lands where the read
   // came from.
-  if (setBy.has('IG_ENV_FILE')) delete process.env.IG_ENV_FILE;
+  if (setBy.has('IG_ENV_FILE')) delete env.IG_ENV_FILE;
   // A recorded expiry is only true of the token stored beside it. One that
   // reached this process from a different source than its profile's token (the
   // client passed the token, a file supplied the record) describes some other
   // token, so it is dropped and the expiry reads as unknown (core/config.ts).
-  for (const key of strayExpiryKeys(process.env, (k) => setBy.get(k) ?? 'environment')) {
-    delete process.env[key];
+  for (const key of strayExpiryKeys(env, (k) => setBy.get(k) ?? 'environment')) {
+    delete env[key];
   }
 
-  const settings = loadSettings();
+  const settings = loadSettings(env);
   const clock = systemClock;
   const subcommand = process.argv[2];
 
@@ -295,7 +322,7 @@ async function main(): Promise<void> {
     // invocation would exit 2 with `login: unknown argument 'login'.` — which is
     // what the entry test's bare-`login` case (expecting the `--path` usage
     // error instead) pins against.
-    process.exit(await runLogin(process.argv.slice(3)));
+    process.exit(await runLogin(process.argv.slice(3), { env }));
   }
 
   // Build the logger with redaction wired in. `createRedactor` reads the secret
@@ -310,7 +337,7 @@ async function main(): Promise<void> {
     clock,
     redact: createRedactor(),
   });
-  const unrecognised = unrecognisedEnvNames(process.env);
+  const unrecognised = unrecognisedEnvNames(env);
   if (unrecognised.length > 0) {
     log.warn('ignoring unrecognised IG_* environment variables', {
       names: unrecognised,
@@ -320,13 +347,14 @@ async function main(): Promise<void> {
   // Deprecation notices, once per start and on stderr only (CC-CFG-85). They sit
   // beside the unrecognised-name warning and BEFORE the profiles load, so the
   // operator whose start then fails still learns the port name changed.
-  for (const { msg, fields } of settingsWarnings(process.env)) log.warn(msg, fields);
+  for (const { msg, fields } of settingsWarnings(env)) log.warn(msg, fields);
   // Profiles load through the credential-provider port (architecture §13); the
   // env-file provider reads the env the files above were loaded into, and
-  // registers every token and app secret before it returns them.
-  const credentials = envFileCredentialProvider();
+  // registers every token and app secret before it returns them. Its writer
+  // resolves the target (`IG_ENV_FILE`, the config home) from that same env.
+  const credentials = envFileCredentialProvider({ env, write: { env } });
   const { profiles, defaultName } = await credentials.load();
-  registerHttpTokenSecret();
+  registerHttpTokenSecret(env);
   // A profile name a shell `export` cannot spell is still accepted in 1.x and
   // warned about once here; 2.0 restricts names to [A-Z0-9_] (CC-CFG-86).
   const nonPortable = nonPortableProfileNames(profiles);
@@ -378,6 +406,7 @@ async function main(): Promise<void> {
       // injects the clock, and a `doctor` that read the wall clock directly
       // would be the one health check a substituted clock stopped reaching.
       nowMs: clock.now(),
+      env,
     });
     process.stdout.write(`${report}\n`);
     process.exit(exitCode);
@@ -416,6 +445,7 @@ async function main(): Promise<void> {
       log,
       makeRequest,
       era,
+      env,
     });
     // Prompts name tools by their exact names, so each is listed only when every
     // tool it names was exposed above (mcp/prompts.ts).
@@ -433,7 +463,7 @@ async function main(): Promise<void> {
   log.info('tools registered', { count: built.registered.length, transport: settings.transport });
 
   if (settings.transport === 'http') {
-    const httpToken = process.env.IG_HTTP_TOKEN?.trim();
+    const httpToken = env.IG_HTTP_TOKEN?.trim();
     const running = await startHttp(
       () => buildServer().server,
       {

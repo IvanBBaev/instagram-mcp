@@ -19,11 +19,17 @@ import {
   getAudienceDemographics,
   getMediaInsights,
   getOnlineFollowers,
+  ACCOUNT_BREAKDOWN_METRICS,
+  ACCOUNT_BREAKDOWNS,
   ACCOUNT_METRICS,
   ACCOUNT_PERIODS,
+  DEFAULT_ACCOUNT_METRICS,
   DEMOGRAPHIC_BREAKDOWNS,
   DEMOGRAPHIC_METRICS,
   DEMOGRAPHIC_TIMEFRAMES,
+  FB_LOGIN_MEDIA_METRICS,
+  MEDIA_BREAKDOWN_METRICS,
+  MEDIA_BREAKDOWNS,
   MEDIA_METRICS,
   METRIC_TYPES,
   RETENTION_DAYS,
@@ -301,7 +307,7 @@ const accountInsightsInput = {
   metrics: boundedArray(z.enum(ACCOUNT_METRICS), 1)
     .optional()
     .describe(
-      `Account metrics to fetch (post-2025 set). Defaults to all of: ${ACCOUNT_METRICS.join(', ')}; with metric_type "time_series" it defaults to ${TIME_SERIES_ACCOUNT_METRICS.join(', ')}. Legacy names (impressions, profile_views, video_views) no longer exist and are rejected.`,
+      `Account metrics to fetch (post-2025 set). Defaults to: ${DEFAULT_ACCOUNT_METRICS.join(', ')}; with metric_type "time_series" it defaults to ${TIME_SERIES_ACCOUNT_METRICS.join(', ')}; with a breakdown it defaults to the metrics that breakdown supports. "reposts" is opt-in (never part of a default). Legacy names (impressions, profile_views, video_views) no longer exist and are rejected.`,
     ),
   period: z.enum(ACCOUNT_PERIODS).optional().describe('Aggregation period. Defaults to "day".'),
   metric_type: z
@@ -309,6 +315,12 @@ const accountInsightsInput = {
     .optional()
     .describe(
       `Return an aggregated "total_value" (default) or a per-interval "time_series". Instagram serves "time_series" only for: ${TIME_SERIES_ACCOUNT_METRICS.join(', ')}; any other metric with it is refused.`,
+    ),
+  breakdown: z
+    .enum(ACCOUNT_BREAKDOWNS)
+    .optional()
+    .describe(
+      `Optional single dimension to break the totals down by; works with metric_type "total_value" only (refused with "time_series"). Each breakdown supports only some metrics, and any other named metric is refused before the call: ${ACCOUNT_BREAKDOWNS.map((b) => `${b} (${ACCOUNT_BREAKDOWN_METRICS[b].join(', ')})`).join('; ')}.`,
     ),
   since: z
     .number()
@@ -360,6 +372,7 @@ const accountInsightsTool = defineTool({
     metrics: args.metrics ?? 'default',
     period: args.period,
     metric_type: args.metric_type,
+    breakdown: args.breakdown,
     since: args.since,
     until: args.until,
   }),
@@ -369,6 +382,7 @@ const accountInsightsTool = defineTool({
       metrics: args.metrics,
       period: args.period,
       metricType: args.metric_type,
+      breakdown: args.breakdown,
       since: args.since,
       until: args.until,
       nowMs: ctx.clock.now(),
@@ -388,13 +402,19 @@ const mediaInsightsInput = {
   metrics: boundedArray(z.enum(MEDIA_METRICS), 1)
     .optional()
     .describe(
-      'Media metrics to fetch. Defaults to the set valid for the media: views, reach, likes, comments, saved, shares, total_interactions for a feed post or a reel, and views, reach, replies, shares, total_interactions, navigation when media_product_type is STORY. An absent or unrecognized media_product_type gets the feed set. Validity depends on the media type: "navigation" and "replies" are story-only and are refused for feed posts and reels.',
+      `Media metrics to fetch. Defaults to: views, reach, likes, comments, saved, shares, total_interactions for a feed post or a reel, and views, reach, replies, shares, total_interactions, navigation when media_product_type is STORY. An absent or unrecognized media_product_type gets the feed set. Validity depends on the media type: "navigation", "replies" and "link_clicks" are story-only; "crossposted_views", "reels_skip_rate", "ig_reels_avg_watch_time" and "ig_reels_video_view_total_time" are reels-only (crossposted_views errors for a reel not shared to Facebook); "follows", "profile_visits" and "profile_activity" are feed and story only; "reposts" and "facebook_views" apply to all three. A metric invalid for the named type is refused. ${FB_LOGIN_MEDIA_METRICS.join(', ')} are Facebook Login only and are refused on an ig-login profile (total_views for all three types; total_likes and total_comments for feed posts and reels). These newer metrics are opt-in and never part of a default.`,
     ),
   media_product_type: z
     .string()
     .optional()
     .describe(
       'Optional product-type hint (known values: FEED, REELS, STORY; obtainable from instagram_get_media). When supplied and recognized, it selects the default metric set for that type and invalid metric/type combinations are refused before the call is spent.',
+    ),
+  breakdown: z
+    .enum(MEDIA_BREAKDOWNS)
+    .optional()
+    .describe(
+      `Optional single dimension to break one metric down by. Each breakdown supports one metric; any other named metric is refused before the call, and with no metrics that one is requested: ${MEDIA_BREAKDOWNS.map((b) => `${b} (${MEDIA_BREAKDOWN_METRICS[b].join(', ')})`).join('; ')}.`,
     ),
 };
 
@@ -416,12 +436,15 @@ const mediaInsightsTool = defineTool({
     media_id: args.media_id,
     metrics: args.metrics ?? 'default',
     media_product_type: args.media_product_type,
+    breakdown: args.breakdown,
   }),
   handler: async (args, ctx) => {
     const result = await getMediaInsights(ctx.req, {
       mediaId: args.media_id,
       metrics: args.metrics,
       mediaProductType: args.media_product_type,
+      breakdown: args.breakdown,
+      authPath: ctx.profile.authPath,
     });
     return json(publishable({ ...result }), { pretty: ctx.settings.prettyJson });
   },

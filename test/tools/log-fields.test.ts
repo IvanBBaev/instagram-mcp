@@ -107,11 +107,18 @@ const CASES: LogCase[] = [
   // --- insights ------------------------------------------------------------
   {
     name: 'instagram_get_account_insights',
-    args: { period: 'day', metric_type: 'total_value', since: 1, until: 2 },
+    args: {
+      period: 'day',
+      metric_type: 'total_value',
+      breakdown: 'follow_type',
+      since: 1,
+      until: 2,
+    },
     expect: {
       metrics: 'default',
       period: 'day',
       metric_type: 'total_value',
+      breakdown: 'follow_type',
       since: 1,
       until: 2,
     },
@@ -119,7 +126,12 @@ const CASES: LogCase[] = [
   {
     name: 'instagram_get_media_insights',
     args: { media_id: 'M1', metrics: ['views'], media_product_type: 'REELS' },
-    expect: { media_id: 'M1', metrics: ['views'], media_product_type: 'REELS' },
+    expect: {
+      media_id: 'M1',
+      metrics: ['views'],
+      media_product_type: 'REELS',
+      breakdown: undefined,
+    },
   },
   {
     name: 'instagram_get_audience_demographics',

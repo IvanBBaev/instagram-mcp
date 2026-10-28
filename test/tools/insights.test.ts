@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { insightsTools } from '../../src/tools/insights.js';
 import {
+  ACCOUNT_BREAKDOWNS,
   ACCOUNT_METRICS,
   ACCOUNT_PERIODS,
+  DEFAULT_ACCOUNT_METRICS,
   DEMOGRAPHIC_BREAKDOWNS,
   DEMOGRAPHIC_METRICS,
   DEMOGRAPHIC_TIMEFRAMES,
@@ -64,7 +66,12 @@ after(() => {
 });
 
 /** A ToolContext whose `req` records outgoing options and returns a canned body. */
-function makeCtx(opts: { response?: unknown; accountId?: string; nowMs?: number }): {
+function makeCtx(opts: {
+  response?: unknown;
+  accountId?: string;
+  nowMs?: number;
+  authPath?: ResolvedProfile['authPath'];
+}): {
   ctx: ToolContext;
   calls: IgRequestOptions[];
 } {
@@ -75,7 +82,7 @@ function makeCtx(opts: { response?: unknown; accountId?: string; nowMs?: number 
   };
   const profile: ResolvedProfile = {
     name: 'default',
-    authPath: 'ig-login',
+    authPath: opts.authPath ?? 'ig-login',
     accessToken: 'tok',
     accountId: opts.accountId ?? '17841400000000000',
   };
@@ -185,6 +192,7 @@ test('each tool declares exactly the arguments its handler forwards', () => {
   const keys = (name: string): string[] => Object.keys(toolByName(name).input).sort();
 
   assert.deepEqual(keys('instagram_get_account_insights'), [
+    'breakdown',
     'metric_type',
     'metrics',
     'period',
@@ -192,6 +200,7 @@ test('each tool declares exactly the arguments its handler forwards', () => {
     'until',
   ]);
   assert.deepEqual(keys('instagram_get_media_insights'), [
+    'breakdown',
     'media_id',
     'media_product_type',
     'metrics',
@@ -460,7 +469,7 @@ test('account insights handler returns text + structuredContent and builds the r
   // The bare call asks for all eleven default metrics and the wire answers
   // `views` alone, so the other ten are named as missing rather than reading
   // as a complete answer.
-  const missing = ACCOUNT_METRICS.filter((m) => m !== 'views');
+  const missing = DEFAULT_ACCOUNT_METRICS.filter((m) => m !== 'views');
   assert.deepEqual(res.structuredContent, {
     metrics: wire.data,
     window: { since: undefined, until: undefined, clamped: false },
@@ -475,7 +484,7 @@ test('account insights handler returns text + structuredContent and builds the r
 
 test("account insights forwards the caller's metrics, period and metric_type verbatim", async () => {
   // Every one of these three arguments has a *silent* default one layer down:
-  // the api falls back to all eleven ACCOUNT_METRICS, `period=day` and
+  // the api falls back to the eleven DEFAULT_ACCOUNT_METRICS, `period=day` and
   // `metric_type=total_value`. So a handler that dropped an argument would still
   // produce a well-formed answer — just an answer to a different question than
   // the caller asked, at a different (and for the metric list, much larger)
@@ -635,6 +644,48 @@ test('media insights handler propagates the media-type matrix error (CC-INS-2)',
     (e: unknown) => isInstagramError(e) && e.kind === 'validation',
   );
   assert.equal(calls.length, 0);
+});
+
+test("media insights gates the total_* metrics on the profile's auth path (CC-INS-31)", async () => {
+  // The handler passes `ctx.profile.authPath` down; an ig-login profile is
+  // refused before the call, an fb-login one sends the request.
+  const igLogin = makeCtx({ response: { data: [] } });
+  await assert.rejects(
+    async () =>
+      toolByName('instagram_get_media_insights').handler(
+        { media_id: 'm1', metrics: ['total_views'], media_product_type: 'REELS' },
+        igLogin.ctx,
+      ),
+    (e: unknown) => isInstagramError(e) && e.kind === 'permission',
+  );
+  assert.equal(igLogin.calls.length, 0);
+
+  const fbLogin = makeCtx({ response: { data: [] }, authPath: 'fb-login' });
+  await toolByName('instagram_get_media_insights').handler(
+    { media_id: 'm1', metrics: ['total_views', 'reposts'], media_product_type: 'REELS' },
+    fbLogin.ctx,
+  );
+  assert.deepEqual(fbLogin.calls[0]?.params, { metric: 'total_views,reposts' });
+});
+
+test('both insights handlers forward breakdown (CC-INS-31)', async () => {
+  const media = makeCtx({ response: { data: [] } });
+  await toolByName('instagram_get_media_insights').handler(
+    { media_id: 'm1', media_product_type: 'STORY', breakdown: 'story_navigation_action_type' },
+    media.ctx,
+  );
+  assert.deepEqual(media.calls[0]?.params, {
+    metric: 'navigation',
+    breakdown: 'story_navigation_action_type',
+  });
+
+  const account = makeCtx({ response: { data: [] }, accountId: '42' });
+  await toolByName('instagram_get_account_insights').handler(
+    { breakdown: 'contact_button_type' },
+    account.ctx,
+  );
+  assert.equal(account.calls[0]?.params?.metric, 'profile_links_taps');
+  assert.equal(account.calls[0]?.params?.breakdown, 'contact_button_type');
 });
 
 test('media insights handler reads the MEDIA node and defaults to the post-2025 metric set', async () => {
@@ -1030,15 +1081,23 @@ test('account insights describes the post-2025 set, the default shape and the re
   );
 
   const metrics = describeOf(spec.input, 'metrics');
-  // The default list is interpolated from ACCOUNT_METRICS rather than typed out,
-  // so this asserts the text a model reads still names exactly the metrics the
-  // handler would send — a list that drifted from the enum would promise data
-  // the call does not ask for.
-  assertMentions(metrics, `Defaults to all of: ${ACCOUNT_METRICS.join(', ')};`);
+  // The default list is interpolated from DEFAULT_ACCOUNT_METRICS rather than
+  // typed out, so this asserts the text a model reads still names exactly the
+  // metrics the handler would send — a list that drifted from the default would
+  // promise data the call does not ask for.
+  assertMentions(metrics, `Defaults to: ${DEFAULT_ACCOUNT_METRICS.join(', ')};`);
+  assertMentions(metrics, '"reposts" is opt-in (never part of a default).');
+  // CC-INS-31: the breakdown's total_value-only rule and its metric pairs.
+  const breakdown = describeOf(spec.input, 'breakdown');
+  assertMentions(
+    breakdown,
+    'works with metric_type "total_value" only (refused with "time_series")',
+  );
+  assertMentions(breakdown, 'follow_type (reach, follows_and_unfollows)');
   // The default follows the metric_type (CC-INS-25): a model that reads "all
   // eleven" and asks for a time series has been told to make a call Graph
   // rejects as a whole.
-  assertMentions(metrics, 'with metric_type "time_series" it defaults to reach.');
+  assertMentions(metrics, 'with metric_type "time_series" it defaults to reach;');
   assertMentions(
     metrics,
     'Legacy names (impressions, profile_views, video_views) no longer exist and are rejected.',
@@ -1101,15 +1160,25 @@ test('media insights describes the product-type dependency and the empty-answer 
   // used to come back as a client-side refusal.
   assertMentions(
     metrics,
-    'Defaults to the set valid for the media: views, reach, likes, comments, saved, shares, ' +
+    'Defaults to: views, reach, likes, comments, saved, shares, ' +
       'total_interactions for a feed post or a reel, and views, reach, replies, shares, ' +
       'total_interactions, navigation when media_product_type is STORY.',
   );
   assertMentions(metrics, 'An absent or unrecognized media_product_type gets the feed set.');
   assertMentions(
     metrics,
-    'Validity depends on the media type: "navigation" and "replies" are story-only and are ' +
-      'refused for feed posts and reels.',
+    'Validity depends on the media type: "navigation", "replies" and "link_clicks" are story-only;',
+  );
+  // CC-INS-31: the Path B gate is named where the model chooses the metrics.
+  assertMentions(
+    metrics,
+    'total_views, total_likes, total_comments are Facebook Login only and are refused on an ' +
+      'ig-login profile',
+  );
+  assertMentions(metrics, 'These newer metrics are opt-in and never part of a default.');
+  assertMentions(
+    describeOf(spec.input, 'breakdown'),
+    'action_type (profile_activity); story_navigation_action_type (navigation).',
   );
 
   const hint = describeOf(spec.input, 'media_product_type');
@@ -1384,14 +1453,16 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
               'replies',
               'follows_and_unfollows',
               'profile_links_taps',
+              'reposts',
             ],
           },
           description:
-            'Account metrics to fetch (post-2025 set). Defaults to all of: views, reach, ' +
+            'Account metrics to fetch (post-2025 set). Defaults to: views, reach, ' +
             'accounts_engaged, total_interactions, likes, comments, shares, saves, replies, ' +
             'follows_and_unfollows, profile_links_taps; with metric_type "time_series" it ' +
-            'defaults to reach. Legacy names (impressions, ' +
-            'profile_views, video_views) no longer exist and are rejected.',
+            'defaults to reach; with a breakdown it defaults to the metrics that breakdown ' +
+            'supports. "reposts" is opt-in (never part of a default). Legacy names ' +
+            '(impressions, profile_views, video_views) no longer exist and are rejected.',
         },
         period: {
           type: 'string',
@@ -1404,6 +1475,17 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           description:
             'Return an aggregated "total_value" (default) or a per-interval "time_series". ' +
             'Instagram serves "time_series" only for: reach; any other metric with it is refused.',
+        },
+        breakdown: {
+          type: 'string',
+          enum: [...ACCOUNT_BREAKDOWNS],
+          description:
+            'Optional single dimension to break the totals down by; works with metric_type ' +
+            '"total_value" only (refused with "time_series"). Each breakdown supports only ' +
+            'some metrics, and any other named metric is refused before the call: ' +
+            'media_product_type (views, reach, total_interactions, likes, comments, shares, ' +
+            'saves); follow_type (reach, follows_and_unfollows); contact_button_type ' +
+            '(profile_links_taps).',
         },
         since: {
           type: 'integer',
@@ -1485,15 +1567,35 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
               'total_interactions',
               'navigation',
               'replies',
+              'reposts',
+              'facebook_views',
+              'crossposted_views',
+              'reels_skip_rate',
+              'ig_reels_avg_watch_time',
+              'ig_reels_video_view_total_time',
+              'link_clicks',
+              'follows',
+              'profile_visits',
+              'profile_activity',
+              'total_views',
+              'total_likes',
+              'total_comments',
             ],
           },
           description:
-            'Media metrics to fetch. Defaults to the set valid for the media: views, reach, ' +
-            'likes, comments, saved, shares, total_interactions for a feed post or a reel, and ' +
-            'views, reach, replies, shares, total_interactions, navigation when ' +
-            'media_product_type is STORY. An absent or unrecognized media_product_type gets the ' +
-            'feed set. Validity depends on the media type: "navigation" and "replies" are ' +
-            'story-only and are refused for feed posts and reels.',
+            'Media metrics to fetch. Defaults to: views, reach, likes, comments, saved, ' +
+            'shares, total_interactions for a feed post or a reel, and views, reach, replies, ' +
+            'shares, total_interactions, navigation when media_product_type is STORY. An ' +
+            'absent or unrecognized media_product_type gets the feed set. Validity depends on ' +
+            'the media type: "navigation", "replies" and "link_clicks" are story-only; ' +
+            '"crossposted_views", "reels_skip_rate", "ig_reels_avg_watch_time" and ' +
+            '"ig_reels_video_view_total_time" are reels-only (crossposted_views errors for a ' +
+            'reel not shared to Facebook); "follows", "profile_visits" and "profile_activity" ' +
+            'are feed and story only; "reposts" and "facebook_views" apply to all three. A ' +
+            'metric invalid for the named type is refused. total_views, total_likes, ' +
+            'total_comments are Facebook Login only and are refused on an ig-login profile ' +
+            '(total_views for all three types; total_likes and total_comments for feed posts ' +
+            'and reels). These newer metrics are opt-in and never part of a default.',
         },
         media_product_type: {
           type: 'string',
@@ -1502,6 +1604,15 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
             'instagram_get_media). When supplied and recognized, it selects the default metric ' +
             'set for that type and invalid metric/type combinations are refused before the ' +
             'call is spent.',
+        },
+        breakdown: {
+          type: 'string',
+          enum: ['action_type', 'story_navigation_action_type'],
+          description:
+            'Optional single dimension to break one metric down by. Each breakdown supports ' +
+            'one metric; any other named metric is refused before the call, and with no ' +
+            'metrics that one is requested: action_type (profile_activity); ' +
+            'story_navigation_action_type (navigation).',
         },
       },
       required: ['media_id'],
@@ -1722,7 +1833,7 @@ test('a metric row Meta typed loosely costs the caller that field, not the call 
     );
     // Only the three rows with a string name count as delivered; the default
     // metrics they do not cover are named, through the live output validator.
-    const missing = ACCOUNT_METRICS.filter((m) => !['views', 'reach', 'likes'].includes(m));
+    const missing = DEFAULT_ACCOUNT_METRICS.filter((m) => !['views', 'reach', 'likes'].includes(m));
     assert.deepEqual(sc.missingMetrics, missing);
     assert.deepEqual(sc.notes, [missingNote(missing)]);
   } finally {
@@ -2092,10 +2203,10 @@ test('a `data` that is not a list is an empty page, and a real `paging` object s
     assert.deepEqual(sc.paging, { cursors: { after: 'C1' } });
     // ...and it is said to be unreadable, not "no data" (CC-INS-22), through
     // the live output validator.
-    assert.deepEqual(sc.missingMetrics, [...ACCOUNT_METRICS]);
+    assert.deepEqual(sc.missingMetrics, [...DEFAULT_ACCOUNT_METRICS]);
     assert.deepEqual(sc.notes, [
       'Instagram returned the metric list in a shape that is not a list, so none of the ' +
-        `requested metric(s) could be read: ${ACCOUNT_METRICS.join(', ')}. They are unknown, not zero.`,
+        `requested metric(s) could be read: ${DEFAULT_ACCOUNT_METRICS.join(', ')}. They are unknown, not zero.`,
     ]);
   } finally {
     await live.close();

@@ -420,7 +420,7 @@ async function main() {
     igId,
     authPath: profile.authPath,
     accessToken: profile.accessToken,
-    accountMetrics: [...dist.insights.ACCOUNT_METRICS],
+    accountMetrics: [...dist.insights.DEFAULT_ACCOUNT_METRICS],
     mediaMetrics: [...dist.insights.DEFAULT_MEDIA_METRICS],
     sinceSec: nowSec - 7 * 24 * 60 * 60,
     untilSec: nowSec,

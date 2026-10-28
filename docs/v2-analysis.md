@@ -89,7 +89,7 @@ Effort: S < ½ day, M ≈ 1–2 days, L ≥ 3 days.
 | @mentions read (`mentioned_media`, `mentioned_comment`) | B (A partial) | S | GO | Already listed in architecture.md under comments, but no tool exists. |
 | Replies pager (`GET /{comment-id}/replies`) | A+B | S | GO | Today replies come back only inline, with a truncation flag. |
 | Hashtag budget read (`recently_searched_hashtags`) | B | S | GO | Complements the local 30-per-7-day tracker. |
-| Insights refresh: `reels_skip_rate`, `reposts`, `crossposted_views`, `facebook_views`, `total_*` (B), story `link_clicks` (B), reels watch-time, `breakdown` support | A/B | M | GO | Purge the deprecated metrics in the same change. Removing an accepted enum value is **major**, so it belongs here. |
+| Insights refresh: `reels_skip_rate`, `reposts`, `crossposted_views`, `facebook_views`, `total_*` (B), story `link_clicks` (B), reels watch-time, `breakdown` support | A/B | M | GO | Purge the deprecated metrics in the same change. Removing an accepted enum value is **major**, so it belongs here. **Additive half done 2026-10-28** (CC-INS-31): the new media metrics (per type, `total_*` refused off `fb-login`), account `reposts` and `breakdown` on both tools, all opt-in; no accepted value removed. Story `link_clicks` is not gated to Path B, because Meta's reference does not restrict it (*[verify]*). **Purge still pending the owner decision (§8 q3):** the current enums hold none of the deprecated metrics; the remaining candidates are the demographics timeframes `last_14_days`, `last_30_days`, `last_90_days` and `prev_month` (which Meta no longer supports). |
 | New media fields: `reposts_count`, `saved_count`, `shares_count`, `media_audio_type` | B | S | GO | Additive output, so it is minor. Could land in 1.x. |
 | Resumable upload (`rupload.facebook.com`) | B | M | DEFER | Path B only. It adds an allowlisted host. Revisit after the upload helper. |
 | Audio API | B | S | DEFER | No operator ask yet. |
@@ -136,7 +136,7 @@ over becomes the single 2.0 "tightening" batch below, so 1.x stays additive.
 | Insights `since`/`until` | Only the 90-day retention is enforced | Add the 30-day window cap. |
 | Discovery hashtag limit, reel `thumbOffset` max, duplicate `userTags` / carousel children | Accepted | Refuse before the call. |
 | `limit` versus `IG_MAX_ITEMS` cursor | The cursor semantics differ when the cap applies | Pick one meaning and document it. |
-| Deprecated insights metrics in input enums | Still accepted, where they remain in the enums | Remove them (§4.1). |
+| Deprecated insights metrics in input enums | Still accepted, where they remain in the enums | Remove them (§4.1). As of 2026-10-28 the metric enums hold none; the demographics timeframes `last_14_days`, `last_30_days`, `last_90_days` and `prev_month` remain (owner decision, §8 q3). |
 | Package membership | Moving a tool between packages changes what a profile exposes (precedent: the comment toggle moved from `media` to `comments`) | Have stability.md §1 classify this as major **in 1.0**, so 2.0 can carry any re-grouping, for example a new `engagement` package. |
 | Absurd `Retry-After` | Fails fast with a wait estimate | Owner choice: keep it, or back off with a cap. Changing it alters behaviour on a documented error path. |
 

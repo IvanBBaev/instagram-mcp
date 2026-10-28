@@ -77,6 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, so Path A reads are unchanged. A count that is not a non-negative safe
   integer, or an audio type that is not a plain vocabulary token, is dropped
   rather than failing the read. Graph behaviour on each edge is *[verify]*.
+- Insights refresh (additive): `instagram_get_media_insights` accepts
+  `reposts`, `facebook_views`, `follows`, `profile_visits`, `profile_activity`
+  (feed and story), `crossposted_views`, `reels_skip_rate`,
+  `ig_reels_avg_watch_time` and `ig_reels_video_view_total_time` (reels),
+  story `link_clicks`, and `total_views`, `total_likes` and `total_comments`
+  (Facebook Login only: refused on an `ig-login` profile before the call).
+  `instagram_get_account_insights` accepts `reposts`. Both tools take an
+  optional `breakdown` (account: `media_product_type`, `follow_type`,
+  `contact_button_type`, `total_value` only; media: `action_type` for
+  `profile_activity`, `story_navigation_action_type` for `navigation`); a
+  metric the breakdown does not support is refused before the call, and with
+  no `metrics` the breakdown's own metrics are requested. Every new metric is
+  opt-in, so the defaults are unchanged, and no accepted value was removed
+  (CC-INS-31). Path A support of `link_clicks`, `facebook_views` and
+  `crossposted_views` is *[verify]*.
 
 ### Changed
 

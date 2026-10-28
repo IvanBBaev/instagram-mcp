@@ -201,6 +201,10 @@ function argsFor(name: string, apply: boolean): Record<string, unknown> {
     if (key in BASE_ARGS) args[key] = BASE_ARGS[key];
   }
   if (name === 'instagram_post_story') delete args.videoUrl;
+  // `breakdown: 'country'` is a demographics dimension; the account and media
+  // insights tools take their own (optional) breakdown vocabularies, so they
+  // are probed without one.
+  if (name !== 'instagram_get_audience_demographics') delete args.breakdown;
   if ('apply' in spec.input) args.apply = apply;
   return args;
 }

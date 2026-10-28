@@ -6,13 +6,22 @@ import {
   getAudienceDemographics,
   getMediaInsights,
   getOnlineFollowers,
+  validateBreakdownMetrics,
   validateMediaMetrics,
+  validateMediaMetricsForPath,
+  ACCOUNT_BREAKDOWN_METRICS,
+  ACCOUNT_BREAKDOWNS,
   ACCOUNT_METRICS,
   ACCOUNT_PERIODS,
+  DEFAULT_ACCOUNT_METRICS,
   DEFAULT_MEDIA_METRICS,
   DEMOGRAPHIC_BREAKDOWNS,
   DEMOGRAPHIC_METRICS,
   DEMOGRAPHIC_TIMEFRAMES,
+  FB_LOGIN_MEDIA_METRICS,
+  MEDIA_BREAKDOWN_METRICS,
+  MEDIA_BREAKDOWNS,
+  MEDIA_DEFAULT_METRICS_BY_TYPE,
   MEDIA_METRICS,
   MEDIA_METRIC_MATRIX,
   METRIC_TYPES,
@@ -110,8 +119,42 @@ test('ACCOUNT_METRICS is exactly the post-2025 account set (CC-INS-7)', () => {
       'replies',
       'follows_and_unfollows',
       'profile_links_taps',
+      'reposts',
     ],
   );
+  // The default is the original eleven, not the whole vocabulary: `reposts`
+  // (added 2026-10-28) is opt-in, so a caller that names no metrics sends the
+  // request it sent before the vocabulary grew.
+  assert.deepEqual([...DEFAULT_ACCOUNT_METRICS], ACCOUNT_METRICS.slice(0, 11));
+  assert.equal(DEFAULT_ACCOUNT_METRICS.includes('reposts'), false);
+});
+
+test('the account breakdown vocabularies pin the documented dimension/metric pairs (CC-INS-31)', () => {
+  // Graph fails the whole request when a named metric does not support the
+  // breakdown, so this table is the guard that keeps the call from being spent.
+  assert.deepEqual(
+    [...ACCOUNT_BREAKDOWNS],
+    ['media_product_type', 'follow_type', 'contact_button_type'],
+  );
+  assert.deepEqual(
+    { ...ACCOUNT_BREAKDOWN_METRICS },
+    {
+      media_product_type: [
+        'views',
+        'reach',
+        'total_interactions',
+        'likes',
+        'comments',
+        'shares',
+        'saves',
+      ],
+      follow_type: ['reach', 'follows_and_unfollows'],
+      contact_button_type: ['profile_links_taps'],
+    },
+  );
+  for (const metrics of Object.values(ACCOUNT_BREAKDOWN_METRICS)) {
+    for (const m of metrics) assert.ok(ACCOUNT_METRICS.includes(m), `${m} is an account metric`);
+  }
 });
 
 test('the media metric vocabularies match the per-product-type matrix (CC-INS-2)', () => {
@@ -133,19 +176,103 @@ test('the media metric vocabularies match the per-product-type matrix (CC-INS-2)
       'total_interactions',
       'navigation',
       'replies',
+      'reposts',
+      'facebook_views',
+      'crossposted_views',
+      'reels_skip_rate',
+      'ig_reels_avg_watch_time',
+      'ig_reels_video_view_total_time',
+      'link_clicks',
+      'follows',
+      'profile_visits',
+      'profile_activity',
+      'total_views',
+      'total_likes',
+      'total_comments',
     ],
   );
   assert.deepEqual(
     [...DEFAULT_MEDIA_METRICS],
     ['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions'],
   );
+  // The defaults per type are the pre-2026-10-28 rows, unchanged: every metric
+  // added since is opt-in, so an argument-free call is the request it was.
   assert.deepEqual(
-    { ...MEDIA_METRIC_MATRIX },
+    { ...MEDIA_DEFAULT_METRICS_BY_TYPE },
     {
       FEED: ['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions'],
       REELS: ['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions'],
       STORY: ['views', 'reach', 'replies', 'shares', 'total_interactions', 'navigation'],
     },
+  );
+  assert.deepEqual(
+    { ...MEDIA_METRIC_MATRIX },
+    {
+      FEED: [
+        'views',
+        'reach',
+        'likes',
+        'comments',
+        'saved',
+        'shares',
+        'total_interactions',
+        'reposts',
+        'facebook_views',
+        'follows',
+        'profile_visits',
+        'profile_activity',
+        'total_views',
+        'total_likes',
+        'total_comments',
+      ],
+      REELS: [
+        'views',
+        'reach',
+        'likes',
+        'comments',
+        'saved',
+        'shares',
+        'total_interactions',
+        'reposts',
+        'facebook_views',
+        'crossposted_views',
+        'reels_skip_rate',
+        'ig_reels_avg_watch_time',
+        'ig_reels_video_view_total_time',
+        'total_views',
+        'total_likes',
+        'total_comments',
+      ],
+      STORY: [
+        'views',
+        'reach',
+        'replies',
+        'shares',
+        'total_interactions',
+        'navigation',
+        'reposts',
+        'facebook_views',
+        'link_clicks',
+        'follows',
+        'profile_visits',
+        'profile_activity',
+        'total_views',
+      ],
+    },
+  );
+  // Every default is valid for its own type, and every matrix member is a
+  // vocabulary member.
+  for (const [type, defaults] of Object.entries(MEDIA_DEFAULT_METRICS_BY_TYPE)) {
+    for (const m of defaults) assert.ok(MEDIA_METRIC_MATRIX[type]?.includes(m), `${type}: ${m}`);
+  }
+  for (const row of Object.values(MEDIA_METRIC_MATRIX)) {
+    for (const m of row) assert.ok(MEDIA_METRICS.includes(m), m);
+  }
+  assert.deepEqual([...FB_LOGIN_MEDIA_METRICS], ['total_views', 'total_likes', 'total_comments']);
+  assert.deepEqual([...MEDIA_BREAKDOWNS], ['action_type', 'story_navigation_action_type']);
+  assert.deepEqual(
+    { ...MEDIA_BREAKDOWN_METRICS },
+    { action_type: ['profile_activity'], story_navigation_action_type: ['navigation'] },
   );
 });
 
@@ -238,7 +365,7 @@ test('getAccountInsights targets /{ig-id}/insights with the default metric set +
     method: 'GET',
     path: '/123/insights',
     params: {
-      metric: ACCOUNT_METRICS.join(','),
+      metric: DEFAULT_ACCOUNT_METRICS.join(','),
       period: 'day',
       metric_type: 'total_value',
       since: undefined,
@@ -789,7 +916,7 @@ test('getMediaInsights matches media_product_type case-insensitively when refusi
       isInstagramError(e) &&
       e.kind === 'validation' &&
       e.message ===
-        'Metric(s) likes are not valid for media_product_type STORY. Valid metrics for this type: views, reach, replies, shares, total_interactions, navigation.',
+        `Metric(s) likes are not valid for media_product_type STORY. Valid metrics for this type: ${(MEDIA_METRIC_MATRIX.STORY ?? []).join(', ')}.`,
   );
   assert.equal(calls.length, 0);
 });
@@ -816,7 +943,7 @@ test('the refusal names only the offending metrics, not the whole request (CC-IN
       isInstagramError(e) &&
       e.kind === 'validation' &&
       e.message ===
-        'Metric(s) navigation are not valid for media_product_type FEED. Valid metrics for this type: views, reach, likes, comments, saved, shares, total_interactions.',
+        `Metric(s) navigation are not valid for media_product_type FEED. Valid metrics for this type: ${(MEDIA_METRIC_MATRIX.FEED ?? []).join(', ')}.`,
   );
   assert.equal(calls.length, 0);
 
@@ -1274,7 +1401,11 @@ test('getOnlineFollowers throws validation without an account id', async () => {
 /** Every flat vocabulary the module freezes, with the name to report. */
 const VOCABULARIES: readonly (readonly [string, readonly string[]])[] = [
   ['ACCOUNT_METRICS', ACCOUNT_METRICS],
+  ['DEFAULT_ACCOUNT_METRICS', DEFAULT_ACCOUNT_METRICS],
+  ['ACCOUNT_BREAKDOWNS', ACCOUNT_BREAKDOWNS],
   ['MEDIA_METRICS', MEDIA_METRICS],
+  ['FB_LOGIN_MEDIA_METRICS', FB_LOGIN_MEDIA_METRICS],
+  ['MEDIA_BREAKDOWNS', MEDIA_BREAKDOWNS],
   ['DEFAULT_MEDIA_METRICS', DEFAULT_MEDIA_METRICS],
   ['DEMOGRAPHIC_METRICS', DEMOGRAPHIC_METRICS],
   ['DEMOGRAPHIC_BREAKDOWNS', DEMOGRAPHIC_BREAKDOWNS],
@@ -1372,6 +1503,224 @@ test('MEDIA_METRIC_MATRIX is frozen at both levels', () => {
     assert.throws(() => mutable.pop(), TypeError, `${type} accepts a narrowing`);
     assert.deepEqual(mutable, before, `${type}: a write got through`);
   }
+});
+
+test('the per-type defaults and both breakdown tables are frozen at both levels (CC-INS-31)', () => {
+  // The same two-level rule as the matrix: a push onto a breakdown's metric list
+  // is what would let an unsupported metric through the CC-INS-31 refusal, and a
+  // push onto a default row would silently grow every argument-free request.
+  const tables: ReadonlyArray<readonly [string, Readonly<Record<string, readonly string[]>>]> = [
+    ['MEDIA_DEFAULT_METRICS_BY_TYPE', MEDIA_DEFAULT_METRICS_BY_TYPE],
+    ['ACCOUNT_BREAKDOWN_METRICS', ACCOUNT_BREAKDOWN_METRICS],
+    ['MEDIA_BREAKDOWN_METRICS', MEDIA_BREAKDOWN_METRICS],
+  ];
+  for (const [name, table] of tables) {
+    assert.ok(Object.isFrozen(table), `${name} must stay frozen`);
+    const mutable = table as Record<string, string[]>;
+    assert.throws(() => {
+      mutable.SMUGGLED = [];
+    }, TypeError);
+    for (const [key, list] of Object.entries(table)) {
+      assert.ok(Object.isFrozen(list), `${name}.${key} must stay frozen`);
+      const before = [...list];
+      assert.throws(() => (list as string[]).push('smuggled'), TypeError, `${name}.${key}`);
+      assert.deepEqual([...list], before);
+    }
+  }
+});
+
+// --- breakdowns and the Facebook-Login-only media metrics (CC-INS-31) -------
+
+test('an account breakdown with no metrics asks for exactly the metrics it supports (CC-INS-31)', async () => {
+  for (const breakdown of ACCOUNT_BREAKDOWNS) {
+    const { req, calls } = recordingReq(accountWire);
+    await getAccountInsights(req, { accountId: '123', breakdown });
+    assert.deepEqual(calls[0], {
+      method: 'GET',
+      path: '/123/insights',
+      params: {
+        metric: ACCOUNT_BREAKDOWN_METRICS[breakdown].join(','),
+        period: 'day',
+        metric_type: 'total_value',
+        breakdown,
+        since: undefined,
+        until: undefined,
+      },
+    });
+  }
+});
+
+test('an account breakdown keeps the metrics the caller named when each supports it', async () => {
+  const { req, calls } = recordingReq(accountWire);
+  await getAccountInsights(req, {
+    accountId: '123',
+    metrics: ['reach'],
+    breakdown: 'follow_type',
+    metricType: 'total_value',
+  });
+  assert.equal(calls[0]?.params?.metric, 'reach');
+  assert.equal(calls[0]?.params?.breakdown, 'follow_type');
+});
+
+test('an account breakdown with a metric it does not support is refused before the call (CC-INS-31)', async () => {
+  const { req, calls } = recordingReq(accountWire);
+  await assert.rejects(
+    () =>
+      getAccountInsights(req, {
+        accountId: '123',
+        metrics: ['reach', 'accounts_engaged', 'reposts'],
+        breakdown: 'follow_type',
+      }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'validation' &&
+      e.message ===
+        'Metric(s) accounts_engaged, reposts cannot be broken down by follow_type. Breakdown follow_type is available only for: reach, follows_and_unfollows. Request the other metrics in a separate call without breakdown.',
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('an account breakdown with time_series is refused before the call (CC-INS-31)', async () => {
+  const { req, calls } = recordingReq(accountWire);
+  await assert.rejects(
+    () =>
+      getAccountInsights(req, {
+        accountId: '123',
+        metricType: 'time_series',
+        breakdown: 'follow_type',
+      }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'validation' &&
+      e.message ===
+        'breakdown follow_type works only with metric_type total_value; a time_series result carries no breakdown.',
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('account reposts is accepted by name but never sent by default', async () => {
+  const { req, calls } = recordingReq(accountWire);
+  await getAccountInsights(req, { accountId: '123', metrics: ['reposts'] });
+  assert.equal(calls[0]?.params?.metric, 'reposts');
+  const dflt = recordingReq(accountWire);
+  await getAccountInsights(dflt.req, { accountId: '123' });
+  assert.equal(String(dflt.calls[0]?.params?.metric).split(',').includes('reposts'), false);
+});
+
+test('a media breakdown with no metrics asks for its one metric and sends the breakdown (CC-INS-31)', async () => {
+  const { req, calls } = recordingReq(mediaWire);
+  await getMediaInsights(req, {
+    mediaId: 'm1',
+    mediaProductType: 'STORY',
+    breakdown: 'story_navigation_action_type',
+  });
+  assert.deepEqual(calls[0], {
+    method: 'GET',
+    path: '/m1/insights',
+    params: { metric: 'navigation', breakdown: 'story_navigation_action_type' },
+  });
+  const feed = recordingReq(mediaWire);
+  await getMediaInsights(feed.req, { mediaId: 'm1', breakdown: 'action_type' });
+  assert.deepEqual(feed.calls[0]?.params, { metric: 'profile_activity', breakdown: 'action_type' });
+});
+
+test('a media breakdown with a metric it does not support is refused before the call (CC-INS-31)', async () => {
+  const { req, calls } = recordingReq(mediaWire);
+  await assert.rejects(
+    () =>
+      getMediaInsights(req, {
+        mediaId: 'm1',
+        metrics: ['profile_activity', 'reach'],
+        mediaProductType: 'FEED',
+        breakdown: 'action_type',
+      }),
+    (e: unknown) =>
+      isInstagramError(e) &&
+      e.kind === 'validation' &&
+      e.message ===
+        'Metric(s) reach cannot be broken down by action_type. Breakdown action_type is available only for: profile_activity. Request the other metrics in a separate call without breakdown.',
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('the total_* media metrics are refused off fb-login before the call (CC-INS-31)', async () => {
+  // Meta documents total_views / total_likes / total_comments for Instagram API
+  // with Facebook Login only. An omitted auth path is Path A.
+  for (const authPath of ['ig-login', undefined] as const) {
+    const { req, calls } = recordingReq(mediaWire);
+    await assert.rejects(
+      () =>
+        getMediaInsights(req, {
+          mediaId: 'm1',
+          metrics: ['views', 'total_views', 'total_likes'],
+          mediaProductType: 'REELS',
+          authPath,
+        }),
+      (e: unknown) =>
+        isInstagramError(e) &&
+        e.kind === 'permission' &&
+        e.message ===
+          "Metric(s) total_views, total_likes are available with Instagram API with Facebook Login only (an fb-login profile); this profile's auth path is ig-login. Use views, likes or comments for the organic counts.",
+    );
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('the total_* media metrics are sent on fb-login, and the product-type matrix still applies', async () => {
+  const { req, calls } = recordingReq(mediaWire);
+  await getMediaInsights(req, {
+    mediaId: 'm1',
+    metrics: ['total_views', 'total_likes', 'total_comments'],
+    mediaProductType: 'FEED',
+    authPath: 'fb-login',
+  });
+  assert.deepEqual(calls[0]?.params, { metric: 'total_views,total_likes,total_comments' });
+  // total_likes is not documented for a story: the matrix refuses it first.
+  await assert.rejects(
+    () =>
+      getMediaInsights(req, {
+        mediaId: 'm1',
+        metrics: ['total_likes'],
+        mediaProductType: 'STORY',
+        authPath: 'fb-login',
+      }),
+    (e: unknown) => isInstagramError(e) && e.kind === 'validation',
+  );
+  assert.equal(calls.length, 1);
+});
+
+test('the new opt-in media metrics are accepted for their documented types only', async () => {
+  const accepted: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['REELS', ['reposts', 'facebook_views', 'crossposted_views', 'reels_skip_rate']],
+    ['REELS', ['ig_reels_avg_watch_time', 'ig_reels_video_view_total_time']],
+    ['STORY', ['link_clicks', 'follows', 'profile_visits', 'profile_activity', 'facebook_views']],
+    ['FEED', ['reposts', 'follows', 'profile_visits', 'profile_activity', 'facebook_views']],
+  ];
+  for (const [type, metrics] of accepted) {
+    assert.doesNotThrow(() => validateMediaMetrics(metrics as never, type), type);
+  }
+  const refused: ReadonlyArray<readonly [string, string]> = [
+    ['FEED', 'crossposted_views'],
+    ['FEED', 'reels_skip_rate'],
+    ['STORY', 'ig_reels_avg_watch_time'],
+    ['REELS', 'link_clicks'],
+    ['REELS', 'profile_activity'],
+    ['FEED', 'link_clicks'],
+  ];
+  for (const [type, metric] of refused) {
+    assert.throws(() => validateMediaMetrics([metric] as never, type), `${type}: ${metric}`);
+  }
+});
+
+test('the path and breakdown validators are no-ops when nothing is out of bounds', () => {
+  assert.doesNotThrow(() => validateMediaMetricsForPath(['total_views'], 'fb-login'));
+  assert.doesNotThrow(() => validateMediaMetricsForPath(['views', 'reposts'], 'ig-login'));
+  assert.doesNotThrow(() => validateMediaMetricsForPath(['views'], undefined));
+  assert.doesNotThrow(() => validateBreakdownMetrics(['reach'], 'follow_type', ['reach']));
+  assert.throws(
+    () => validateMediaMetricsForPath(['total_comments'], undefined),
+    (e: unknown) => isInstagramError(e) && e.message.startsWith('Metric(s) total_comments are'),
+  );
 });
 
 /** Every insights reader, driven with one canned body. */

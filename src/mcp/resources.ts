@@ -36,12 +36,17 @@ import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ToolCaller } from './registry.js';
 import {
+  ACCOUNT_BREAKDOWN_METRICS,
   ACCOUNT_METRICS,
   ACCOUNT_PERIODS,
+  DEFAULT_ACCOUNT_METRICS,
   DEFAULT_MEDIA_METRICS,
   DEMOGRAPHIC_BREAKDOWNS,
   DEMOGRAPHIC_METRICS,
   DEMOGRAPHIC_TIMEFRAMES,
+  FB_LOGIN_MEDIA_METRICS,
+  MEDIA_BREAKDOWN_METRICS,
+  MEDIA_DEFAULT_METRICS_BY_TYPE,
   MEDIA_METRICS,
   MEDIA_METRIC_MATRIX,
   METRIC_TYPES,
@@ -92,18 +97,21 @@ export function metricGlossary(): Record<string, unknown> {
     account: {
       tool: 'instagram_get_account_insights',
       metrics: [...ACCOUNT_METRICS],
+      defaultMetrics: [...DEFAULT_ACCOUNT_METRICS],
       periods: [...ACCOUNT_PERIODS],
       metricTypes: [...METRIC_TYPES],
       timeSeriesMetrics: [...TIME_SERIES_ACCOUNT_METRICS],
+      breakdowns: copyMap(ACCOUNT_BREAKDOWN_METRICS),
       retentionDays: RETENTION_DAYS,
     },
     media: {
       tool: 'instagram_get_media_insights',
       metrics: [...MEDIA_METRICS],
       defaultMetrics: [...DEFAULT_MEDIA_METRICS],
-      byProductType: Object.fromEntries(
-        Object.entries(MEDIA_METRIC_MATRIX).map(([type, metrics]) => [type, [...metrics]]),
-      ),
+      byProductType: copyMap(MEDIA_METRIC_MATRIX),
+      defaultsByProductType: copyMap(MEDIA_DEFAULT_METRICS_BY_TYPE),
+      fbLoginOnly: [...FB_LOGIN_MEDIA_METRICS],
+      breakdowns: copyMap(MEDIA_BREAKDOWN_METRICS),
     },
     demographics: {
       tool: 'instagram_get_audience_demographics',
@@ -161,6 +169,11 @@ const glossary: ResourceSpec = Object.freeze({
   ]),
   body: () => JSON.stringify(metricGlossary(), null, 2),
 });
+
+/** A frozen `{ key: readonly string[] }` map, copied into plain arrays. */
+function copyMap(map: Readonly<Record<string, readonly string[]>>): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(map).map(([key, values]) => [key, [...values]]));
+}
 
 /** Every resource this server knows, in listing order. */
 export const RESOURCES: readonly ResourceSpec[] = Object.freeze([

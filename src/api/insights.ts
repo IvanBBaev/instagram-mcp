@@ -32,14 +32,27 @@
  * §6 and are cited at the individual sites they constrain.
  *
  * Metric availability can differ by auth path, but docs/tools.md marks none of
- * these tools path-specific, so the specs leave `ToolSpec.paths` undefined.
+ * these tools path-specific, so the specs leave `ToolSpec.paths` undefined. The
+ * one per-metric path rule — the Facebook-Login-only `total_*` media metrics —
+ * is enforced per call from the profile's auth path, and the `breakdown`
+ * combination rules sit beside it (CC-INS-31).
  */
 import { InstagramError } from '../core/types.js';
-import type { GraphPaging, IgRequestFn, IgRequestOptions } from '../core/types.js';
+import type { AuthPath, GraphPaging, IgRequestFn, IgRequestOptions } from '../core/types.js';
 
 // --- Metric / period / breakdown vocabularies (post-2025 set) ---------------
 
-/** Account-level metrics (docs/tools.md §insights `get_account_insights`). */
+/**
+ * Account-level metrics (docs/tools.md §insights `get_account_insights`).
+ *
+ * `reposts` was added 2026-10-28 from Meta's account-insights reference
+ * (*[verified 2026-10-28 — Instagram Account Insights reference,
+ * developers.facebook.com/docs/instagram-platform/api-reference/instagram-user/insights]*:
+ * period `day`, `total_value` only, no breakdown, no login restriction). It is
+ * accepted but NOT part of {@link DEFAULT_ACCOUNT_METRICS}: a name Graph does
+ * not know fails the whole request, and no live call has met it yet
+ * *[verify — live: `GET /{ig-id}/insights?metric=reposts&period=day&metric_type=total_value` on both hosts]*.
+ */
 export const ACCOUNT_METRICS = Object.freeze([
   'views',
   'reach',
@@ -52,14 +65,81 @@ export const ACCOUNT_METRICS = Object.freeze([
   'replies',
   'follows_and_unfollows',
   'profile_links_taps',
+  'reposts',
 ] as const);
 export type AccountMetric = (typeof ACCOUNT_METRICS)[number];
 
 /**
+ * The account metrics requested when the caller names none (and names no
+ * breakdown or time series). This is the eleven-metric set the server has
+ * always sent; a metric added to {@link ACCOUNT_METRICS} later joins it only
+ * after a live call has confirmed it, so an addition can never break the
+ * default report.
+ */
+export const DEFAULT_ACCOUNT_METRICS: readonly AccountMetric[] = Object.freeze([
+  'views',
+  'reach',
+  'accounts_engaged',
+  'total_interactions',
+  'likes',
+  'comments',
+  'shares',
+  'saves',
+  'replies',
+  'follows_and_unfollows',
+  'profile_links_taps',
+]);
+
+/**
+ * Account-insights `breakdown` dimensions (one per call), and which metrics
+ * each one may be sent with (CC-INS-31). From Meta's account metrics table
+ * *[verified 2026-10-28 — Instagram Account Insights reference]*. A breakdown
+ * works only with `metric_type=total_value`, and naming a metric that does not
+ * support it fails the whole request, so both are refused before the call.
+ *
+ * `follower_type` is listed in that table for `views` but has no documented
+ * values and no entry in the breakdown section, so it is left out
+ * *[verify — live: `GET /{ig-id}/insights?metric=views&period=day&metric_type=total_value&breakdown=follower_type`]*.
+ */
+export const ACCOUNT_BREAKDOWNS = Object.freeze([
+  'media_product_type',
+  'follow_type',
+  'contact_button_type',
+] as const);
+export type AccountBreakdown = (typeof ACCOUNT_BREAKDOWNS)[number];
+
+/** The metrics each {@link ACCOUNT_BREAKDOWNS} dimension may be sent with. */
+export const ACCOUNT_BREAKDOWN_METRICS: Readonly<
+  Record<AccountBreakdown, readonly AccountMetric[]>
+> = Object.freeze({
+  media_product_type: Object.freeze([
+    'views',
+    'reach',
+    'total_interactions',
+    'likes',
+    'comments',
+    'shares',
+    'saves',
+  ] as const),
+  follow_type: Object.freeze(['reach', 'follows_and_unfollows'] as const),
+  contact_button_type: Object.freeze(['profile_links_taps'] as const),
+});
+
+/**
  * Media-level metrics. Validity depends on `media_product_type` — see
- * {@link MEDIA_METRIC_MATRIX} (CC-INS-2). `navigation`/`replies` are story-only.
- * (Note the account/media naming quirk Meta keeps: account uses `saves`, media
- * uses `saved`.)
+ * {@link MEDIA_METRIC_MATRIX} (CC-INS-2). (Note the account/media naming quirk
+ * Meta keeps: account uses `saves`, media uses `saved`.)
+ *
+ * The first nine are the original post-2025 set. The rest were added
+ * 2026-10-28 from Meta's media-insights reference *[verified 2026-10-28 —
+ * Instagram Media Insights reference,
+ * developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights]*;
+ * which product types take each is in {@link MEDIA_METRIC_MATRIX}, and the
+ * three `total_*` metrics are Facebook Login only ({@link FB_LOGIN_MEDIA_METRICS}).
+ * None of them is in a default set, so a caller gets one only by naming it.
+ * Retired names (`impressions`, `plays`, `clips_replays_count`,
+ * `ig_reels_aggregated_all_plays_count`, `video_views`) are not, and never
+ * were, in this list (CC-INS-7).
  */
 export const MEDIA_METRICS = Object.freeze([
   'views',
@@ -71,14 +151,42 @@ export const MEDIA_METRICS = Object.freeze([
   'total_interactions',
   'navigation',
   'replies',
+  'reposts',
+  'facebook_views',
+  'crossposted_views',
+  'reels_skip_rate',
+  'ig_reels_avg_watch_time',
+  'ig_reels_video_view_total_time',
+  'link_clicks',
+  'follows',
+  'profile_visits',
+  'profile_activity',
+  'total_views',
+  'total_likes',
+  'total_comments',
 ] as const);
 export type MediaMetric = (typeof MEDIA_METRICS)[number];
 
 /**
+ * Media metrics Meta serves on the Facebook-Login host (`fb-login`,
+ * graph.facebook.com) only: "These total metrics are available for Instagram
+ * API with Facebook Login only" *[verified 2026-10-28 — Instagram Media
+ * Insights reference]*. They include engagement from promoted media. An
+ * `ig-login` profile is refused before the call (CC-INS-31). That
+ * graph.instagram.com really rejects them is
+ * *[verify — live: `GET /{media-id}/insights?metric=total_views` on the Instagram-Login host]*.
+ */
+export const FB_LOGIN_MEDIA_METRICS: readonly MediaMetric[] = Object.freeze([
+  'total_views',
+  'total_likes',
+  'total_comments',
+]);
+
+/**
  * The metric set requested when the caller names no metrics AND the product
  * type is unknown or unstated. It is the FEED/REELS row of
- * {@link MEDIA_METRIC_MATRIX} verbatim; {@link getMediaInsights} prefers the
- * matrix row for a product type it recognises (CC-INS-14).
+ * {@link MEDIA_DEFAULT_METRICS_BY_TYPE} verbatim; {@link getMediaInsights}
+ * prefers the row for a product type it recognises (CC-INS-14).
  */
 export const DEFAULT_MEDIA_METRICS: readonly MediaMetric[] = Object.freeze([
   'views',
@@ -91,9 +199,48 @@ export const DEFAULT_MEDIA_METRICS: readonly MediaMetric[] = Object.freeze([
 ]);
 
 /**
+ * The metrics requested per `media_product_type` when the caller names none
+ * (CC-INS-14). Deliberately narrower than {@link MEDIA_METRIC_MATRIX}: the
+ * newer metrics are opt-in, because some fail the whole request on media they
+ * do not fit (`crossposted_views` errors on a reel never shared to Facebook)
+ * and the `total_*` ones are Path B only.
+ */
+export const MEDIA_DEFAULT_METRICS_BY_TYPE: Readonly<Record<string, readonly MediaMetric[]>> =
+  Object.freeze({
+    FEED: Object.freeze([
+      'views',
+      'reach',
+      'likes',
+      'comments',
+      'saved',
+      'shares',
+      'total_interactions',
+    ] as const),
+    REELS: Object.freeze([
+      'views',
+      'reach',
+      'likes',
+      'comments',
+      'saved',
+      'shares',
+      'total_interactions',
+    ] as const),
+    STORY: Object.freeze([
+      'views',
+      'reach',
+      'replies',
+      'shares',
+      'total_interactions',
+      'navigation',
+    ] as const),
+  });
+
+/**
  * Which media metrics are valid per `media_product_type` (CC-INS-2). Keys are
  * the known Meta product types; an unknown type (Meta adds new ones — CC-DATA-6
  * open vocabulary) skips client validation and lets Meta be the authority.
+ * Rows follow Meta's media metrics table *[verified 2026-10-28 — Instagram
+ * Media Insights reference]*. Carousel children have no insights at all.
  */
 export const MEDIA_METRIC_MATRIX: Record<string, readonly MediaMetric[]> = Object.freeze({
   FEED: Object.freeze([
@@ -104,6 +251,14 @@ export const MEDIA_METRIC_MATRIX: Record<string, readonly MediaMetric[]> = Objec
     'saved',
     'shares',
     'total_interactions',
+    'reposts',
+    'facebook_views',
+    'follows',
+    'profile_visits',
+    'profile_activity',
+    'total_views',
+    'total_likes',
+    'total_comments',
   ] as const),
   REELS: Object.freeze([
     'views',
@@ -113,6 +268,15 @@ export const MEDIA_METRIC_MATRIX: Record<string, readonly MediaMetric[]> = Objec
     'saved',
     'shares',
     'total_interactions',
+    'reposts',
+    'facebook_views',
+    'crossposted_views',
+    'reels_skip_rate',
+    'ig_reels_avg_watch_time',
+    'ig_reels_video_view_total_time',
+    'total_views',
+    'total_likes',
+    'total_comments',
   ] as const),
   STORY: Object.freeze([
     'views',
@@ -121,8 +285,35 @@ export const MEDIA_METRIC_MATRIX: Record<string, readonly MediaMetric[]> = Objec
     'shares',
     'total_interactions',
     'navigation',
+    'reposts',
+    'facebook_views',
+    'link_clicks',
+    'follows',
+    'profile_visits',
+    'profile_activity',
+    'total_views',
   ] as const),
 });
+
+/**
+ * Media-insights `breakdown` dimensions, and the single metric each may be
+ * sent with (CC-INS-31): `action_type` with `profile_activity`,
+ * `story_navigation_action_type` with `navigation` *[verified 2026-10-28 —
+ * Instagram Media Insights reference]*. Meta answers a breakdown on any other
+ * metric with a generic error for the whole request, so that is refused first.
+ */
+export const MEDIA_BREAKDOWNS = Object.freeze([
+  'action_type',
+  'story_navigation_action_type',
+] as const);
+export type MediaBreakdown = (typeof MEDIA_BREAKDOWNS)[number];
+
+/** The metrics each {@link MEDIA_BREAKDOWNS} dimension may be sent with. */
+export const MEDIA_BREAKDOWN_METRICS: Readonly<Record<MediaBreakdown, readonly MediaMetric[]>> =
+  Object.freeze({
+    action_type: Object.freeze(['profile_activity'] as const),
+    story_navigation_action_type: Object.freeze(['navigation'] as const),
+  });
 
 /** Audience-demographics metrics (docs/tools.md `get_audience_demographics`). */
 export const DEMOGRAPHIC_METRICS = Object.freeze([
@@ -340,6 +531,45 @@ export function validateMediaMetrics(
 }
 
 /**
+ * CC-INS-31: refuse the Facebook-Login-only media metrics
+ * ({@link FB_LOGIN_MEDIA_METRICS}) on any other auth path, before the call. An
+ * omitted path is treated as Path A, the same rule `api/media.ts` applies to its
+ * Path B fields: the smaller vocabulary is the one every token can use.
+ */
+export function validateMediaMetricsForPath(
+  metrics: readonly MediaMetric[],
+  authPath: AuthPath | undefined,
+): void {
+  if (authPath === 'fb-login') return;
+  const refused = metrics.filter((m) => FB_LOGIN_MEDIA_METRICS.includes(m));
+  if (refused.length > 0) {
+    throw new InstagramError(
+      `Metric(s) ${refused.join(', ')} are available with Instagram API with Facebook Login only (an fb-login profile); this profile's auth path is ${authPath ?? 'ig-login'}. Use views, likes or comments for the organic counts.`,
+      { kind: 'permission' },
+    );
+  }
+}
+
+/**
+ * CC-INS-31: refuse metrics that cannot be sent with `breakdown`. Graph fails
+ * the whole request when one named metric does not support the breakdown, so
+ * the caller is told which ones do instead of spending the call.
+ */
+export function validateBreakdownMetrics(
+  metrics: readonly string[],
+  breakdown: string,
+  allowed: readonly string[],
+): void {
+  const invalid = metrics.filter((m) => !allowed.includes(m));
+  if (invalid.length > 0) {
+    throw new InstagramError(
+      `Metric(s) ${invalid.join(', ')} cannot be broken down by ${breakdown}. Breakdown ${breakdown} is available only for: ${allowed.join(', ')}. Request the other metrics in a separate call without breakdown.`,
+      { kind: 'validation' },
+    );
+  }
+}
+
+/**
  * The note published beside {@link findMissingMetrics} when the metric list
  * itself was unreadable (CC-INS-22): every requested metric is then unknown,
  * which is not the same fact as Instagram having no row for it.
@@ -438,6 +668,11 @@ export interface AccountInsightsParams {
   metrics?: readonly AccountMetric[];
   period?: AccountPeriod;
   metricType?: MetricType;
+  /**
+   * One {@link ACCOUNT_BREAKDOWNS} dimension; `total_value` only. With no
+   * `metrics`, the metrics that support it are requested (CC-INS-31).
+   */
+  breakdown?: AccountBreakdown;
   /** Range start as a Unix timestamp in **seconds**. */
   since?: number;
   /** Range end as a Unix timestamp in **seconds**. */
@@ -484,10 +719,26 @@ export async function getAccountInsights(
   // falls back"; an empty array is truthy, so `||` would swallow nothing here
   // that `??` keeps. Do not contort a test into 'killing' any of them.
   const metricType = params.metricType ?? 'total_value';
+  const breakdown = params.breakdown;
+  // CC-INS-31: Graph applies a breakdown to `total_value` only; a time series
+  // omits it. Refused rather than sent and silently ignored.
+  if (breakdown !== undefined && metricType === 'time_series') {
+    throw new InstagramError(
+      `breakdown ${breakdown} works only with metric_type total_value; a time_series result carries no breakdown.`,
+      { kind: 'validation' },
+    );
+  }
   const metrics = uniqueMetrics(
     params.metrics ??
-      (metricType === 'time_series' ? TIME_SERIES_ACCOUNT_METRICS : ACCOUNT_METRICS),
+      (breakdown !== undefined
+        ? ACCOUNT_BREAKDOWN_METRICS[breakdown]
+        : metricType === 'time_series'
+          ? TIME_SERIES_ACCOUNT_METRICS
+          : DEFAULT_ACCOUNT_METRICS),
   );
+  if (breakdown !== undefined) {
+    validateBreakdownMetrics(metrics, breakdown, ACCOUNT_BREAKDOWN_METRICS[breakdown]);
+  }
   // CC-INS-25: only `reach` is served as a time series. The whole request
   // would otherwise be spent and rejected by Graph for the other metrics in it.
   if (metricType === 'time_series') {
@@ -566,6 +817,7 @@ export async function getAccountInsights(
       metric: metrics.join(','),
       period: params.period ?? 'day',
       metric_type: metricType,
+      ...(breakdown === undefined ? {} : { breakdown }),
       since,
       until,
     },
@@ -600,6 +852,16 @@ export interface MediaInsightsParams {
    * client-side metric-matrix check before the call is spent.
    */
   mediaProductType?: string;
+  /**
+   * One {@link MEDIA_BREAKDOWNS} dimension. With no `metrics`, the one metric
+   * that supports it is requested (CC-INS-31).
+   */
+  breakdown?: MediaBreakdown;
+  /**
+   * Auth path of the reading profile. Only `fb-login` may request the
+   * {@link FB_LOGIN_MEDIA_METRICS}; an omitted path is treated as Path A.
+   */
+  authPath?: AuthPath;
 }
 
 export interface MediaInsightsResult {
@@ -625,17 +887,29 @@ export async function getMediaInsights(
   // row; an unrecognised or unstated one (CC-DATA-6 open vocabulary) falls
   // through to the feed set exactly as before, and the FEED/REELS rows are
   // element-for-element identical to it, so STORY is the only behaviour change.
+  //
+  // The default comes from MEDIA_DEFAULT_METRICS_BY_TYPE, not from the validity
+  // matrix: the matrix also holds the opt-in metrics added 2026-10-28, and a
+  // default that grew with it would start failing on reels never shared to
+  // Facebook (`crossposted_views`) or on Path A (`total_*`).
+  const breakdown = params.breakdown;
   const metrics = uniqueMetrics(
     params.metrics ??
-      MEDIA_METRIC_MATRIX[params.mediaProductType?.toUpperCase() ?? ''] ??
-      DEFAULT_MEDIA_METRICS,
+      (breakdown !== undefined
+        ? MEDIA_BREAKDOWN_METRICS[breakdown]
+        : (MEDIA_DEFAULT_METRICS_BY_TYPE[params.mediaProductType?.toUpperCase() ?? ''] ??
+          DEFAULT_MEDIA_METRICS)),
   );
   validateMediaMetrics(metrics, params.mediaProductType);
+  validateMediaMetricsForPath(metrics, params.authPath);
+  if (breakdown !== undefined) {
+    validateBreakdownMetrics(metrics, breakdown, MEDIA_BREAKDOWN_METRICS[breakdown]);
+  }
   const read = readInsightsBody(
     await req<unknown>({
       method: 'GET',
       path: `/${encodeURIComponent(params.mediaId)}/insights`,
-      params: { metric: metrics.join(',') },
+      params: { metric: metrics.join(','), ...(breakdown === undefined ? {} : { breakdown }) },
     }),
   );
   return withMissing<MediaInsightsResult>(

@@ -13,8 +13,13 @@ import { RESOURCES, metricGlossary, registerResources } from '../../src/mcp/reso
 import { registerTools } from '../../src/mcp/registry.js';
 import { allTools } from '../../src/tools/index.js';
 import {
+  ACCOUNT_BREAKDOWN_METRICS,
   ACCOUNT_METRICS,
+  DEFAULT_ACCOUNT_METRICS,
   DEMOGRAPHIC_BREAKDOWNS,
+  FB_LOGIN_MEDIA_METRICS,
+  MEDIA_BREAKDOWN_METRICS,
+  MEDIA_DEFAULT_METRICS_BY_TYPE,
   MEDIA_METRICS,
   MEDIA_METRIC_MATRIX,
 } from '../../src/api/insights.js';
@@ -178,13 +183,32 @@ test('the metric glossary repeats the api/insights vocabularies and needs no net
     const body = JSON.parse(await readText(l, GLOSSARY)) as ReturnType<typeof metricGlossary>;
     assert.deepEqual(body, JSON.parse(JSON.stringify(metricGlossary())));
     const g = body as {
-      account: { metrics: string[] };
-      media: { metrics: string[]; byProductType: Record<string, string[]> };
+      account: {
+        metrics: string[];
+        defaultMetrics: string[];
+        breakdowns: Record<string, string[]>;
+      };
+      media: {
+        metrics: string[];
+        byProductType: Record<string, string[]>;
+        defaultsByProductType: Record<string, string[]>;
+        fbLoginOnly: string[];
+        breakdowns: Record<string, string[]>;
+      };
       demographics: { breakdowns: string[] };
     };
     assert.deepEqual(g.account.metrics, [...ACCOUNT_METRICS]);
+    assert.deepEqual(g.account.defaultMetrics, [...DEFAULT_ACCOUNT_METRICS]);
+    assert.deepEqual(Object.keys(g.account.breakdowns), Object.keys(ACCOUNT_BREAKDOWN_METRICS));
+    assert.deepEqual(g.account.breakdowns.follow_type, [...ACCOUNT_BREAKDOWN_METRICS.follow_type]);
     assert.deepEqual(g.media.metrics, [...MEDIA_METRICS]);
     assert.deepEqual(Object.keys(g.media.byProductType), Object.keys(MEDIA_METRIC_MATRIX));
+    assert.deepEqual(g.media.byProductType.REELS, [...(MEDIA_METRIC_MATRIX.REELS ?? [])]);
+    assert.deepEqual(g.media.defaultsByProductType.STORY, [
+      ...(MEDIA_DEFAULT_METRICS_BY_TYPE.STORY ?? []),
+    ]);
+    assert.deepEqual(g.media.fbLoginOnly, [...FB_LOGIN_MEDIA_METRICS]);
+    assert.deepEqual(g.media.breakdowns.action_type, [...MEDIA_BREAKDOWN_METRICS.action_type]);
     assert.deepEqual(g.demographics.breakdowns, [...DEMOGRAPHIC_BREAKDOWNS]);
   } finally {
     await l.close();

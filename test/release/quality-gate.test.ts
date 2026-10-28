@@ -68,6 +68,12 @@ function suiteRunningScripts(): string[] {
     .sort();
 }
 
+/**
+ * A workflow step that executes the suite: the whole of it (`npm test`), the
+ * coverage run, one shard of it, or the docs subset the docs-only lane runs.
+ */
+const SUITE_STEP = /run: npm (?:test|run coverage|run test:docs|run test:shard -- .+)\s*$/;
+
 /** Lines of a workflow file, grouped by the job whose block they fall in. */
 function jobSteps(workflow: string): Map<string, string[]> {
   const jobs = new Map<string, string[]>();
@@ -164,7 +170,7 @@ test('CI runs the corpus guard before every step that executes the suite', () =>
   let guarded = 0;
   for (const [name, lines] of jobs) {
     const guard = lines.findIndex((line) => line.includes(`run: ${GUARD_STEP}`));
-    const runner = lines.findIndex((line) => /run: npm (?:test|run coverage)\s*$/.test(line));
+    const runner = lines.findIndex((line) => SUITE_STEP.test(line));
     if (runner === -1) {
       assert.equal(
         guard,
@@ -183,9 +189,31 @@ test('CI runs the corpus guard before every step that executes the suite', () =>
   }
   assert.equal(
     guarded,
-    2,
-    'CI no longer has exactly the two suite-running jobs this gate was written against ' +
-      '(`check` and `coverage`). Re-read the workflow and decide what the new one needs',
+    3,
+    'CI no longer has exactly the three suite-running jobs this gate was written against ' +
+      '(`check`, `coverage` and `docs`). Re-read the workflow and decide what the new one needs',
+  );
+});
+
+test('CI keeps coverage on one unsharded run of the whole suite', () => {
+  const coverage = jobSteps('.github/workflows/ci.yml').get('coverage') ?? [];
+  assert.ok(
+    coverage.some((line) => /run: npm run coverage\s*$/.test(line)),
+    'the `coverage` job no longer runs `npm run coverage` as is. c8 enforces 100 % on the run ' +
+      'it wraps, so a sharded or filtered run there would gate a fraction of the suite',
+  );
+  assert.ok(
+    !/--test-shard|test:shard/.test(scripts()['coverage'] ?? ''),
+    'the `coverage` script now shards the suite, so the 100 % gate measures one slice of it',
+  );
+});
+
+test('a shard runs the corpus `npm test` runs', () => {
+  assert.equal(scripts()['test:shard'], 'node scripts/test-shard.mjs');
+  assert.ok(
+    read('scripts/test-shard.mjs').includes('scripts.test'),
+    '`test:shard` no longer reads its glob from the `test` script, so a shard can drift from ' +
+      'the corpus the guard checked',
   );
 });
 

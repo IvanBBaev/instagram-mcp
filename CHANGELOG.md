@@ -175,6 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through it. Each Graph attempt reads the profile's current token, so a token
   stored by the provider takes effect without a restart. The env file, its keys
   and the error messages are unchanged.
+- CI only: a change that touches nothing but docs prose (no gate or non-docs
+  test reads it) takes a fast lane — `format:check` and the new `test:docs`
+  — instead of the OS x Node matrix and the coverage gate; every doubt takes
+  the full lane, and one `CI result` check reports either lane. A new
+  `test:shard` script runs one slice of the corpus via Node's `--test-shard`;
+  coverage stays one unsharded run. The published package is unchanged.
 
 ### Deprecated
 

@@ -162,7 +162,7 @@ once.
 
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
-| **V3-X4** | Docs-only fast lane and sharded `node --test` (`2.x-safe`) | `package.json` (scripts), `.github/workflows/ci.yml`, `scripts/` | V3-M1 (both edit `package.json`) | S–M | NOT STARTED |
+| **V3-X4** | Docs-only fast lane and sharded `node --test` (`2.x-safe`) | `package.json` (scripts), `.github/workflows/ci.yml`, `scripts/` | V3-M1 (both edit `package.json`) | S–M | **DONE** 2026-10-28: docs-only lane (`scripts/ci-lane.mjs`, conservative) + `scripts/test-shard.mjs` (matrix `1/1` for now); single required check "CI result"; CI behaviour [verify] on first real push/PR |
 | **V3-X1** | Node floor `>=24`, CI matrix 24 and 26 | `package.json` (engines, `@types/node`), `package-lock.json`, `.nvmrc`, `.github/workflows/*.yml`, `src/index.ts` (`MIN_NODE_MAJOR`), `test/index.test.ts`, docs that name the floor | G3, V3-P2, V3-X4, owner decision §9.5 | S | BLOCKED (G3) |
 | **V3-X3** | TypeScript 6/7 and `typescript-eslint` compatibility | `package.json`, `package-lock.json`, `tsconfig.json`, ESLint config, compile fixes anywhere | V3-X1 | S | NOT STARTED |
 | **V3-X2** | Graph pin move from v25 to v26 or later | `src/core/host.ts`, `src/tools/ids.ts`, every test and fixture that names the pin, `test/docs-design.test.ts` (version allowlist), every doc that names the pin | Version after v26 confirmed `[verify]`, V3-E1 available for a re-run | S | BLOCKED (`[verify]`) |

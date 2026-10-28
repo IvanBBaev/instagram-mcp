@@ -44,6 +44,8 @@
     "format:check": "prettier --check .",
     "test": "node --test \"dist/**/*.test.js\"",
     "test:corpus": "node scripts/assert-test-corpus.mjs",
+    "test:shard": "node scripts/test-shard.mjs",
+    "test:docs": "node --test \"dist/test/docs-*.test.js\" dist/test/source-citations.test.js dist/test/env-catalog.test.js",
     "test:full": "npm run build && npm run test:corpus && npm test",
     "coverage": "c8 --all --include='dist/src/**/*.js' --include='dist/test/helpers/**/*.js' --include='bin/**/*.cjs' --reporter=text --reporter=lcov --check-coverage --statements=100 --branches=100 --functions=100 --lines=100 npm test",
     "audit": "npm audit --audit-level=high --omit=dev",

@@ -152,7 +152,7 @@ goes into that task or waits for it to merge.
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
 | **V3-D1** | Plugin listing: title and hint on every tool, privacy policy, `privacy_policies` manifest key | `plugins/instagram-mcp-ai/**`, new `docs/privacy.md`, `manifest.json` (non-generated keys), `test/release/plugin-manifest.test.ts`, `test/release/mcpb-manifest.test.ts`, `test/mcp/tool-metadata-contract.test.ts` (assertions only) | — | S | NOT STARTED |
-| **V3-D2** | Keep `server.json` current with the registry schema | `server.json`, `test/release/version-consistency.test.ts` | — | S | NOT STARTED |
+| **V3-D2** | Keep `server.json` current with the registry schema | `server.json`, `test/release/version-consistency.test.ts` | — | S | **DONE** 2026-10-28, no change: `2025-12-11` is still the registry's current schema and `server.json` validates against it |
 
 ### Lane X — sweeping changes (solo windows)
 

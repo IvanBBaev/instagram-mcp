@@ -150,6 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `core` 2.4.0, `node` 2.1.2). No tool schema uses the features 2.4
   changes (`x-mcp-header`, a root `$ref` from `.meta({ id })`, a custom
   `$id`/`$ref` URI scheme), so tool listings and results are unchanged.
+- Internal, contracts only: the 3.0 ports are frozen (`CredentialProvider`,
+  `WriteJournal`, `ProfileDirectory`, injectable `SemaphoreRegistry`,
+  `HashtagBudgetLedger` and `SecretRegistry`) and `ToolContext` gains six
+  optional seams. Nothing is wired yet; behaviour is unchanged.
 
 ### Deprecated
 

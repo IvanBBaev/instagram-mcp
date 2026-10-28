@@ -115,6 +115,43 @@ export interface ToolSpec<S extends z.ZodRawShape> {
   Tool results carry no `resource_link` blocks: each resource mirrors a tool, so
   a link from the tool's result would point back at the same data.
 
+**`ToolContext` and the 3.0 ports (contract bump V3-01).** A handler receives
+`ToolContext`: five required members (`req`, `settings`, `profile`, `clock`,
+`log`) and, since V3-01, six optional ones. The optional members are seams for
+the hosted door; **absent means exactly today's behaviour**, so no existing
+context literal changes and nothing is wired until the owning task lands:
+
+| Member | Type (file) | Absent = today | Populated by |
+|---|---|---|---|
+| `identity?` | `string` (non-secret principal) | local single operator | V3-S2 |
+| `journal?` | `WriteJournal` (`mcp/define.ts`) | JSONL at `settings.writeJournal` | V3-S2 |
+| `profiles?` | `ProfileDirectory` (`mcp/define.ts`) | call sees only `profile` | V3-F1 |
+| `hashtagBudget?` | `HashtagBudgetLedger` (`core/types.ts`) | module map in `tools/discovery.ts` | V3-S1 |
+| `semaphores?` | `SemaphoreRegistry` (`core/types.ts`) | `sharedSemaphores` in `core/http.ts` | V3-S1 |
+| `secrets?` | `SecretRegistry` (`core/types.ts`) | module set in `core/redact.ts` | V3-S1 |
+
+- **Credentials** go through the `CredentialProvider` port (`core/types.ts`:
+  `load`, `resolve`, `store`), which the composition root and the registry use —
+  it is deliberately **not** on `ToolContext`. `resolve` is the per-call read
+  that allows rotation without a restart; `store` writes a refreshed token back
+  (`CredentialUpdate` in, `CredentialReceipt` out — key names only). Every
+  implementation registers each secret before it leaves the method and never
+  puts one in an error or a receipt.
+- **Nothing tokened crosses the profile boundary.** `ProfileDirectory.list()`
+  returns `ProfileSummary` (built by `toProfileSummary`, which copies named
+  non-secret fields); acting as another profile goes through
+  `contextFor(name)`, the same context the registry would build for
+  `account: name`. It does not apply the D1 auth-path check, so a fan-out
+  tool filters on `authPath` first.
+- **The journal port sits inside the secret boundary.** The write gate redacts a
+  `WriteJournalEntry` before `WriteJournal.append` sees it; `append` failures stay
+  best-effort (caught and warned). `identity` is the only new entry field, and an
+  entry without it is byte-for-byte the pre-3.0 line.
+- `QueueWait` and `SemaphoreRegistry` are restated in `core/types.ts` because
+  `mcp/` and `tools/` may not import `core/http.ts` (§2); `test/contracts.test.ts`
+  pins that the two declarations stay mutually assignable. In-memory fakes for
+  every port live in `test/helpers/ports.ts`.
+
 ## 4. Planned packages
 
 | Package | Contents | In `core` profile |

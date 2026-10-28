@@ -27,6 +27,7 @@ import { z } from 'zod';
 
 import { defineTool } from '../../src/mcp/define.js';
 import type {
+  ProfileDirectory,
   ToolAnnotationSet,
   ToolContent,
   ToolContext,
@@ -35,12 +36,18 @@ import type {
   ToolShape,
   ToolSpec,
   ToolTextContent,
+  WriteJournal,
+  WriteJournalEntry,
 } from '../../src/mcp/define.js';
 import type {
   AuthPath,
+  HashtagBudgetLedger,
   IgRequestFn,
   Logger,
+  ProfileSummary,
   ResolvedProfile,
+  SecretRegistry,
+  SemaphoreRegistry,
   Settings,
 } from '../../src/core/types.js';
 import type { Clock } from '../../src/core/clock.js';
@@ -174,7 +181,7 @@ test('contract: ToolResult requires `content` and keeps structuredContent/isErro
   assert.equal(structured, true);
 });
 
-test('contract: ToolContext is the five injected dependencies, all required', () => {
+test('contract: ToolContext is the five required dependencies plus the optional 3.0 seams', () => {
   const exact: Expect<
     Equal<
       ToolContext,
@@ -184,13 +191,25 @@ test('contract: ToolContext is the five injected dependencies, all required', ()
         profile: ResolvedProfile;
         clock: Clock;
         log: Logger;
+        identity?: string;
+        journal?: WriteJournal;
+        profiles?: ProfileDirectory;
+        hashtagBudget?: HashtagBudgetLedger;
+        semaphores?: SemaphoreRegistry;
+        secrets?: SecretRegistry;
       }
     >
   > = true;
-  // Nothing here may become optional: the registry builds the context once per
-  // call and every tool reads all five without a guard. An optional member would
-  // move the failure from the build to a live tool call.
-  const nothingOptional: Expect<Equal<OptionalKeys<ToolContext>, never>> = true;
+  // The five Gate-G1 members stay required: the registry builds the context once
+  // per call and every tool reads them without a guard. The 3.0 members (V3-01)
+  // are optional so no existing context literal changes — absent means today's
+  // module singleton — and a new required member would be a contract break.
+  const optionalKeys: Expect<
+    Equal<
+      OptionalKeys<ToolContext>,
+      'identity' | 'journal' | 'profiles' | 'hashtagBudget' | 'semaphores' | 'secrets'
+    >
+  > = true;
   // `req` is the *only* network seam (architecture §3). Widening it to
   // `unknown`/`Function` would let a tool build its own transport unnoticed.
   const reqIsTheSeam: Expect<Equal<ToolContext['req'], IgRequestFn>> = true;
@@ -199,12 +218,57 @@ test('contract: ToolContext is the five injected dependencies, all required', ()
   const clock: Expect<Equal<ToolContext['clock'], Clock>> = true;
   const log: Expect<Equal<ToolContext['log'], Logger>> = true;
   assert.equal(exact, true);
-  assert.equal(nothingOptional, true);
+  assert.equal(optionalKeys, true);
   assert.equal(reqIsTheSeam, true);
   assert.equal(settings, true);
   assert.equal(profile, true);
   assert.equal(clock, true);
   assert.equal(log, true);
+});
+
+test("contract: WriteJournalEntry is today's journal line plus an optional identity", () => {
+  const exact: Expect<
+    Equal<
+      WriteJournalEntry,
+      {
+        ts: string;
+        action: string;
+        account: string;
+        authPath: AuthPath;
+        summary: string;
+        targetId?: string;
+        status?: string;
+        destructive: boolean;
+        identity?: string;
+      }
+    >
+  > = true;
+  // `identity` must stay optional: an entry without it is byte-for-byte the
+  // pre-3.0 JSONL line, which is what keeps existing journals readable.
+  const optionalKeys: Expect<
+    Equal<OptionalKeys<WriteJournalEntry>, 'targetId' | 'status' | 'identity'>
+  > = true;
+  assert.equal(exact, true);
+  assert.equal(optionalKeys, true);
+});
+
+test('contract: WriteJournal and ProfileDirectory expose no secret-bearing type', () => {
+  const append: Expect<
+    Equal<WriteJournal['append'], (entry: Readonly<WriteJournalEntry>) => void | Promise<void>>
+  > = true;
+  // The directory lists summaries, never `ResolvedProfile` (which carries the
+  // token); acting as a profile goes through a full, registry-built context.
+  const list: Expect<Equal<ProfileDirectory['list'], () => readonly ProfileSummary[]>> = true;
+  const contextFor: Expect<
+    Equal<ProfileDirectory['contextFor'], (name: string) => Promise<ToolContext>>
+  > = true;
+  const summaryHasNoToken: Expect<
+    Equal<Extract<keyof ProfileSummary, 'accessToken' | 'appSecret' | 'appId'>, never>
+  > = true;
+  assert.equal(append, true);
+  assert.equal(list, true);
+  assert.equal(contextFor, true);
+  assert.equal(summaryHasNoToken, true);
 });
 
 test('contract: ToolInputArgs is the declared input intersected with account/apply', () => {

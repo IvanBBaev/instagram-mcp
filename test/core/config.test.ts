@@ -8,6 +8,7 @@ import {
   currentAccount,
   isProfileEnvName,
   loadProfiles,
+  isPortableProfileName,
   nonPortableProfileNames,
   resolveProfile,
   strayExpiryKeys,
@@ -1174,4 +1175,11 @@ test('nonPortableProfileNames reports nothing for names inside [A-Z0-9_]', () =>
     IG_PROFILE_BRAND_2_ACCESS_TOKEN: 'tok-portable',
   });
   assert.deepEqual(nonPortableProfileNames(profiles), []);
+});
+
+test('isPortableProfileName accepts only lower-cased [a-z0-9_] names', () => {
+  assert.equal(isPortableProfileName('brand_2'), true);
+  assert.equal(isPortableProfileName('my-shop'), false);
+  assert.equal(isPortableProfileName('eu.store'), false);
+  assert.equal(isPortableProfileName(''), false);
 });

@@ -528,7 +528,12 @@ export function loadProfiles(env: Env = process.env): LoadedProfiles {
  * The default profile is always portable.
  */
 export function nonPortableProfileNames(profiles: readonly ResolvedProfile[]): string[] {
-  return profiles.map((p) => p.name).filter((name) => !/^[a-z0-9_]+$/.test(name));
+  return profiles.map((p) => p.name).filter((name) => !isPortableProfileName(name));
+}
+
+/** Whether a (lower-cased) profile name is inside the 2.0 rule `[a-z0-9_]`. */
+export function isPortableProfileName(name: string): boolean {
+  return /^[a-z0-9_]+$/.test(name);
 }
 
 /**

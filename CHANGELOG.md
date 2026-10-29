@@ -213,7 +213,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A profile name with a character outside `[A-Z0-9_]` (for example
   `IG_PROFILE_MY-SHOP_*`, which an env file accepts but a shell `export`
   refuses) still loads, and now logs a one-time startup warning naming it
-  (CC-CFG-86). 2.0 restricts profile names to `[A-Z0-9_]`.
+  (CC-CFG-86). `login --profile` warns the same way for such a name and
+  still stores it. 2.0 restricts profile names to `[A-Z0-9_]`.
 
 ### Fixed
 

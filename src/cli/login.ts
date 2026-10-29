@@ -33,6 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { createRedactor, surfaceForms } from '../core/redact.js';
 import { DEFAULT_SCOPES } from './scopes.js';
 import { writeCredentials } from '../core/config-write.js';
+import { isPortableProfileName } from '../core/config.js';
 import { parseArgs, unknownArgumentLine } from './login-args.js';
 import {
   buildAuthorizeUrl,
@@ -167,6 +168,17 @@ export async function runLogin(argv: string[], deps: LoginDeps = {}): Promise<nu
         'under any other name could never be loaded back from the credentials file.\n',
     );
     return 2;
+  }
+  // `-` and `.` are still stored and loaded back in 1.x, but no shell `export`
+  // can spell `IG_PROFILE_<NAME>_*` with them and 2.0 refuses them, so `login`
+  // says so once, as the server does at start-up (CC-CFG-86). A warning only:
+  // the login goes on.
+  if (!isPortableProfileName(opts.profile)) {
+    stderr(
+      `login: profile name '${opts.profile}' is outside [A-Z0-9_] and deprecated — a shell ` +
+        'export cannot set IG_PROFILE_<NAME>_* for it; it still works in 1.x and is ' +
+        'refused in 2.0.\n',
+    );
   }
   // Refused before anything is printed or opened: a redirect URI the listener
   // cannot receive sends the operator through Meta's consent screen for nothing.

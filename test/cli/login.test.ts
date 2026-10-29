@@ -4319,6 +4319,36 @@ test('a profile name of accepted characters is stored and loads back under that 
   assert.ok(names.includes('shop.two-3_x'), names.join(','));
 });
 
+test("a profile name with '-' or '.' is warned about once and still stored (CC-CFG-86)", async () => {
+  const configHome = await makeTempConfigHome('igmcp-login-portable-');
+  const { fetchFn } = igRoutes();
+  const { deps, out } = stderrSink();
+  const code = await runLogin(
+    ['--path', 'ig', '--app-id=55500', `--app-secret=${APP_SECRET}`, '--profile', 'My-Shop.EU'],
+    { ...deps, env: configHomeEnv(configHome), fetchFn, captureCode: async () => 'auth-code' },
+  );
+  assert.equal(code, 0);
+  const warning =
+    "login: profile name 'my-shop.eu' is outside [A-Z0-9_] and deprecated — a shell " +
+    'export cannot set IG_PROFILE_<NAME>_* for it; it still works in 1.x and is ' +
+    'refused in 2.0.\n';
+  assert.ok(out().startsWith(warning), out());
+  assert.equal(out().split(warning).length, 2, 'warned exactly once');
+  assert.ok(out().includes("for profile 'my-shop.eu'"), out());
+});
+
+test('a profile name inside [A-Z0-9_] logs in without the deprecation warning', async () => {
+  const configHome = await makeTempConfigHome('igmcp-login-portable-ok-');
+  const { fetchFn } = igRoutes();
+  const { deps, out } = stderrSink();
+  const code = await runLogin(
+    ['--path', 'ig', '--app-id=55500', `--app-secret=${APP_SECRET}`, '--profile', 'Shop_2'],
+    { ...deps, env: configHomeEnv(configHome), fetchFn, captureCode: async () => 'auth-code' },
+  );
+  assert.equal(code, 0);
+  assert.equal(out().includes('deprecated'), false, out());
+});
+
 // --- the denied reason and the exchange message are untrusted (CC-DATA-96/CC-DATA-100)
 
 test('a denied reason with a newline or an ANSI escape is escaped, not printed raw (CC-DATA-100)', () => {

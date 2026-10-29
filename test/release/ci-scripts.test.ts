@@ -146,6 +146,12 @@ test('outside a CI event the picker prints lane=full', () => {
 
 const PASSING = "import test from 'node:test';\ntest('passes', () => {});\n";
 
+/**
+ * The runner's summary line, in either default reporter: Node 22 prints TAP
+ * (`# tests 3`) to a pipe, Node 24 prints spec (`ℹ tests 3`) to a pipe too.
+ */
+const TESTS_SUMMARY = /^(?:#|ℹ) tests (\d+)$/m;
+
 test('the shard runner refuses a malformed or impossible shard', () => {
   for (const args of [[], ['0/2'], ['3/2'], ['1/0'], ['a/b'], ['1/2', '2/2']]) {
     const result = run('scripts/test-shard.mjs', args);
@@ -171,10 +177,10 @@ test('the shards of a corpus are disjoint and together run all of it', () => {
     const counts = ['1/2', '2/2'].map((shard) => {
       const result = run('scripts/test-shard.mjs', [shard], root);
       assert.equal(result.status, 0, `shard ${shard} failed: ${result.output}`);
-      return Number(/# tests (\d+)/.exec(result.output)?.[1]);
+      return Number(TESTS_SUMMARY.exec(result.output)?.[1]);
     });
     assert.deepEqual(counts.sort(), [1, 2]);
-    assert.match(run('scripts/test-shard.mjs', ['1/1'], root).output, /# tests 3/);
+    assert.equal(TESTS_SUMMARY.exec(run('scripts/test-shard.mjs', ['1/1'], root).output)?.[1], '3');
     const tooMany = run('scripts/test-shard.mjs', ['1/4'], root);
     assert.equal(
       tooMany.status,

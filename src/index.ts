@@ -13,7 +13,9 @@
  *   4. Construct the `McpServer`, register the tool surface (packages resolved
  *      from env, D1 capability-filtered per the active profile), and inject the
  *      per-profile network seam `createIgRequest(resolvingAuthProvider(...))`,
- *      which reads the profile's current token through the credential provider.
+ *      which reads the profile's current token through the credential provider,
+ *      plus the process-wide ports (secret registry, per-host semaphores,
+ *      hashtag ledger) every tool context carries (V3-S1).
  *   5. Route CLI subcommands (argv discipline in `cli/argv.ts`, each command in
  *      its own `cli/<name>.ts`), else start the configured transport.
  *
@@ -36,8 +38,8 @@ import {
 } from './core/config.js';
 import { envFileCredentialProvider, resolvingAuthProvider } from './core/credentials.js';
 import { createLogger } from './core/log.js';
-import { createRedactor, registerSecret } from './core/redact.js';
-import { createIgRequest } from './core/http.js';
+import { createRedactor, processSecrets, registerSecret } from './core/redact.js';
+import { createIgRequest, sharedSemaphores } from './core/http.js';
 import { namedEnvFile, resolveConfigHome } from './core/config-write.js';
 import { quote } from './core/home-path.js';
 import { InstagramError, isInstagramError } from './core/types.js';
@@ -51,6 +53,7 @@ import { runDoctor } from './cli/doctor.js';
 import { runRefresh } from './cli/refresh.js';
 import { assertUsage } from './cli/argv.js';
 import { allTools } from './tools/index.js';
+import { sharedHashtagBudget } from './tools/discovery.js';
 import { SERVER_ICONS } from './mcp/icon.js';
 
 /** Mirrors package.json — the identity advertised to MCP clients. */
@@ -352,7 +355,20 @@ async function main(): Promise<void> {
   // env-file provider reads the env the files above were loaded into, and
   // registers every token and app secret before it returns them. Its writer
   // resolves the target (`IG_ENV_FILE`, the config home) from that same env.
-  const credentials = envFileCredentialProvider({ env, write: { env } });
+  // The process-wide ports (V3-S1), named once here and handed to every
+  // consumer, so the request seam, the credential provider and the tool
+  // contexts share one instance of each. They are the modules' own defaults:
+  // the CLI paths and the start-failure redactor below reach the same ones.
+  const ports = {
+    secrets: processSecrets,
+    semaphores: sharedSemaphores,
+    hashtagBudget: sharedHashtagBudget,
+  };
+  const credentials = envFileCredentialProvider({
+    env,
+    secrets: ports.secrets,
+    write: { env },
+  });
   const { profiles, defaultName } = await credentials.load();
   registerHttpTokenSecret(env);
   // A profile name a shell `export` cannot spell is still accepted in 1.x and
@@ -378,6 +394,8 @@ async function main(): Promise<void> {
       // Each attempt re-reads the profile through the provider, so a token
       // rotated by `store` is used without a restart.
       auth: resolvingAuthProvider(credentials, profile, clock),
+      semaphores: ports.semaphores,
+      secrets: ports.secrets,
       settings,
       clock,
       log,
@@ -444,6 +462,10 @@ async function main(): Promise<void> {
       clock,
       log,
       makeRequest,
+      // A call's `ctx.profile` is read through the provider too, so what a tool
+      // reports (token_status's recorded expiry) matches the token `req` sends.
+      currentProfile: (name) => credentials.resolve(name),
+      ports,
       era,
       env,
     });

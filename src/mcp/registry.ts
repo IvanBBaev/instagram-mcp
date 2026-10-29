@@ -43,6 +43,7 @@ import { z } from 'zod';
 import type {
   ProfileDirectory,
   ToolAnnotationSet,
+  ToolContext,
   ToolInputArgs,
   ToolResult,
   ToolShape,
@@ -348,6 +349,32 @@ export interface RegisterToolsDeps {
    * elicitation it wraps does not exist on that revision.
    */
   era?: ProtocolEra;
+  /**
+   * The profile's CURRENT credentials for one call (architecture §13): the
+   * composition root passes the credential provider's `resolve`, so the
+   * `ctx.profile` a handler reads (`tokenExpiresAtSec` in `token_status`) is
+   * the one the request seam authenticates with, not the start-up snapshot.
+   * Called with the name `profiles` resolved, after that lookup has validated
+   * it. Absent = the start-up profile from `profiles`.
+   */
+  currentProfile?: (name: string) => Promise<ResolvedProfile>;
+  /**
+   * Process-wide ports handed to every call context, fan-out ones included
+   * (V3-S1): the secret registry, the per-host semaphores `makeRequest` was
+   * built over, and the hashtag-search ledger. Absent = each consumer falls
+   * back to its module-level default.
+   */
+  ports?: Pick<ToolContext, 'secrets' | 'semaphores' | 'hashtagBudget'>;
+}
+
+/** The profile a call runs as: `name` looked up in `profiles`, then made current. */
+async function callProfile(
+  deps: RegisterToolsDeps,
+  profiles: ResolvedProfile[],
+  name: string,
+): Promise<ResolvedProfile> {
+  const startup = resolveProfile(profiles, name);
+  return deps.currentProfile === undefined ? startup : deps.currentProfile(startup.name);
 }
 
 /**
@@ -750,9 +777,10 @@ function profileDirectory(
     defaultName: deps.defaultProfileName,
     list: () => fanout.map(toProfileSummary),
     contextFor: (name) =>
-      Promise.resolve().then((): WriteGateContext => {
-        const profile = resolveProfile(fanout, name);
+      Promise.resolve().then(async (): Promise<WriteGateContext> => {
+        const profile = await callProfile(deps, fanout, name);
         return {
+          ...deps.ports,
           req: deps.makeRequest(profile),
           settings: deps.settings,
           clock: deps.clock,
@@ -856,7 +884,7 @@ function registerOne(
       //     placements apart; do not contort a test into "killing" it.
       logInvocation(spec, args, log, redact);
       try {
-        const profile = resolveProfile(deps.profiles, name);
+        const profile = await callProfile(deps, deps.profiles, name);
 
         // 3. Call-time capability guard (defense in depth — filtering already
         //    excluded a mismatched tool at registration).
@@ -882,6 +910,7 @@ function registerOne(
         //    injected). `confirm` is only read by the write gate; read tools
         //    never see it.
         const ctx: WriteGateContext = {
+          ...deps.ports,
           req: deps.makeRequest(profile),
           settings: deps.settings,
           clock: deps.clock,

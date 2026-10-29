@@ -144,6 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tool calls read the active profile through the credential provider, the
+  same way the request seam reads its token. After a token rotation inside the
+  running server, `instagram_token_status` reports the new token's recorded
+  expiry instead of the one loaded at start-up. The composition root now hands
+  the secret registry, the per-host semaphores and the hashtag-search ledger to
+  every tool context explicitly (same instances as before).
+
 - A throttle whose `Retry-After` is past the 60 s cap now fails fast with an
   estimate ("retry in ~N min", or "~N h" past two hours) instead of waiting
   only the capped 60 s and failing again (CC-RATE-3).

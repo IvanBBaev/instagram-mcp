@@ -3282,3 +3282,70 @@ test('fan-out: registerTools fails fast on IG_FANOUT_PROFILES naming an unknown 
       err.message.includes('default, brand'),
   );
 });
+
+// --- current credentials and process ports on ToolContext ---------------------
+
+test('call context: currentProfile replaces the start-up snapshot, by the validated name', async () => {
+  // A token rotated through the credential provider carries a new recorded
+  // expiry; the handler must see that one, not the one loaded at start-up.
+  const rotated: ResolvedProfile = {
+    ...shopProfile,
+    accessToken: 'tok-new',
+    tokenExpiresAtSec: 99,
+  };
+  const asked: string[] = [];
+  const { ctx, seen } = await fanoutCtx(
+    { IG_FANOUT_PROFILES: '*' },
+    {
+      currentProfile: (name) => {
+        asked.push(name);
+        return Promise.resolve(name === 'shop' ? rotated : igProfile);
+      },
+    },
+  );
+  assert.equal(ctx?.profile, igProfile);
+  // The registry resolved the name first, so the provider is asked by the
+  // canonical lower-case name even when the caller spelled it otherwise.
+  const derived = await ctx.profiles!.contextFor('SHOP');
+  assert.equal(derived.profile, rotated);
+  assert.equal(seen.at(-1), rotated, 'the request seam is built for the current profile');
+  assert.deepEqual(asked, ['default', 'shop']);
+});
+
+test('call context: an unknown account is refused before currentProfile is asked', async () => {
+  let asked = 0;
+  const { deps, calls } = makeDeps({
+    tools: [spec({ name: 'instagram_get_account' })],
+    currentProfile: () => {
+      asked += 1;
+      return Promise.resolve(igProfile);
+    },
+  });
+  registerTools(deps);
+  const result = await calls[0]!.cb({ account: 'nope' });
+  assert.equal(result.isError, true);
+  assert.equal(asked, 0);
+});
+
+test('call context: the process ports reach every context, fan-out ones included', async () => {
+  const ports = {
+    secrets: { register: () => undefined, redactor: () => (v: unknown) => v },
+    semaphores: { acquire: () => Promise.resolve(() => undefined) },
+    hashtagBudget: { record: () => ({ used: 0, remaining: 30 }) },
+  } as unknown as NonNullable<RegisterToolsDeps['ports']>;
+  const { ctx } = await fanoutCtx({ IG_FANOUT_PROFILES: '*' }, { ports });
+  assert.equal(ctx?.secrets, ports.secrets);
+  assert.equal(ctx?.semaphores, ports.semaphores);
+  assert.equal(ctx?.hashtagBudget, ports.hashtagBudget);
+  const derived = await ctx!.profiles!.contextFor('brand');
+  assert.equal(derived.secrets, ports.secrets);
+  assert.equal(derived.semaphores, ports.semaphores);
+  assert.equal(derived.hashtagBudget, ports.hashtagBudget);
+});
+
+test('call context: without ports the context leaves them to the module defaults', async () => {
+  const { ctx } = await fanoutCtx({});
+  assert.equal(ctx?.secrets, undefined);
+  assert.equal(ctx?.semaphores, undefined);
+  assert.equal(ctx?.hashtagBudget, undefined);
+});

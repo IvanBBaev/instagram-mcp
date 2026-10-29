@@ -467,9 +467,15 @@ and the keys).
   `resolvingAuthProvider(credentials, profile, clock)`, whose `authParams`
   calls `credentials.resolve(profile.name)` on every attempt. A token rotated
   through `store` is used by the next request without a restart. The start-up
-  profile is still validated eagerly (`createAuthProvider`), and the profile
-  metadata a tool sees on `ToolContext` (`tokenExpiresAtSec`) is the start-up
-  snapshot.
+  profile is still validated eagerly (`createAuthProvider`). The registry reads
+  each call's `ctx.profile` through the same `resolve` (its `currentProfile`
+  dependency), so the metadata a tool reports, such as `token_status`'s
+  recorded `tokenExpiresAtSec`, belongs to the token that call sends.
+- **Process ports.** `src/index.ts` names the secret registry, the per-host
+  semaphores and the hashtag ledger once and hands the same instances to the
+  request seam, the credential provider and every `ToolContext`, fan-out
+  contexts included (registry `ports`). They are the modules' own defaults, so
+  the CLI paths and a context built without them reach the same instances.
 - **Write-back.** The `refresh` CLI (§9) hands the exchanged token and its
   expiry to `credentials.store` and reports `receipt.location` on stderr. The
   provider is not on `ToolContext`: tools never read or write credentials.

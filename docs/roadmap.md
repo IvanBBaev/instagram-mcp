@@ -106,7 +106,8 @@ the directory), not a code defect.
 [release-checklist.md](release-checklist.md) §"1.0.0 cut readiness" walks every
 step. The verdict is **not cuttable**: CI on the last pushed `main` commit is red
 on Windows (and one macOS/Node 22 test) although the local gate is green, no live
-run has happened, T-04 is unsigned, and the outward steps wait on the owner.
+run has happened, and the outward steps wait on the owner. T-04 was signed off
+on 2026-10-30.
 
 After the SDK v2 and dotenv 18 bumps, both distributable artifacts were
 install-tested **locally** on 2026-10-10 (nothing published): the `npm pack`

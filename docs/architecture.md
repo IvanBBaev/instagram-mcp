@@ -339,6 +339,9 @@ Single entry `igRequest<T>({ method, path, params, body, host?, ... })`:
     by the SDK as `-32603 Internal server error` and logged at `debug`.
   - "ready" is still logged only after the transport has actually started
     (CC-PROC-216 … CC-PROC-220).
+- **stdio takes messages of up to 10 MiB per line.** This is the SDK's default
+  read-buffer cap, kept as the stdio body limit, the counterpart of HTTP's 4 MiB
+  request-body limit. No tool input comes near it (CC-PROC-213).
 - **Streamable HTTP** opt-in via `IG_TRANSPORT=http` (`IG_HTTP_HOST`/`IG_HTTP_PORT`).
   It binds loopback unless a bearer token is configured: a **non-loopback** bind
   with no `IG_HTTP_TOKEN` is refused at startup, a loopback bind without one starts

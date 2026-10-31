@@ -5,6 +5,22 @@ or Creator) through Meta's official Instagram Graph API. It adds tools to read
 your profile, media, comments, insights and hashtag results, and, after you
 approve each one, to publish posts and reply to or moderate comments.
 
+## Install
+
+In Claude Code 2.1.275 or later, one command adds this repository's marketplace and
+installs the plugin from it:
+
+```
+/plugin install instagram-mcp-ai --marketplace IvanBBaev/instagram-mcp
+```
+
+On older versions, add the marketplace first:
+
+```
+/plugin marketplace add IvanBBaev/instagram-mcp
+/plugin install instagram-mcp-ai@instagram-mcp
+```
+
 ## What the plugin runs
 
 Enabling the plugin starts one local MCP server over stdio:

@@ -201,7 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment, loads the env files into that copy (client > config home >
   project `.env`, unchanged) and hands it to the settings, credential, `login`,
   `doctor` and tool loaders. Child processes would now inherit only the client
-  environment; nothing spawns one today.
+  environment; nothing spawns one today. On Windows the copy keeps the
+  case-insensitive names `process.env` has there, so `ig_access_token` in a
+  client config or an env file still reads as `IG_ACCESS_TOKEN`. `NO_COLOR`
+  is still read from the real process environment only, so a `NO_COLOR` line
+  in an env file does not turn off `doctor` colours.
 
 ### Deprecated
 

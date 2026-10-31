@@ -42,6 +42,7 @@ import { createRedactor, processSecrets, registerSecret } from './core/redact.js
 import { createIgRequest, sharedSemaphores } from './core/http.js';
 import { namedEnvFile, resolveConfigHome } from './core/config-write.js';
 import { quote } from './core/home-path.js';
+import { copyEnv } from './core/env-copy.js';
 import { InstagramError, isInstagramError } from './core/types.js';
 import type { ResolvedProfile } from './core/types.js';
 import { PACKAGE_ENV_NAMES, registerTools } from './mcp/registry.js';
@@ -292,7 +293,8 @@ async function main(): Promise<void> {
   // that exists, so left in place it would shadow every env file.
   // Every step from here on edits `env`, the bootstrap's own copy; the
   // process's environment stays exactly as the client passed it.
-  const env: BootEnv = { ...process.env };
+  // On Windows the copy keeps `process.env`'s case-insensitive names (core/env-copy.ts).
+  const env: BootEnv = copyEnv(process.env);
   for (const key of [...unsetPlaceholderKeys(env), ...blankKeys(env)]) {
     delete env[key];
   }

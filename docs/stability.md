@@ -198,8 +198,7 @@ the rest are not:
 | Throttle fail-fast, no retry of codes 4/17/32/613, queue-wait "server busy" (CC-RATE-3, CC-RATE-6) | patch | Behaviour only; the error `kind` values are unchanged. |
 | The `Fixed` entries (login, config, CLI echo, discovery cursor, fence) | patch | No surface change. |
 
-**Not covered by §1 — the owner decides before the cut whether `1.0.0` binds
-them.** Each is an interface an operator scripts against, and none is versioned
+**Not covered by §1 on 2026-10-22; decided below.** Each is an interface an operator scripts against, and none is versioned
 today:
 
 1. **Environment variables** — the `IG_*` names, their defaults and the blank-as-unset
@@ -212,6 +211,33 @@ today:
 4. **Graph version moves** — §1 treats a pin move as a reviewed PR but gives it no
    bump class; a move that changes a tool's output would fall under the
    output-meaning row.
+
+**Owner decision, 2026-10-31: `1.0.0` binds all four, with these rules.** Each
+one is wired into an operator's configuration or scripts on every install channel,
+so a silent change would break a working setup the way a tool rename does.
+
+1. **Environment variables are bound.** Renaming or removing an `IG_*` variable is
+   **major**. So is changing a default in a way an unchanged configuration would
+   notice, such as the `IG_WRITE_MODE` default leaving `preview`. Adding a variable
+   whose default keeps the old behaviour is **minor**. The blank-as-unset rule
+   (CC-CFG-81) is part of the contract.
+2. **The CLI surface is bound.** It covers the subcommand names (`login`, `refresh`,
+   `doctor`), their flag names and the exit codes: 0 success, 1 failure, 2 usage.
+   Removing or renaming any of these, or changing what an exit code means, is
+   **major**. Adding a subcommand or an optional flag is **minor**. The wording
+   of human-readable output is not a contract, so rewording it is a **patch**.
+3. **Package and profile membership is bound.** For a client on that profile, a
+   tool leaving a profile or package is the same as removing the tool, so it is
+   **major**. Renaming a package or profile is also **major**. A tool joining a
+   profile or package is **minor**.
+4. **A Graph version move has no bump class of its own.** Its effect on the tool
+   surface classifies it under §1. A move with no surface change is a **patch**. One
+   that adds output is **minor**. One that changes what a field means is **major**.
+   The one exception is a field or metric that Meta itself retires. The server
+   cannot keep serving data that Meta no longer returns, so it drops the value in the
+   release that moves the pin past the retirement date. That is a **minor**
+   release, and its notes name the retired item. The server never moves the pin
+   just to pick up a retirement early.
 
 **What still blocks `1.0.0`.** The cut is defined as field-validated
 ([roadmap.md](roadmap.md), release target), and nothing in §1–§3 has met the live

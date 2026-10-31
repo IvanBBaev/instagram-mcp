@@ -23,11 +23,11 @@
 | | |
 |---|---|
 | Release target | `1.0.0` — field-validated release per [release-checklist.md](release-checklist.md) §3 and the M1–M5 exit gates (current version `0.8.0`) |
-| Progress | **84.0 %** — 215 h of 256 h earned |
-| Remaining | **41 h** Opus 5.5 (0 h workable now, 41 h blocked) |
+| Progress | **84.6 %** — 216.5 h of 256 h earned |
+| Remaining | **39.5 h** Opus 5.5 (1.5 h nominally workable — the rest of INSTALL, which in practice needs Claude Desktop, a real token and R5 — and 38 h blocked) |
 | Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); owner go-ahead for the registry, MCPB and marketplace channels |
 | Calibration | WORKLOG 2026-09-26 and 2026-10-10: three to four audit waves (4–8 fixes each, full gate) per day → ~3 h per wave; SDK v2 migration plus wave 21 fit in one session day (~10 h) |
-| Updated | 2026-10-30 at `a02f0e3` |
+| Updated | 2026-10-31 at `ddde21a` |
 
 | ID | Item | Source | Status | Est h |
 |---|---|---|---|---|
@@ -46,7 +46,7 @@
 | AUTH-LIVE | OAuth login, refresh and token-store live verification | workplan.md T-C3, T-C4, T-C5 | `blocked-external` | 4 |
 | INS-LIVE | Insights verified against real metrics | roadmap.md §M4 | `blocked-external` | 2 |
 | LIVE-FIX | Fixes and doc corrections surfaced by the live runs (buffer) | release-checklist.md §3 | `blocked-external` | 10 |
-| INSTALL | Clean-machine install tests of each channel (npm, MCPB, plugin) | roadmap.md §M5 | `blocked-external` | 3 |
+| INSTALL | Clean-machine install tests of each channel (npm, MCPB, plugin) — done 2026-10-31: clean `node:22`/`node:24` containers for npm (registry + HEAD tarball) and the unzipped MCPB, plugin install into an empty Claude Code config; open: MCPB in Claude Desktop, plugin server with a real token, registry entry | roadmap.md §M5 | `partial:50` | 3 |
 | T04 | Owner sign-off on Gate D (D1–D3) | workplan.md T-04 | `done` | 1 |
 | R5 | MCP-registry submission | workplan.md T-R5 | `blocked-owner` | 1 |
 | R6 | MCPB bundle attach to the GitHub Release | workplan.md T-R6 | `blocked-owner` | 2 |
@@ -59,6 +59,7 @@
 - 2026-10-18 `aad777a` — 80.4 %, 50 h left (first run; baseline)
 - 2026-10-22 `e03a018` — 83.2 %, 43 h left (OWNER-DEC done: the 13 decided wave-23 items applied; new row OWNER-DOC 1 h for the residual decisions — scope +1 h)
 - 2026-10-30 `a02f0e3` — 84.0 %, 41 h left (+0.8 pp; T04 signed off and OWNER-DOC recorded; the Node 24 CI shard-test fix landed at `1d29998`; nothing is workable without credentials or the owner's go-ahead)
+- 2026-10-31 `ddde21a` — 84.6 %, 39.5 h left (+0.6 pp; INSTALL `partial:50` — clean-container npm and MCPB runs on Node 22 and 24 plus a plugin install into an empty Claude Code config, `bd37e63`; the 1.0.0 promise scope decided, `ddde21a`)
 <!-- release-progress:end -->
 
 ## Current state (updated 2026-10-10)

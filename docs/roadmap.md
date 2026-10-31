@@ -122,6 +122,21 @@ transport's bearer check. No defect turned up. None of that changes a milestone
 status below: M1–M4 stay **PARTIAL** because each exit gate names a live account,
 and no live run has happened yet.
 
+On 2026-10-31 the install tests moved to clean environments (nothing published).
+In fresh `node:22-bookworm-slim` and `node:24-bookworm-slim` containers with an
+empty home and a dummy `IG_ACCESS_TOKEN`, three launches answered `initialize` and
+`tools/list` over stdio with nothing on stdout before `initialize`:
+`npx -y instagram-mcp-ai@0.8.0` from the npm registry (25 tools on `core`), a global
+install of the HEAD `npm pack` tarball, and the HEAD MCPB bundle unzipped and run as
+`server.mcp_config` specifies with the network disabled (27 tools each on `core`,
+since HEAD adds two). `claude plugin install instagram-mcp-ai --marketplace
+IvanBBaev/instagram-mcp` into an empty `CLAUDE_CONFIG_DIR` (Claude Code 2.1.308)
+cloned the public marketplace and installed and enabled `0.8.0`. Claude Code only
+registers the server once the required token is set, and setting it writes the OS
+keychain, so that step was not run. Still open for INSTALL: the bundle installed in
+Claude Desktop, the plugin's server started with a real token, and the registry
+entry, which waits on R5.
+
 **Cross-cutting blocker.** Lane E (live QA, `T-E1`–`T-E4`) is **harness done,
 execution blocked**: there are no live Meta credentials in this environment, so
 no probe has ever run against Meta. Consequently *every* `[verify]` marker in

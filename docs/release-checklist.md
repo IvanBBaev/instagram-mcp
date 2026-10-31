@@ -53,7 +53,7 @@ target), so a step that needs the live platform is a blocker, not a formality.
 | 6 Changelog | ready | `[Unreleased]` holds every user-facing change since `0.8.0`; one entry (`userTags`, CC-PUB-61) is breaking under [stability.md](stability.md) §1 and must ship in `1.0.0` itself. |
 | 7–8 Tag, npm | **[human]** | Not started. `0.8.0` is `latest` on npm. |
 | 9–11 Registry, MCPB, plugin listing | **[human]** | Not started (R5, R6, R8 wait on the owner's go-ahead). |
-| 12 Install tests | **blocked — live/human** | No clean-machine install of any channel (INSTALL). |
+| 12 Install tests | **partial — human** | 2026-10-31, in fresh `node:22`/`node:24` containers: the published `0.8.0` via `npx`, the HEAD tarball and the unzipped MCPB bundle (no network) all answer `initialize` + `tools/list`. The plugin installs from the GitHub marketplace into an empty Claude Code config. Still open: the MCPB inside Claude Desktop, the plugin's server started by Claude Code with a token, and the registry entry (INSTALL). |
 | Stability promise | reviewed | [stability.md](stability.md) §4: the tool surface is ready to bind; whether `1.0.0` also binds the `IG_*` variables, the CLI surface, profile membership and Graph-version moves is an owner decision. |
 | Gate D sign-off | **blocked — owner** | T-04 (D1–D3) not signed off. |
 

@@ -46,7 +46,7 @@
 | AUTH-LIVE | OAuth login, refresh and token-store live verification | workplan.md T-C3, T-C4, T-C5 | `blocked-external` | 4 |
 | INS-LIVE | Insights verified against real metrics | roadmap.md §M4 | `blocked-external` | 2 |
 | LIVE-FIX | Fixes and doc corrections surfaced by the live runs (buffer) | release-checklist.md §3 | `blocked-external` | 10 |
-| INSTALL | Clean-machine install tests of each channel (npm, MCPB, plugin) — done 2026-10-31: clean `node:22`/`node:24` containers for npm (registry + HEAD tarball) and the unzipped MCPB, plugin install into an empty Claude Code config; open: MCPB in Claude Desktop, plugin server with a real token, registry entry | roadmap.md §M5 | `partial:50` | 3 |
+| INSTALL | Clean-machine install tests of each channel (npm, MCPB, plugin) — done 2026-10-31: clean `node:22`/`node:24` containers for npm (registry + HEAD tarball) and the unzipped MCPB, plugin install into an empty Claude Code config; 2026-11-08: plugin server started by Claude Code with a stored token (Linux container); open: MCPB in Claude Desktop, macOS keychain variant, registry entry | roadmap.md §M5 | `partial:65` | 3 |
 | T04 | Owner sign-off on Gate D (D1–D3) | workplan.md T-04 | `done` | 1 |
 | R5 | MCP-registry submission | workplan.md T-R5 | `blocked-owner` | 1 |
 | R6 | MCPB bundle attach to the GitHub Release | workplan.md T-R6 | `blocked-owner` | 2 |
@@ -134,9 +134,14 @@ since HEAD adds two). `claude plugin install instagram-mcp-ai --marketplace
 IvanBBaev/instagram-mcp` into an empty `CLAUDE_CONFIG_DIR` (Claude Code 2.1.308)
 cloned the public marketplace and installed and enabled `0.8.0`. Claude Code only
 registers the server once the required token is set, and setting it writes the OS
-keychain, so that step was not run. Still open for INSTALL: the bundle installed in
-Claude Desktop, the plugin's server started with a real token, and the registry
-entry, which waits on R5.
+keychain, so that step was not run. On 2026-11-08 it ran in a fresh
+`node:22-bookworm-slim` container instead, where Claude Code (2.1.319) has no
+keychain: `claude plugin configure --values-stdin` stored a dummy token in the
+container's `~/.claude/.credentials.json` (not in `settings.json`), and `claude mcp
+list` reported `plugin:instagram-mcp-ai:instagram` as connected. The server refuses
+to start without a token, so the `${user_config.IG_ACCESS_TOKEN}` substitution
+worked. Still open for INSTALL: the bundle installed in Claude Desktop, the macOS
+keychain variant of the plugin step, and the registry entry, which waits on R5.
 
 **Cross-cutting blocker.** Lane E (live QA, `T-E1`–`T-E4`) is **harness done,
 execution blocked**: there are no live Meta credentials in this environment, so

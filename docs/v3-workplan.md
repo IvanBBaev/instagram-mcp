@@ -95,7 +95,7 @@ that would otherwise hit every later branch.
 
 | ID | Task | Owned files | Depends on | Size | Status |
 |---|---|---|---|---|---|
-| **V3-00** | Freeze the corner-case catalogue: archive closed rows, replace the exact citation count with a "every citation resolves" check, drop the hand-kept tallies (v3-analysis §6) | `docs/corner-cases.md`, `test/docs-catalog.test.ts`, `test/source-citations.test.ts` | Owner decision §9.6 | M | NOT STARTED |
+| **V3-00** | Freeze the corner-case catalogue: archive closed rows, replace the exact citation count with a "every citation resolves" check, drop the hand-kept tallies (v3-analysis §6) | `docs/corner-cases.md`, `test/docs-catalog.test.ts`, `test/source-citations.test.ts` | Owner decision §9.6 | M | **DONE** 2026-11-07: owner (delegated) accepted the freeze; preamble figures and their pins dropped, a guard keeps counts out (CC-PROC-221); closed rows stay in place — their resolution cell is the archive |
 | **V3-01** | Contract bump: `CredentialProvider` interface, journal port interface, `ToolContext` fields for the injected singletons (hashtag budget, HTTP semaphores, redactor) and for a read-only view of all profiles. Defaults reproduce today's behaviour; nothing is wired yet | `src/core/types.ts`, `src/mcp/define.ts`, `test/helpers/`, `test/contracts.test.ts`, `test/mcp/define.test.ts` | — | M | **DONE** 2026-10-28: `CredentialProvider`, `SecretRegistry`, `SemaphoreRegistry`, `HashtagBudgetLedger` in `core/types.ts`; `WriteJournal`, `ProfileDirectory` and six optional `ToolContext` fields in `mcp/define.ts`; fakes in `test/helpers/ports.ts` |
 | **V3-02** | Merge plumbing: `CHANGELOG.md merge=union` in `.gitattributes` | `.gitattributes` | — | S | **DONE** 2026-10-28 |
 

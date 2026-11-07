@@ -19,8 +19,7 @@
  *     looks authoritative while leading nowhere — the reader concludes the comment
  *     is stale and ignores it, which is exactly the outcome the comment existed to
  *     prevent. This is the check with the widest reach: every citation site in
- *     `src/`, `test/`, `docs/`, `scripts/` and the README. How many that is, the
- *     catalogue's own preamble states and the last test in this file pins.
+ *     `src/`, `test/`, `docs/`, `scripts/` and the README.
  *   - **An ID defined twice.** The IDs are the primary key. Two rows sharing one
  *     means every citation to it is ambiguous, and the second definition is
  *     usually a copy-paste that was meant to get the next free number. The
@@ -83,25 +82,10 @@ const SECTION_PATTERN = /^## (\d+)\. .*\((CC-[A-Z]+)\)/;
 const NUMBERED_HEADING = /^## (\d+)\. /;
 
 /**
- * The preamble sentence that tells a reader where a row lives. Its figures — the tail
- * section’s number, how many rows it holds, how many the catalogue defines in all, how
- * many of the tail carry a foreign prefix, and the breakdown of those — are the only
- * description the document gives of its own shape, and the sentence is read literally so
- * that a rewrite fails loudly instead of checking nothing.
+ * A count the preamble must no longer state: a number of rows, cases or IDs, or of
+ * citation sites. CC-PROC-221 froze the paragraph's shape instead of pinning its figures.
  */
-const PREAMBLE_SHAPE = new RegExp(
-  [
-    '§(\\d+) today holds (\\d+) of the (\\d+) rows the catalogue defines, ',
-    'and (\\d+) of those carry a prefix other than the `(CC-[A-Z]+)` ',
-    'its heading advertises: ([^.]+)\\.',
-  ].join(''),
-);
-
-/** One entry of that breakdown: a count, then the prefix it counts. */
-const BREAKDOWN_ENTRY = /(\d+) `(CC-[A-Z]+)`/g;
-
-/** The preamble sentence that states how much of the repo cites the catalogue. */
-const PREAMBLE_SITES = /(\d+) citation sites across the repo/;
+const PREAMBLE_COUNT = /\b\d+ (?:of the \d+ )?(?:rows|cases|IDs|citation sites)\b/;
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -396,67 +380,25 @@ test('every prefix is numbered without gaps', () => {
 });
 
 /**
- * The preamble is the only part of the catalogue that describes the catalogue: where a
- * row lives, how many there are, and how much of the repo points at them. A reader who
- * wants any of the three reads that paragraph and stops, which is what makes a stale
- * figure there worse than no figure at all — it is not read as out of date, it is read
- * as the answer.
- *
- * Measured 2026-09-23, against a preamble nobody had recounted since writing it: the
- * tail section was stated at 94 rows of 334 when it held 258 of 373, and the citation
- * surface at 575 when it was 613. The paragraph was arguing for the layout with figures
- * from a catalogue two thirds this size, and the same stale 575 had been copied into
- * this file’s own docstring, twice.
- *
- * Every figure the paragraph states is derivable from the document and the tree, so
- * derive them here. Updating one sentence is the price of the paragraph staying true;
- * the alternative, measured above, is that it silently stops being about this file.
+ * The preamble is the only part of the catalogue that describes the catalogue, and a
+ * reader who wants its shape reads that paragraph and stops. Until 2026-11-07 it stated
+ * exact figures — §8's row count, the total, a per-prefix breakdown, the citation-site
+ * count — and this file derived and pinned every one (CC-PROC-162). The figures stayed
+ * true, but every new row or citation edited the same sentence, and parallel branches
+ * collided on it. CC-PROC-221 (owner decision, v3-analysis §9.6) dropped the figures;
+ * this test keeps them from coming back, since a figure nobody pins goes stale.
  */
-test('the preamble states figures that are still true of the catalogue', () => {
+test('the preamble states no row or citation counts', () => {
   const { lines, themed } = catalog();
   const preamble = lines
     .slice(0, themed[0]?.index ?? 0)
     .join(' ')
     .replace(/\s+/g, ' ');
 
-  const stated = PREAMBLE_SHAPE.exec(preamble) ?? [];
-  assert.ok(
-    stated.length > 0,
-    `${CATALOG} no longer states where a row lives in the shape PREAMBLE_SHAPE reads, so ` +
-      'not one of its figures is being checked. Restore the sentence or update the pattern.',
+  assert.ok(preamble.includes('grep the ID'), `${CATALOG} lost the paragraph on where a row lives`);
+  assert.equal(
+    PREAMBLE_COUNT.exec(preamble)?.[0],
+    undefined,
+    `${CATALOG} states a count before §1 again; CC-PROC-221 keeps that paragraph figure-free`,
   );
-
-  const rows = mainTableRows();
-  const tail = themed.reduce((highest, section) => Math.max(highest, section.number), 0);
-  const tailPrefix = themed.find((section) => section.number === tail)?.prefix;
-  const inTail = rows.filter(
-    (row) => themed.filter((heading) => heading.index < row.line - 1).at(-1)?.number === tail,
-  );
-  const counts = new Map<string, number>();
-  for (const row of inTail) {
-    const prefix = row.id.slice(0, row.id.lastIndexOf('-'));
-    if (prefix !== tailPrefix) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
-  }
-  const foreign = [...counts.values()].reduce((sum, count) => sum + count, 0);
-
-  assert.equal(Number(stated[1]), tail, `the preamble sends a reader to §${stated[1]}`);
-  assert.equal(stated[5], tailPrefix, `§${tail} advertises ${tailPrefix}, not ${stated[5]}`);
-  assert.equal(inTail.length, Number(stated[2]), `§${tail} holds ${inTail.length} rows`);
-  assert.equal(rows.length, Number(stated[3]), `the main table defines ${rows.length} rows`);
-  assert.equal(foreign, Number(stated[4]), `§${tail} holds ${foreign} foreign-prefix rows`);
-  assert.deepEqual(
-    [...(stated[6] ?? '').matchAll(BREAKDOWN_ENTRY)].map((hit) => `${hit[2]}: ${hit[1]}`).sort(),
-    [...counts].map(([prefix, count]) => `${prefix}: ${count}`).sort(),
-    `the preamble’s per-prefix breakdown of §${tail} is not what the section holds`,
-  );
-
-  const claimed = PREAMBLE_SITES.exec(preamble) ?? [];
-  assert.ok(
-    claimed.length > 0,
-    `${CATALOG} no longer states how many citation sites name it, so the figure this file ` +
-      'calls its widest inbound surface is unchecked.',
-  );
-  let sites = 0;
-  for (const path of citingFiles()) sites += (read(path).match(ID_PATTERN) ?? []).length;
-  assert.equal(sites, Number(claimed[1]), `the repo names a case ${sites} times`);
 });

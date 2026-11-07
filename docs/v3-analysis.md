@@ -232,6 +232,8 @@ pages and directories `[verify]`.
 5. Node floor `>=24` in 3.0 (forced by 2027-04-30)?
 6. The corner-case catalogue freeze (§6): archive closed rows and drop the
    exact citation count?
+   **Decided 2026-11-07:** yes to dropping the counts and tallies; closed rows
+   stay in place rather than moving to an archive (CC-PROC-221, V3-00).
 7. Threads: a sibling `threads-mcp`, or out of scope?
 
 ## 10. Proposed phasing (after 2.0.0)

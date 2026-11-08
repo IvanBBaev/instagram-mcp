@@ -90,6 +90,11 @@ const NON_GRAPH_VERSIONS: ReadonlyMap<string, string> = new Map([
   ],
   ['v10', "the c8 major whose config discovery the roadmap's coverage note describes"],
   ['v26', 'the NEXT Graph major, named only as a forward-looking upgrade note'],
+  [
+    'v27.0',
+    'the Graph version after the next, recorded in `docs/v3-analysis.md` as live on the ' +
+      'host but not yet on the versions table (a `[verify]` result, not a pin)',
+  ],
 ]);
 
 /**

@@ -95,7 +95,7 @@ Verdicts and effort classes as in v2-analysis §4. XL means a separate project.
 | Candidate | Path | Effort | Verdict | Notes |
 |---|---|---|---|---|
 | **Path C: Unified Login** (system-user token, Facebook Login for Business config flow, no Page lookup) | C | L | **GO — headline** | Host stays `graph.facebook.com`, so the allowlist does not change. Touches `src/cli/login*`, `src/core/auth.ts`, `src/core/token-shapes.ts`, doctor and scopes. `[verify]`: how the IG user id is resolved without a Page, whether system-user tokens expire, and which features (hashtag search, discovery, insights) work on C. Needs a live app before it can leave `[verify]`. |
-| Graph pin v25 → v26 or later | all | S | GO | Forced by 2028-07-29. The version after v26 is not yet on the versions table `[verify]`. |
+| Graph pin v25 → v26 or later | all | S | GO | Forced by 2028-07-29. The version after v26 is not yet on the versions table `[verify]`. Checked 2026-11-08: `v27.0` already answers on `graph.facebook.com` (an untokened call fails on auth, where an unreleased version fails on the path), but it has no changelog page and no row in the versions table, and v26 still shows "TBD" as its end date. Still `[verify]`. |
 | Collaboration invites and collaborators on publish | B (A `[verify]`) | S–M | COND | Carried from 2.0. The overview says collaborators are Facebook Login for Business only, which contradicts the edge reference. |
 | Collaborative media list and search | B | S | COND | Carried from 2.0. Official reference confirms B only. |
 | Branded content / paid partnership on publish | B (C `[verify]`) | S | COND | The publishing guide now says Facebook Login only. Optional input, only on an operator ask. |

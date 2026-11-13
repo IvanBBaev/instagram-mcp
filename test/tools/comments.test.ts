@@ -1051,17 +1051,17 @@ test('list_comments bounds every input the caller controls', () => {
   // The registry parses caller args with this shape and nothing else stands
   // between a model-supplied value and the Graph path. An empty media id builds
   // `//comments` — a read against whatever node the token resolves to instead of
-  // the post — an empty cursor is not a cursor, and Graph rejects a page size
-  // outside 1–100 outright, so a wider bound only spends a call to earn a 400.
+  // the post — an empty cursor is not a cursor, and Graph documents at most 50
+  // comments per query, so a wider bound promises a page size it never returns.
   // `fetchAll` has to stay omissible, or the cheap single-page read is unaskable.
   const shape = z.object(tool('instagram_list_comments').input).strict();
 
   assert.equal(shape.safeParse({ mediaId: 'M1' }).success, true, 'media id alone is enough');
-  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 100 }).success, true, 'Graph page cap');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 50 }).success, true, 'Graph page cap');
   assert.equal(shape.safeParse({ mediaId: '' }).success, false, 'an empty media id is not an id');
   assert.equal(shape.safeParse({ mediaId: 'M1', after: '' }).success, false, 'empty cursor');
   assert.equal(shape.safeParse({ mediaId: 'M1', limit: 0 }).success, false, 'zero page size');
-  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 101 }).success, false, 'over the cap');
+  assert.equal(shape.safeParse({ mediaId: 'M1', limit: 51 }).success, false, 'over the cap');
   assert.equal(shape.safeParse({ mediaId: 'M1', limit: 2.5 }).success, false, 'fractional page');
 });
 
@@ -1556,7 +1556,10 @@ test('list_comments describes the inline replies, the paging default, and the da
   assertMentions(limitDesc, 'Page-size hint forwarded to Instagram (1');
   // Two different knobs. A model that reads `limit` as the item cap raises it to
   // 100 expecting more comments and is handed the same capped result back.
-  assertMentions(limitDesc, '100). Independent of the server item cap that bounds fetchAll.');
+  assertMentions(
+    limitDesc,
+    'the documented Graph maximum). Independent of the server item cap that bounds fetchAll.',
+  );
   assertMentions(
     describeOf(spec.input, 'after'),
     "Opaque pagination cursor from a previous response's paging.after. Omit to start from the " +
@@ -2052,9 +2055,9 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 100,
+          maximum: 50,
           description:
-            'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that bounds fetchAll.',
+            'Page-size hint forwarded to Instagram (1–50, the documented Graph maximum). Independent of the server item cap that bounds fetchAll.',
         },
         after: {
           type: 'string',

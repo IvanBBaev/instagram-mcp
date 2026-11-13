@@ -844,7 +844,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           <summary><code>instagram_list_comments</code> <span class="pill ro">read</span><span class="tool-sum">List a media object's comments, with threaded replies inlined. Text is returned fenced.</span></summary>
           <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
             <tr><td><code>mediaId</code></td><td>string</td><td><span class="req">required</span></td><td>The media object to read comments for.</td></tr>
-            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–50.</td></tr>
             <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor.</td></tr>
             <tr><td><code>fetchAll</code></td><td>boolean</td><td><span class="opt">optional</span></td><td>Follow paging up to the server item cap.</td></tr>
           </tbody></table></div>
@@ -954,7 +954,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
             <tr><td><code>hashtagId</code></td><td>string</td><td><span class="req">required</span></td><td>From <code>instagram_search_hashtag</code>.</td></tr>
             <tr><td><code>edge</code></td><td>enum</td><td><span class="req">required</span></td><td>One of: <code>top</code> · <code>recent</code>.</td></tr>
-            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–100.</td></tr>
+            <tr><td><code>limit</code></td><td>number</td><td><span class="opt">optional</span></td><td>Page-size hint, 1–50.</td></tr>
             <tr><td><code>after</code></td><td>string</td><td><span class="opt">optional</span></td><td>Paging cursor from a previous call.</td></tr>
           </tbody></table></div>
         </details>

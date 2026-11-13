@@ -1000,7 +1000,10 @@ test('get_hashtag_media describes the cap, the withheld cursor, and the fencing'
   assertMentions(limitDesc, 'Page-size hint forwarded to Instagram (1');
   // Advertising a wider range than the schema accepts turns a legal-looking call
   // into a validation error the model cannot diagnose from the description.
-  assertMentions(limitDesc, '100). Independent of the server item cap that bounds the result.');
+  assertMentions(
+    limitDesc,
+    'the documented Graph maximum). Independent of the server item cap that bounds the result.',
+  );
   assertMentions(
     describeOf(spec.input, 'after'),
     'Continuation cursor: the `paging.after` value returned by a previous call for the same ' +
@@ -1129,11 +1132,12 @@ test('get_hashtag_media declares exactly its four arguments with their real boun
     );
   }
 
-  // limit: optional whole number, 1..100 — Graph's own page-size range.
+  // limit: optional whole number, 1..50 — the documented maximum page size of
+  // top_media and recent_media.
   assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 1 }).success, true);
-  assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 100 }).success, true);
+  assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 50 }).success, true);
   assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 0 }).success, false);
-  assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 101 }).success, false);
+  assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 51 }).success, false);
   assert.equal(schema.safeParse({ hashtagId: 'H1', edge: 'top', limit: 7.5 }).success, false);
 });
 
@@ -1673,9 +1677,9 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 100,
+          maximum: 50,
           description:
-            'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that bounds the result.',
+            'Page-size hint forwarded to Instagram (1–50, the documented Graph maximum). Independent of the server item cap that bounds the result.',
         },
         after: {
           type: 'string',

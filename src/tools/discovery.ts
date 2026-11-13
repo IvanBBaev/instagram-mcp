@@ -592,10 +592,10 @@ const getHashtagMediaTool = defineTool({
       .number()
       .int()
       .min(1)
-      .max(100)
+      .max(50)
       .optional()
       .describe(
-        'Page-size hint forwarded to Instagram (1–100). Independent of the server item cap that bounds the result.',
+        'Page-size hint forwarded to Instagram (1–50, the documented Graph maximum). Independent of the server item cap that bounds the result.',
       ),
     after: z
       .string()

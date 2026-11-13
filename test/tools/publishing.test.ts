@@ -858,6 +858,74 @@ test('a successful publish journals the media id that went live, not the contain
   assert.equal(resumed.targetId, 'DONE');
 });
 
+test('a partial publish reports what Instagram dropped instead of a clean success', async () => {
+  // `media_publish` can answer with an id AND a `config_issue`: the post is live
+  // but went out without its caption or user tags (or a caption add-on failed to
+  // attach). Reported as a bare `published`, the operator believes the caption is
+  // there; reported as an error, the model retries and posts a duplicate. Both
+  // the granular tool and the composites must pass the codes through with a note
+  // that says the media id is valid and nothing should be published again.
+  const answer = { id: 'M1', config_issue: 'CAPTION_NOT_ATTACHED' };
+  const granular = fakeReq(() => answer);
+  const res = await tool('instagram_publish_media').handler(
+    { creationId: 'C1', apply: true },
+    makeCtx(granular.req),
+  );
+  assert.equal(res.structuredContent?.status, 'published');
+  assert.equal(res.structuredContent?.media_id, 'M1');
+  assert.equal(res.structuredContent?.config_issue, 'CAPTION_NOT_ATTACHED');
+  assert.equal(
+    res.structuredContent?.partial_note,
+    'Published, but only in part: the post went live WITHOUT its caption. The media id is ' +
+      'valid — do NOT publish again, which would post a duplicate. Fix the missing part in the ' +
+      'Instagram app.',
+  );
+
+  const { req } = fakeReq((opts) => {
+    if (opts.path === '/999/media' && opts.method === 'POST') return { id: 'C1' };
+    if (opts.path === '/C1' && opts.method === 'GET') return { id: 'C1', status_code: 'FINISHED' };
+    if (opts.path === '/999/media_publish') {
+      return {
+        id: 'M2',
+        config_issue: 'USER_TAGGING_FAILURE',
+        caption_add_on_attachment_status: 'SOMETHING_NEW',
+      };
+    }
+    throw new Error(`unexpected ${opts.method} ${opts.path}`);
+  });
+  const composite = await runPostImage(
+    { imageUrls: ['https://cdn/a.jpg'], apply: true },
+    makeCtx(req),
+  );
+  assert.deepEqual(composite.structuredContent, {
+    status: 'published',
+    container_id: 'C1',
+    media_id: 'M2',
+    config_issue: 'USER_TAGGING_FAILURE',
+    caption_add_on_attachment_status: 'SOMETHING_NEW',
+    partial_note:
+      'Published, but only in part: the post went live WITHOUT its user tags; Instagram ' +
+      'reported SOMETHING_NEW for part of the request. The media id is valid — do NOT publish ' +
+      'again, which would post a duplicate. Fix the missing part in the Instagram app.',
+  });
+});
+
+test('a caption add-on failure alone is reported, and the known codes read plainly', async () => {
+  for (const [code, meaning] of [
+    ['POLL_CREATION_FAILURE', 'the poll did not attach to the post'],
+    ['PROMPT_CREATION_FAILURE', 'the comment prompt did not attach to the post'],
+  ] as const) {
+    const { req } = fakeReq(() => ({ id: 'M1', caption_add_on_attachment_status: code }));
+    const res = await tool('instagram_publish_media').handler(
+      { creationId: 'C1', apply: true },
+      makeCtx(req),
+    );
+    assert.equal(res.structuredContent?.caption_add_on_attachment_status, code);
+    assert.equal(res.structuredContent?.config_issue, undefined);
+    assert.match(String(res.structuredContent?.partial_note), new RegExp(`in part: ${meaning}\\.`));
+  }
+});
+
 test('post_image apply with an empty imageUrls list refuses before any network call', async () => {
   // Not reachable through the registry (zod enforces a non-empty array), but the
   // exported flow is also called directly, so the client-side guard must hold on
@@ -4382,7 +4450,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
     name: 'instagram_publish_media',
     title: 'Publish media container',
     description:
-      'Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. The container must be FINISHED (see instagram_get_container_status). This is never auto-retried — a repeated publish costs quota and posts a duplicate; retry only after confirming the previous call did not already publish.',
+      'Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. The container must be FINISHED (see instagram_get_container_status). This is never auto-retried — a repeated publish costs quota and posts a duplicate; retry only after confirming the previous call did not already publish. When Instagram reports a partial success (the post went live without its caption, user tags or caption add-on), config_issue / caption_add_on_attachment_status and partial_note say what was dropped.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

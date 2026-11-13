@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { graphObjectId } from './ids.js';
 import { acknowledgedId } from './ack.js';
 import { boundedArray } from './arrays.js';
-import { publishIdMissing } from './publish-flow.js';
+import { partialPublishFields, publishIdMissing } from './publish-flow.js';
 import {
   applyField,
   aiGeneratedField,
@@ -279,7 +279,9 @@ const publishMediaTool = defineTool({
     'Phase 2 of publishing: publish a media container that has finished processing, returning the new ' +
     'media id. The container must be FINISHED (see instagram_get_container_status). This is never ' +
     'auto-retried — a repeated publish costs quota and posts a duplicate; retry only after confirming ' +
-    'the previous call did not already publish.',
+    'the previous call did not already publish. When Instagram reports a partial success (the post ' +
+    'went live without its caption, user tags or caption add-on), config_issue / ' +
+    'caption_add_on_attachment_status and partial_note say what was dropped.',
   package: 'publishing',
   annotations: {
     readOnlyHint: false,
@@ -305,7 +307,7 @@ const publishMediaTool = defineTool({
       const mediaId = acknowledgedId(r, 'publish', publishIdMissing(args.creationId));
       return {
         result: json(
-          { status: 'published', media_id: mediaId },
+          { status: 'published', media_id: mediaId, ...partialPublishFields(r) },
           { pretty: ctx.settings.prettyJson },
         ),
         targetId: mediaId,

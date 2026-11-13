@@ -313,7 +313,7 @@ export async function getContainerStatus(
 export async function publishMedia(
   req: IgRequestFn,
   params: { igId: string; creationId: string },
-): Promise<{ id: string }> {
+): Promise<PublishedMedia> {
   const r = graphBody(
     await req<unknown>({
       method: 'POST',
@@ -321,7 +321,35 @@ export async function publishMedia(
       body: { creation_id: params.creationId },
     }),
   );
-  return { id: r.id as string };
+  const out: PublishedMedia = { id: r.id as string };
+  const configIssue = partialPublishCode(r.config_issue);
+  if (configIssue !== undefined) out.configIssue = configIssue;
+  const addOn = partialPublishCode(r.caption_add_on_attachment_status);
+  if (addOn !== undefined) out.captionAddOnStatus = addOn;
+  return out;
+}
+
+/**
+ * What `media_publish` answered. Besides the id, Meta documents two optional
+ * partial-success codes: the media went live, but part of the request was
+ * dropped (`config_issue`: `CAPTION_NOT_ATTACHED`, `USER_TAGGING_FAILURE`) or
+ * a caption add-on failed to attach (`caption_add_on_attachment_status`:
+ * `POLL_CREATION_FAILURE`, `PROMPT_CREATION_FAILURE`). Neither is an error.
+ */
+export interface PublishedMedia {
+  id: string;
+  configIssue?: string;
+  captionAddOnStatus?: string;
+}
+
+/**
+ * A partial-success code as Graph sent it, when it has the shape of an enum
+ * token (upper-case letters, digits, `_`, at most 64 characters). Anything
+ * else — absent, empty, not a string, free text — is dropped: these values are
+ * echoed to the model, so only a token that cannot carry instructions passes.
+ */
+function partialPublishCode(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : undefined;
 }
 
 // --- get_publishing_limit ---------------------------------------------------
@@ -566,7 +594,15 @@ function unknownStatusError(containerId: string, code: string, budgetMs: number)
  * the tool layer surfaces the gap explicitly instead of inventing an id.
  */
 export type PublishFlowResult =
-  | { status: 'published'; containerId: string; mediaId: string }
+  | {
+      status: 'published';
+      containerId: string;
+      mediaId: string;
+      /** See {@link PublishedMedia.configIssue}. */
+      configIssue?: string;
+      /** See {@link PublishedMedia.captionAddOnStatus}. */
+      captionAddOnStatus?: string;
+    }
   | { status: 'in_progress'; containerId: string }
   | { status: 'already_published'; containerId: string };
 
@@ -655,5 +691,10 @@ export async function runPublishFlow(
   }
 
   const published = await publishMedia(req, { igId, creationId: containerId });
-  return { status: 'published', containerId, mediaId: published.id };
+  const result: PublishFlowResult = { status: 'published', containerId, mediaId: published.id };
+  if (published.configIssue !== undefined) result.configIssue = published.configIssue;
+  if (published.captionAddOnStatus !== undefined) {
+    result.captionAddOnStatus = published.captionAddOnStatus;
+  }
+  return result;
 }

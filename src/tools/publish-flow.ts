@@ -130,6 +130,42 @@ export function publishIdMissing(containerId: string): string {
   );
 }
 
+/** What each documented partial-success code means for the post that went live. */
+const PARTIAL_PUBLISH_MEANING: Readonly<Record<string, string>> = {
+  CAPTION_NOT_ATTACHED: 'the post went live WITHOUT its caption',
+  USER_TAGGING_FAILURE: 'the post went live WITHOUT its user tags',
+  POLL_CREATION_FAILURE: 'the poll did not attach to the post',
+  PROMPT_CREATION_FAILURE: 'the comment prompt did not attach to the post',
+};
+
+/**
+ * The partial-success keys of a published result: `config_issue` and
+ * `caption_add_on_attachment_status` as Graph sent them, plus a `partial_note`
+ * that says what was dropped. Empty when Graph reported neither, so a clean
+ * publish keeps exactly its old body. Shared with `instagram_publish_media`.
+ */
+export function partialPublishFields(published: {
+  configIssue?: string;
+  captionAddOnStatus?: string;
+}): Record<string, string> {
+  const codes = [published.configIssue, published.captionAddOnStatus].filter(
+    (code): code is string => code !== undefined,
+  );
+  if (codes.length === 0) return {};
+  const fields: Record<string, string> = {};
+  if (published.configIssue !== undefined) fields.config_issue = published.configIssue;
+  if (published.captionAddOnStatus !== undefined) {
+    fields.caption_add_on_attachment_status = published.captionAddOnStatus;
+  }
+  const meanings = codes.map(
+    (code) => PARTIAL_PUBLISH_MEANING[code] ?? `Instagram reported ${code} for part of the request`,
+  );
+  fields.partial_note =
+    `Published, but only in part: ${meanings.join('; ')}. The media id is valid — do NOT ` +
+    'publish again, which would post a duplicate. Fix the missing part in the Instagram app.';
+  return fields;
+}
+
 /**
  * Apply/preview driver behind {@link runComposite}. In preview mode
  * {@link withWriteGate} returns before `perform`, so no container is created and
@@ -198,6 +234,7 @@ async function executePublish(
             status: 'published',
             container_id: flow.containerId,
             media_id: mediaId,
+            ...partialPublishFields(flow),
           }),
           { pretty: ctx.settings.prettyJson },
         ),

@@ -411,8 +411,12 @@ export function blankKeys(env: Env): string[] {
   return Object.keys(env).filter((key) => key.startsWith('IG_') && env[key]?.trim() === '');
 }
 
-/** The profile and suffix spelling an owned `IG_*` key belongs to, if any. */
-function ownedKeyOf(key: string): { name: string; spelling: string } | undefined {
+/**
+ * The profile and suffix spelling an owned `IG_*` key belongs to, if any. The
+ * writer uses it to find a case-variant spelling of a key it is about to set
+ * (the name spelled `Work` for profile `work`, CC-CFG-89).
+ */
+export function ownedKeyOf(key: string): { name: string; spelling: string } | undefined {
   if (key.startsWith(NAMED_PREFIX)) return splitNamedKey(key, OWNED_SUFFIXES);
   const spelling = OWNED_SUFFIXES.find((s) => key === `IG_${s}`);
   return spelling === undefined ? undefined : { name: DEFAULT_PROFILE_NAME, spelling };

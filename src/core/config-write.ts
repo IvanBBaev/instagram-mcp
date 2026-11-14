@@ -38,8 +38,9 @@ import {
   TOKEN_EXPIRES_AT_SUFFIX,
   envVarFor,
   formatExpiryRecord,
+  ownedKeyOf,
 } from './config.js';
-import { assertReadsBack, formatValue, mergeEnv } from './env-file.js';
+import { assertReadsBack, assignedKeys, formatValue, mergeEnv } from './env-file.js';
 import { assertNotShellSpelling, expandHomeTilde, homeDirectory, quote } from './home-path.js';
 import { followStoreLink } from './store-link.js';
 import { isRecordableExpiry } from './time.js';
@@ -328,6 +329,30 @@ function resolveStoreTarget(opts: WriteCredentialsOptions): StoreTarget {
  * silent: `login` writes one key while every diagnostic instructs the operator to
  * set another, and the operator "fixes" a variable nothing reads.
  */
+/**
+ * The keys in `existing` that spell one of `targets` with a different case
+ * (CC-CFG-89). The reader lowercases a named profile's name, so a key that
+ * spells the name `Work` feeds profile `work` exactly as the `WORK` spelling
+ * this module writes does, and whichever dotenv enumerates last wins. `mergeEnv` matches keys exactly, so without this a hand-written
+ * mixed-case line outlived every login and kept shadowing the fresh token and
+ * its expiry. Only fields this write sets (or clears) are listed: a variant of
+ * a field it leaves alone still reads into the same profile and stays as the
+ * operator wrote it. The default profile's bare `IG_*` keys are read by exact
+ * name, so they have no variants.
+ */
+function caseVariants(existing: string, name: string, targets: readonly string[]): string[] {
+  const wanted = new Set(targets);
+  return [...assignedKeys(existing)].filter((key) => {
+    const owner = ownedKeyOf(key);
+    return (
+      owner !== undefined &&
+      owner.name === name &&
+      !wanted.has(key) &&
+      wanted.has(envVarFor(name, owner.spelling))
+    );
+  });
+}
+
 function buildUpdates(profileName: string, creds: Credentials): Map<string, string> {
   const updates = new Map<string, string>();
   const set = (suffix: string, value: string | undefined): void => {
@@ -464,6 +489,9 @@ export async function writeCredentials(
       );
     }
     const existing = await readExisting(filePath);
+    for (const key of caseVariants(existing, name, [...updates.keys(), expiryKey])) {
+      removals.add(key);
+    }
     const merged = mergeEnv(existing, updates, removals);
     assertReadsBack(filePath, existing, merged, values, removals);
     await replaceFile(filePath, merged);

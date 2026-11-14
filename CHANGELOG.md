@@ -226,6 +226,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `login` and `refresh` now replace a mixed-case spelling of the profile's keys
+  (`IG_PROFILE_Work_ACCESS_TOKEN` for profile `work`) instead of appending the
+  upper-case key below it. Before, the old token stayed on disk and could
+  still be the one loaded, with no expiry (CC-CFG-89).
 - `login --profile <name>` no longer stores the default profile's `IG_ACCOUNT_ID`
   as the named profile's account id; it falls back to
   `IG_PROFILE_<NAME>_ACCOUNT_ID`, then the returned `user_id` (CC-CFG-84).

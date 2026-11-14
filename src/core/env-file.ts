@@ -112,6 +112,20 @@ function assignmentOn(line: string): { prefix: string; key: string } | undefined
 }
 
 /**
+ * Every key assigned on a line of `text`, as {@link mergeEnv} recognises it —
+ * the same line split and the same {@link assignmentOn} — so a key listed here
+ * is one a `removals` entry is guaranteed to drop.
+ */
+export function assignedKeys(text: string): Set<string> {
+  const keys = new Set<string>();
+  for (const line of text.split(/\r\n?|\n/)) {
+    const assignment = assignmentOn(line);
+    if (assignment !== undefined) keys.add(assignment.key);
+  }
+  return keys;
+}
+
+/**
  * Merge `updates` into the existing env-file text: replace the VALUE of EVERY
  * assignment of a key already present, keeping the rest of that line — its
  * indentation and any leading `export ` — and preserving every comment, blank

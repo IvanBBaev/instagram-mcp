@@ -222,6 +222,46 @@ test('expiresAtSec is persisted and reads back as the profile expiry', async () 
   assert.equal(profiles[0]?.tokenExpiresAtSec, 1893456000);
 });
 
+test("a write replaces a case-variant spelling of the profile's keys (CC-CFG-89)", async () => {
+  // The reader lowercases the profile name, so `IG_PROFILE_Work_ACCESS_TOKEN`
+  // and `IG_PROFILE_WORK_ACCESS_TOKEN` both feed profile `work`, and the one
+  // dotenv enumerates last wins. The writer matched keys case-sensitively, so a
+  // hand-written mixed-case line survived every login and kept shadowing the
+  // fresh token, and its expiry, which the writer had appended below it.
+  const configDir = await tempConfigDir();
+  const filePath = envFileIn(configDir);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    [
+      'IG_ACCESS_TOKEN=default-token',
+      'IG_PROFILE_Work_ACCESS_TOKEN=stale-token',
+      'IG_PROFILE_Work_TOKEN_EXPIRES_AT=1700000000',
+      'IG_PROFILE_Work_APP_SECRET=kept-secret',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  await writeCredentials(
+    'work',
+    { accessToken: LONG_TOKEN, authPath: 'ig-login', expiresAtSec: 1893456000 },
+    { configDir },
+  );
+
+  const text = await readFile(filePath, 'utf8');
+  assert.ok(!text.includes('stale-token'), 'the superseded token is gone from disk');
+  const env = await parseEnvFile(filePath);
+  assert.equal(env.IG_PROFILE_Work_ACCESS_TOKEN, undefined);
+  assert.equal(env.IG_PROFILE_Work_TOKEN_EXPIRES_AT, undefined);
+  // A field this write does not set is left in the operator's spelling.
+  assert.equal(env.IG_PROFILE_Work_APP_SECRET, 'kept-secret');
+  const work = loadProfiles(env).profiles.find((p) => p.name === 'work');
+  assert.equal(work?.accessToken, LONG_TOKEN);
+  assert.equal(work?.tokenExpiresAtSec, 1893456000);
+  assert.equal(work?.appSecret, 'kept-secret');
+});
+
 test('expiresAtSec = 0 (never expires) is written verbatim', async () => {
   const configDir = await tempConfigDir();
   const res = await writeCredentials(

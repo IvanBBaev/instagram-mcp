@@ -141,6 +141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token and write gates, one at a time, and a failing profile is reported in
   its row without failing the others. Unset, the tool reports only the
   selected profile and says how to opt in.
+- A 1024x1024 listing icon for the Claude Code plugin
+  (`plugins/instagram-mcp-ai/.claude-plugin/icon.png`), which Anthropic's plugin
+  directory requires. `claude plugin validate --strict` now reports no directory
+  warnings.
 
 ### Changed
 

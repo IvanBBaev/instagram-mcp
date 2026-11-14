@@ -171,8 +171,8 @@ owner's go-ahead for the outward steps 7–11.
     - **The repo IS a marketplace.** `.claude-plugin/marketplace.json` exists and
       lists this repo's single plugin with `"source": "./plugins/instagram-mcp-ai"`
       (resolved against the marketplace root, the repo root; the plugin root holds
-      only `.claude-plugin/plugin.json` and no `package.json`, so Claude Code runs no
-      `npm ci` in the user's plugin cache), so
+      only `.claude-plugin/plugin.json` and `.claude-plugin/icon.png` and no
+      `package.json`, so Claude Code runs no `npm ci` in the user's plugin cache), so
       `/plugin marketplace add IvanBBaev/instagram-mcp` resolves. Both manifests
       validate against the published JSON schemas. An earlier version of this step
       said tagging alone made the plugin installable; it did not, and the missing
@@ -181,6 +181,13 @@ owner's go-ahead for the outward steps 7–11.
       `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` launches `npx -y instagram-mcp-ai@<version>`,
       so the matching npm version must exist first. For `0.8.0` it does; what
       remains is the listing itself and an install by a real Claude Code client.
+
+    - **Anthropic's directory.** Submitted by the owner from the developer portal
+      at `claude.ai/directory/manage` (paid claude.ai plan). Before submitting, run
+      `claude plugin validate --strict ./plugins/instagram-mcp-ai`; it must report no
+      directory warnings. The listing icon is `.claude-plugin/icon.png` (1024x1024
+      PNG, the portal accepts 512 to 2048 px). The portal reads it only on the first
+      save or submission, so it must be on the default branch before then.
 
     See [plugin-install.md](plugin-install.md) for the operator-facing page,
     including how a credential reaches a server whose manifest declares none.

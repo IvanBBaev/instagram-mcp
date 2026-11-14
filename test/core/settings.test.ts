@@ -1029,6 +1029,13 @@ test('IG_FANOUT_PROFILES: a value that names no profile, mixes * or holds bad na
   }
 });
 
+test('IG_FANOUT_PROFILES accepts a dotted profile name, as login does (CC-CFG-87)', () => {
+  assert.deepEqual(loadFanoutProfiles({ IG_FANOUT_PROFILES: 'default, EU.Store' }), [
+    'default',
+    'eu.store',
+  ]);
+});
+
 test('loadSettings validates IG_FANOUT_PROFILES without adding a Settings field', () => {
   assertValidationError(
     () => loadSettings({ IG_FANOUT_PROFILES: '*,brand' }),

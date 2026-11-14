@@ -519,7 +519,7 @@ export function loadFanoutProfiles(
     ),
   ];
   if (names.length === 1 && names[0] === FANOUT_ALL) return FANOUT_ALL;
-  if (names.length === 0 || names.includes(FANOUT_ALL) || names.some((n) => !/^[\w-]+$/.test(n))) {
+  if (names.length === 0 || names.includes(FANOUT_ALL) || names.some((n) => !/^[\w.-]+$/.test(n))) {
     fail(
       'IG_FANOUT_PROFILES must be * or a comma-separated list of profile names, got ' +
         describeValue(raw),

@@ -213,6 +213,20 @@ test('get renders the arguments into the template, with defaults when omitted', 
   }
 });
 
+test('a dotted account profile is accepted, as tools and login accept it (CC-PROC-222)', async () => {
+  const l = await live({ IG_TOOL_PACKAGES: 'all' });
+  try {
+    for (const name of [WEEKLY, CAPTION, TRIAGE, DISCOVERY]) {
+      const args: Record<string, string> = { account: 'studio.two' };
+      if (name === CAPTION) args.brief = 'b';
+      if (name === DISCOVERY) args.hashtag = 'coffee';
+      assert.match(await promptText(l.client, name, args), /Pass `account: "studio\.two"`/, name);
+    }
+  } finally {
+    await l.close();
+  }
+});
+
 test('arguments outside their bounds are rejected before the template renders', async () => {
   const l = await live({ IG_TOOL_PACKAGES: 'all' });
   try {

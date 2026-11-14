@@ -50,7 +50,7 @@ const READ_ONLY_RULE =
 
 const accountArg = z
   .string()
-  .regex(/^[A-Za-z0-9_-]{1,64}$/)
+  .regex(/^[A-Za-z0-9_.-]{1,64}$/) // `.` as in login's profile names (CC-PROC-222)
   .optional()
   .describe('Configured account profile to operate as. Omit to use the default profile.');
 

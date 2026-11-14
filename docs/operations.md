@@ -63,6 +63,7 @@ hierarchy; handlers and the model branch on `kind`.
 | 24 / subcode 2207008 | Container expired — not published within 24 h *[verified 2026-07-21]* | Actionable: re-create container |
 | 9007 / subcode 2207027 | Media not ready for publish yet | Keep polling container status — do **not** re-create |
 | 9 / subcode 2207042 | Publishing quota exceeded | Surfaces as a `rate_limit` error; a write is never retried. No quota-reset info is fetched |
+| 368 | Temporarily blocked for misusing a feature (often stamped `OAuthException`) | `kind: upstream`, never `auth`: the token is fine and re-authenticating does not lift the block (CC-COM-22) |
 | — / subcode 2207051 | Spam/integrity restriction | **Never auto-retry**; surface Meta's `error_user_msg` verbatim |
 | 2 / 1 / 500-class | Transient Meta-side | retry per matrix, then `kind: upstream` with `fbtrace_id` |
 | *(no recognised code)* + `type: OAuthException` | Authentication failure Meta marked but did not number | `kind: auth` — tie-breaker, never retried |

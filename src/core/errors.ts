@@ -231,6 +231,7 @@ function parseErrorEnvelope(body: unknown): GraphErrorFields {
  *   24 / subcode 2207008                 → validation  (container expired — re-create)
  *   9007 / subcode 2207027               → upstream    (media not ready — keep polling)
  *   1, 2, 500-class                      → upstream    (transient Meta-side)
+ *   368                                  → upstream    (temporary abuse block, CC-COM-22)
  *   subcode 2207051                      → upstream    (spam/integrity — see the case note)
  *   type OAuthException, no known code   → auth        (dead token — re-authenticate)
  */
@@ -287,6 +288,9 @@ function deriveKind(
     if (code === 9) return 'rate_limit'; // publishing quota exceeded
     if (code === 100 || code === 24) return 'validation'; // bad parameter / container expired
     if (code === 1 || code === 2 || code === 9007) return 'upstream'; // transient / not-ready-yet
+    // Temporary abuse block (CC-COM-4). Meta stamps it `OAuthException`, so
+    // without this rung rule 3 read it as a dead token (CC-COM-22).
+    if (code === 368) return 'upstream';
   }
 
   // 3. `error.type` — the OAuthException tie-breaker (CC-AUTH-23).

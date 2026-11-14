@@ -1169,6 +1169,15 @@ test('an OAuthException with an unrecognised code still classifies as auth', () 
   assert.equal(err.code, 999, 'the unrecognised code is still carried onto the error');
 });
 
+test('code 368 (temporarily blocked for abuse) is upstream even under OAuthException (CC-COM-22)', () => {
+  // Meta stamps `OAuthException` on the 368 spam block too. The token is fine,
+  // so `auth` would send the operator to re-authenticate, which never lifts a
+  // block (CC-COM-4).
+  for (const type of ['OAuthException', undefined]) {
+    assert.equal(mapGraphError(400, envelope({ type, code: 368 })).kind, 'upstream', String(type));
+  }
+});
+
 test('a recognised code outranks the OAuthException type: code 4 stays rate_limit', () => {
   // Meta also stamps `OAuthException` on throttles and permission failures.
   // Those numbered codes are the more specific signal and are decided by rule 2

@@ -662,6 +662,12 @@ export async function fetchPagedEdge<TRaw, T>(
         // on this read.
         if (!isUsableCursor(nextAfter)) {
           note = 'stopped at the item cap on an unusable cursor — nothing to resume from';
+        } else if (followed.has(nextAfter)) {
+          // CC-DATA-135. The repeated-cursor guard below never sees a page that
+          // fills the cap, so a repeat landing exactly on it was published as an
+          // ordinary resume point; one more unit of cap reached the guard and
+          // flagged it. The verdict must not depend on where the cap falls.
+          note = SAME_CURSOR_NOTE;
         }
       }
       break;

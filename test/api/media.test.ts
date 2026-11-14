@@ -1965,3 +1965,57 @@ test('the media reads ask for the Path B fields on fb-login and only there', asy
     );
   }
 });
+
+test('a fetchAll walk that fills the cap on a repeated cursor flags it, not a plain capped stop (CC-DATA-135)', async () => {
+  // The at-cap stop ran before the repeated-cursor guard, so a walk whose page
+  // filled `maxItems` exactly published the repeat as an ordinary resume point:
+  // the same edge flagged it with one more unit of cap, and not with this one.
+  const same = fakeReq(() => ({
+    data: [{ id: 'p1' }, { id: 'p2' }],
+    paging: { cursors: { after: 'X' }, next: 'https://graph.facebook.com/next' },
+  }));
+  const res = await listMedia(same.req, {
+    igAccountId: '999',
+    maxItems: 2,
+    after: 'X',
+    fetchAll: true,
+  });
+  assert.equal(same.calls.length, 1);
+  assert.equal(res.truncated, true);
+  assert.equal(res.after, 'X');
+  assert.equal(res.note, SAME_CURSOR_NOTE);
+
+  // A cycle A → B → A that closes exactly on the cap.
+  const cycle = fakeReq((opts) =>
+    opts.params?.['after'] === 'A'
+      ? { data: [{ id: 'a' }], paging: { cursors: { after: 'B' }, next: 'https://n/1' } }
+      : { data: [{ id: 'b' }], paging: { cursors: { after: 'A' }, next: 'https://n/2' } },
+  );
+  const looped = await listMedia(cycle.req, {
+    igAccountId: '999',
+    maxItems: 2,
+    after: 'A',
+    fetchAll: true,
+  });
+  assert.deepEqual(
+    looped.items.map((i) => i.id),
+    ['a', 'b'],
+  );
+  assert.equal(looped.after, 'A');
+  assert.equal(looped.note, SAME_CURSOR_NOTE);
+
+  // A fresh cursor at the cap stays a plain capped stop.
+  const fresh = fakeReq(() => ({
+    data: [{ id: 'p1' }, { id: 'p2' }],
+    paging: { cursors: { after: 'Y' }, next: 'https://graph.facebook.com/next' },
+  }));
+  const plain = await listMedia(fresh.req, {
+    igAccountId: '999',
+    maxItems: 2,
+    after: 'X',
+    fetchAll: true,
+  });
+  assert.equal(plain.truncated, true);
+  assert.equal(plain.after, 'Y');
+  assert.equal(plain.note, undefined);
+});

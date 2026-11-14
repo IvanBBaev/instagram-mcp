@@ -258,6 +258,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `zod` goes from `^4.2.0` (4.6.5) to `^4.6.7` (GHSA-mrhx-c7xc-m3w5, high:
   validating an oversized constrained collection could exhaust memory).
+- The lockfile resolves `hono` 4.13.18 and `@hono/node-server` 2.1.8 (reached
+  through `@modelcontextprotocol/node`), clearing their **moderate** advisories,
+  among them a backslash path-separator bypass of proxy path rules
+  (GHSA-jpvv-r467-5p4w) and an unhandled `ECONNRESET` crash
+  (GHSA-qv5m-9pm6-hqp3). `npm audit --omit=dev` reports zero advisories again.
+  Both stay inside the SDK's declared ranges, so a fresh `npm install` of the
+  published package already picks them up.
 
 ## [0.8.0] — 2026-10-13
 

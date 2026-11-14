@@ -19,9 +19,9 @@ installed from git and launches the server via `npx instagram-mcp-ai@<version>`,
 so the plugin manifest pins the npm version it serves — the drift test asserts
 that pin as well.
 
-## Reality check — one channel of four has shipped
+## Reality check — two channels of four have shipped
 
-As of 2026-10-13:
+As of 2026-11-14:
 
 - **npm — published.** `instagram-mcp-ai@0.8.0` is `latest`, with build provenance,
   published by `.github/workflows/release.yml` from the `v0.8.0` GitHub Release
@@ -29,13 +29,17 @@ As of 2026-10-13:
   publishing a `0.0.1` stub" was never carried out and is now moot: the first
   thing published was the real package, not a stub.
 - **MCP registry —** no `server.json` has been submitted.
-- **MCPB —** no `.mcpb` bundle has been built or attached to a release.
+- **MCPB — attached.** `instagram-mcp-ai-0.8.0.mcpb` (sha256
+  `434f77e71f16c07e82707215b90e12137bc98b3c3d077d2dc8e7b85aa8ffdc82`) was built with
+  `scripts/build-mcpb.sh` and uploaded to the `v0.8.0` GitHub Release on 2026-11-14.
+  It has not yet been installed inside Claude Desktop (INSTALL).
 - **Claude Code plugin —** the manifest exists in-tree and its `npx` pin now
   resolves against a real package, but the repo is not listed in any plugin
   marketplace.
 
 Tags `v0.7.0` and `v0.8.0` are cut, each with a dated `CHANGELOG.md` section. The
-npm lane below has been exercised twice, end to end; the other three have not.
+npm lane below has been exercised twice, end to end, and the MCPB step once; the
+registry and plugin-listing steps have not.
 
 ## 1.0.0 cut readiness — pass of 2026-10-22
 
@@ -52,7 +56,7 @@ target), so a step that needs the live platform is a blocker, not a formality.
 | 4–5 Version bump | ready, not done | Only after the blockers clear; the drift test covers all six copies. |
 | 6 Changelog | ready | `[Unreleased]` holds every user-facing change since `0.8.0`; one entry (`userTags`, CC-PUB-61) is breaking under [stability.md](stability.md) §1 and must ship in `1.0.0` itself. |
 | 7–8 Tag, npm | **[human]** | Not started. `0.8.0` is `latest` on npm. |
-| 9–11 Registry, MCPB, plugin listing | **[human]** | Not started (R5, R6, R8 wait on the owner's go-ahead). |
+| 9–11 Registry, MCPB, plugin listing | **[human]** | Step 10 done for 0.8.0 (2026-11-14: bundle attached to the `v0.8.0` release). Steps 9 and 11 wait on the owner: the registry login (R5) and the directory submission (R8). |
 | 12 Install tests | **partial — human** | 2026-10-31, in fresh `node:22`/`node:24` containers: the published `0.8.0` via `npx`, the HEAD tarball and the unzipped MCPB bundle (no network) all answer `initialize` + `tools/list`. The plugin installs from the GitHub marketplace into an empty Claude Code config. 2026-11-08, in a fresh `node:22` container: Claude Code stored a dummy token through `claude plugin configure` and started the plugin's server with it (`claude mcp list`: connected); the same run on macOS stored the token in its own login keychain item and connected too. Still open: the MCPB inside Claude Desktop and the registry entry (INSTALL). |
 | Stability promise | decided | [stability.md](stability.md) §4: the tool surface is ready to bind. On 2026-10-31 the owner decided that `1.0.0` also binds the `IG_*` variables, the CLI surface and profile membership, and that a Graph-version move is classified by its effect on the surface, with Meta-side retirements as a named minor. |
 | Gate D sign-off | done | T-04 (D1–D3) signed off on 2026-10-30. |
@@ -211,8 +215,8 @@ owner's go-ahead for the outward steps 7–11.
   end-to-end install tests (step 12).
 - **Requires a human:** steps 7–11 and the publish half of step 12 — deliberate,
   irreversible outward actions, never automated unattended.
-- **Most urgent:** the three unshipped channels (see the reality check above) —
-  the MCP-registry submission, the MCPB bundle, and the plugin-marketplace
-  listing. The npm name is claimed (`0.7.0`) and `0.8.0` is published, so the `npx` pin the plugin
+- **Most urgent:** the two unshipped channels (see the reality check above) —
+  the MCP-registry submission and the plugin-marketplace listing. The MCPB
+  bundle is attached to the `v0.8.0` release. The npm name is claimed (`0.7.0`) and `0.8.0` is published, so the `npx` pin the plugin
   manifest carries now resolves against a real package; nothing but the manual
   submissions is in the way.

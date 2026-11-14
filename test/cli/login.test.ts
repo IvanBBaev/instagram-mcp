@@ -4283,6 +4283,31 @@ test('an unknown word that does not follow a value-taking flag is still echoed w
   assert.deepEqual(steps, []);
 });
 
+test('runLogin refuses a non-loopback redirect host before the authorize URL is printed (CC-CFG-88)', async () => {
+  // The scheme check ran before the browser opened, but the host check ran
+  // only inside the capture: the operator went through Meta's consent screen
+  // for a redirect the listener could never receive.
+  for (const redirectUri of ['http://192.168.1.5:8723/callback', 'http://example.com/cb']) {
+    const { deps, out, steps } = mustStopAtParsing();
+    const code = await runLogin(
+      [
+        '--path',
+        'ig',
+        '--app-id=55500',
+        `--app-secret=${APP_SECRET}`,
+        `--redirect-uri=${redirectUri}`,
+      ],
+      deps,
+    );
+    assert.equal(code, 2, redirectUri);
+    assert.match(
+      out(),
+      /^login: login can only capture the OAuth redirect on 127\.0\.0\.1 or \[::1\]/,
+    );
+    assert.deepEqual(steps, [], redirectUri);
+  }
+});
+
 // --- profile names the credentials file can be read back under --------------
 
 test('a profile name the env file cannot hold is refused before any network call', async () => {

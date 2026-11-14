@@ -264,7 +264,16 @@ export function redirectUriProblem(redirectUri: string): string | undefined {
     return `--redirect-uri is not an absolute URL; ${remedy}`;
   }
   const { protocol } = new URL(redirectUri);
-  if (protocol === 'http:') return undefined;
+  if (protocol === 'http:') {
+    // The host is checked here too, not only when the capture binds: that
+    // runs after the authorize URL is opened (CC-CFG-88).
+    try {
+      listenHostFor(redirectUri);
+      return undefined;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
   return (
     `--redirect-uri must be an http:// URI, but it uses "${protocol}". login captures the ` +
     `redirect with a plain HTTP listener on ${LOOPBACK_IPV4} or [${LOOPBACK_IPV6}], so the ` +
@@ -316,24 +325,9 @@ export function captureAuthorizationCode(
   const timeoutMs = deps.timeoutMs ?? CAPTURE_TIMEOUT_MS;
   const createServerImpl = deps.createServerImpl ?? defaultCreateServer;
 
-  let listenHost: string;
-  try {
-    listenHost = listenHostFor(params.redirectUri);
-  } catch (err) {
-    // The `new Error(String(err))` arm is unreachable, and until 2026-09-23 this
-    // comment named the wrong reason for it. `listenHostFor` does not only raise
-    // `InstagramError`: it re-parses the URI with `new URL`, which raises a
-    // `TypeError` for a string that does not parse. What rules that out here is
-    // the `new URL(params.redirectUri)` above — it parsed the same string before
-    // this try block was entered, so the re-parse cannot fail. Either thrower is
-    // an `Error` in any case. The arm exists because `catch` is typed `unknown`,
-    // and rejecting with a bare value would give `runLogin`'s handler nothing to
-    // print. The ignore covers the arm, not the `return` (CC-PROC-128).
-    return Promise.reject(
-      /* c8 ignore next */
-      err instanceof Error ? err : new Error(String(err)),
-    );
-  }
+  // Cannot throw: `redirectUriProblem` above already refused every URI
+  // `listenHostFor` refuses, and the URI parsed (CC-CFG-88).
+  const listenHost = listenHostFor(params.redirectUri);
 
   return new Promise<string>((resolve, reject) => {
     let settled = false;

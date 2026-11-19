@@ -23,11 +23,11 @@
 | | |
 |---|---|
 | Release target | `1.0.0` — field-validated release per [release-checklist.md](release-checklist.md) §3 and the M1–M5 exit gates (current version `0.8.0`) |
-| Progress | **85.7 %** — 219.4 h of 256 h earned |
-| Remaining | **36.6 h** Opus 5.5 (0.6 h nominally workable — the rest of INSTALL, which in practice needs Claude Desktop and R5 — and 36 h blocked) |
-| Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); owner go-ahead for the registry and marketplace channels |
+| Progress | **86.5 %** — 221.4 h of 256 h earned |
+| Remaining | **34.6 h** Opus 5.5 (0.6 h nominally workable — the rest of INSTALL, which in practice needs Claude Desktop and R5 — and 34 h blocked) |
+| Blocked by | live Instagram/Meta credentials (every live probe and the fixes they surface); the owner's MCP-registry login and publish (R5) |
 | Calibration | WORKLOG 2026-09-26 and 2026-10-10: three to four audit waves (4–8 fixes each, full gate) per day → ~3 h per wave; SDK v2 migration plus wave 21 fit in one session day (~10 h) |
-| Updated | 2026-11-14 at `bbda6d9` |
+| Updated | 2026-11-19 at `fa4fb68` |
 
 | ID | Item | Source | Status | Est h |
 |---|---|---|---|---|
@@ -50,7 +50,7 @@
 | T04 | Owner sign-off on Gate D (D1–D3) | workplan.md T-04 | `done` | 1 |
 | R5 | MCP-registry submission | workplan.md T-R5 | `blocked-owner` | 1 |
 | R6 | MCPB bundle attach to the GitHub Release — done 2026-11-14: `instagram-mcp-ai-0.8.0.mcpb` uploaded to the `v0.8.0` release | workplan.md T-R6 | `done` | 2 |
-| R8 | Plugin-marketplace listing | workplan.md T-R8 | `blocked-owner` | 2 |
+| R8 | Plugin-marketplace listing — done 2026-11-19: submitted by the owner to Anthropic's directory (`claude plugin validate --strict` clean); listing awaits Anthropic's review | workplan.md T-R8 | `done` | 2 |
 | OWNER-DEC | Wave-21/23 owner-decision candidates (CFG-81, PROC-213, INS-28/29, RATE-3/6, login echo/scheme, carousel VIDEO, userTags, …) | WORKLOG 2026-10-10, 2026-10-13 | `done` | 8 |
 | OWNER-DOC | Residual owner decisions: record PROC-213, INS-28/29, RATE-18 as accepted | corner-cases.md §10 | `done` | 1 |
 | CUT | 1.0.0 cut: stability promise review, release-checklist pass, CHANGELOG, status docs | release-checklist.md | `blocked-external` | 2 |
@@ -63,6 +63,7 @@
 - 2026-11-08 `4b468ac` — 84.7 %, 39.1 h left (+0.1 pp; INSTALL `partial:50`→`partial:65` — the plugin's server started by Claude Code with a stored token in a Linux container, `4b468ac`; V3-00 catalogue freeze `d84c0b2` is 3.0 work, outside this target)
 - 2026-11-08 `76bcbb1` — 84.9 %, 38.6 h left (+0.2 pp; INSTALL `partial:65`→`partial:80` — the plugin step with the macOS keychain: the token lands in its own login keychain item and the server connects, `76bcbb1`)
 - 2026-11-14 `bbda6d9` — 85.7 %, 36.6 h left (+0.8 pp; R6 `blocked-owner`→`done` — `instagram-mcp-ai-0.8.0.mcpb` attached to the `v0.8.0` GitHub Release on 2026-11-14, sha256 `434f77e7…dc82`)
+- 2026-11-19 `fa4fb68` — 86.5 %, 34.6 h left (+0.8 pp; R8 `blocked-owner`→`done` — the owner submitted the plugin to Anthropic's directory on 2026-11-19 after `claude plugin validate --strict` came back clean; the listing awaits Anthropic's review)
 <!-- release-progress:end -->
 
 ## Current state (updated 2026-10-10)
@@ -78,15 +79,15 @@ Status vocabulary used throughout this file and [workplan.md](workplan.md):
 | M2 Publishing + write safety | **PARTIAL** | Code shipped (containers, composites, journal, login/refresh CLIs) and D3 elicitation landed 2026-07-29. **Left: live verification only** — no real post has ever been published. |
 | M3 Moderation | **PARTIAL** | 9 comment tools (the comment toggle moved from `media` to `comments` on 2026-09-30, CC-PROC-9) + the `IG_ALLOW_DESTRUCTIVE` double gate shipped and unit-tested; no live moderation run. |
 | M4 Insights & discovery | **PARTIAL** | Insights shipped, never verified against real metrics. `discovery` is implemented and registered; its gating probe (T-E3) cannot run without live Path-B credentials, so the gate was **decided without it on 2026-07-29** — the package stays, reversibly. See the decision block below. |
-| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, and `0.8.0` followed on 2026-10-13, each published by the release workflow from its GitHub Release. The MCPB bundle was attached to the `v0.8.0` GitHub Release on 2026-11-14. **Not done:** the MCP-registry submission, the plugin-marketplace listing, and clean-machine install testing of any channel (the npm tarball and the MCPB bundle were install-tested locally on 2026-10-10, after the SDK v2 migration — see below — which is not the same thing). Those are outward, irreversible acts awaiting an explicit go-ahead. |
+| M5 Distribution | **PARTIAL** | Artifacts exist (README autogen + sync test, SECURITY.md, CHANGELOG.md, release checklist, stability.md, setup guide, troubleshooting, `server.json`, MCPB `manifest.json`, `.cjs` launcher, release workflow, and — from 2026-07-29, completed 2026-08-07 — `plugins/instagram-mcp-ai/.claude-plugin/plugin.json` **plus** `.claude-plugin/marketplace.json`, both schema-validated and contract-tested). **One of four channels has shipped:** `instagram-mcp-ai@0.7.0` went to npm with build provenance on 2026-08-25, and `0.8.0` followed on 2026-10-13, each published by the release workflow from its GitHub Release. The MCPB bundle was attached to the `v0.8.0` GitHub Release on 2026-11-14, and the plugin was submitted to Anthropic's directory on 2026-11-19 (review pending). **Not done:** the MCP-registry submission, and clean-machine install testing of any channel (the npm tarball and the MCPB bundle were install-tested locally on 2026-10-10, after the SDK v2 migration — see below — which is not the same thing). Those are outward, irreversible acts awaiting an explicit go-ahead. |
 | M6 Messaging | **NOT STARTED — design review answered DEFER** | Review written: [messaging.md](messaging.md). Verdict **DEFER (NO-GO for v1)**; the conditions that would flip it are listed there. |
 
 **Where the project stands (2026-10-13).** `instagram-mcp-ai` 0.8.0 is on npm as
 `latest` since 2026-10-13 (tag `v0.8.0`, published with provenance by the release
 workflow); 0.7.0 was the first publish, on 2026-08-25. The MCP-registry submission
-(workplan T-R5) and the marketplace listing (T-R8) remain outward acts that wait
-on the owner's go-ahead; the MCPB bundle (T-R6) was attached to the `v0.8.0`
-release on 2026-11-14. Audit waves 18
+(workplan T-R5) remains an outward act that waits on the owner; the MCPB bundle
+(T-R6) was attached to the `v0.8.0` release on 2026-11-14, and the plugin (T-R8)
+was submitted to Anthropic's directory on 2026-11-19. Audit waves 18
 and 19 have run since 0.7.0, and on 2026-09-30 every recorded owner-decision
 recommendation was applied — the [corner-cases.md](corner-cases.md) §10 register
 plus the wave-18/19 rows (see item 6 of the open-question register below). On
@@ -435,8 +436,9 @@ matrix (D1) enforced end-to-end and snapshot-tested.
   `z.object()`, the re-baselined published-schema pins) was finished by hand. The
   29-tool surface, profiles and output vocabularies are unchanged; the published
   JSON Schema's dialect and a few keyword spellings are not (see `CHANGELOG.md`).
-- **NOT DONE:** the MCP-registry submission; the MCPB bundle attach (built and smoke-tested locally 2026-10-01, rebuilt and re-tested on SDK v2 2026-10-10, never installed in a client); the
-  plugin-marketplace listing. All three are manual, outward acts.
+- **NOT DONE:** the MCP-registry submission, a manual outward act. (The MCPB
+  bundle was attached to the `v0.8.0` release on 2026-11-14; the plugin was
+  submitted to Anthropic's directory on 2026-11-19, review pending.)
 - **BLOCKED (live/clean-machine):** the MCPB token-acquisition story for non-CLI
   users, and the exit gate's install testing of all **four** channels — including
   proving that the plugin's `${user_config.IG_ACCESS_TOKEN}` interpolation really

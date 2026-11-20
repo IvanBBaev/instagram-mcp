@@ -7,6 +7,7 @@ import {
   getMediaInsights,
   getOnlineFollowers,
   validateBreakdownMetrics,
+  validateDemographicTimeframe,
   validateMediaMetrics,
   validateMediaMetricsForPath,
   ACCOUNT_BREAKDOWN_METRICS,
@@ -18,6 +19,7 @@ import {
   DEMOGRAPHIC_BREAKDOWNS,
   DEMOGRAPHIC_METRICS,
   DEMOGRAPHIC_TIMEFRAMES,
+  ENGAGED_AUDIENCE_TIMEFRAMES,
   FB_LOGIN_MEDIA_METRICS,
   MEDIA_BREAKDOWN_METRICS,
   MEDIA_BREAKDOWNS,
@@ -1121,6 +1123,57 @@ test('getAudienceDemographics refuses an unresolved account id before spending a
   assert.equal(blank.calls.length, 0);
 });
 
+test('engaged_audience_demographics is refused for the timeframes Graph 20 dropped, before the call (CC-INS-32)', async () => {
+  // Meta's v20.0 changelog (applied to every version since 2024-08-19) stopped
+  // serving last_14_days, last_30_days, last_90_days and prev_month for the
+  // engaged audience. Graph fails the whole request, so sending the call would
+  // also lose a follower_demographics asked for beside it. The refusal names
+  // the timeframes that still work and says the follower population is fine.
+  assert.deepEqual(ENGAGED_AUDIENCE_TIMEFRAMES, ['this_month', 'this_week']);
+  for (const timeframe of ['last_14_days', 'last_30_days', 'last_90_days', 'prev_month'] as const) {
+    for (const metrics of [
+      ['engaged_audience_demographics'],
+      ['follower_demographics', 'engaged_audience_demographics'],
+    ] as const) {
+      const { req, calls } = recordingReq(demoWire);
+      await assert.rejects(
+        () =>
+          getAudienceDemographics(req, { accountId: '123', metrics, breakdown: 'age', timeframe }),
+        (e: unknown) =>
+          isInstagramError(e) &&
+          e.kind === 'validation' &&
+          e.message ===
+            `engaged_audience_demographics is not available for timeframe ${timeframe}; since Graph API v20.0 Instagram serves it only for: this_month, this_week. follower_demographics still accepts ${timeframe}.`,
+        `${metrics.join(',')} with ${timeframe}`,
+      );
+      assert.equal(calls.length, 0, `${metrics.join(',')} with ${timeframe} spent a call`);
+    }
+  }
+});
+
+test('the engaged-audience timeframe rule leaves follower_demographics and the current timeframes alone (CC-INS-32)', async () => {
+  // The changelog names the engaged and reached audiences only; the reference
+  // still lists all six timeframes for follower_demographics. Over-refusing
+  // would take away a window the caller can still read.
+  for (const timeframe of DEMOGRAPHIC_TIMEFRAMES) {
+    const { req, calls } = recordingReq(demoWire);
+    await getAudienceDemographics(req, { accountId: '123', breakdown: 'age', timeframe });
+    assert.equal(calls[0]?.params?.timeframe, timeframe);
+    assert.doesNotThrow(() => validateDemographicTimeframe(['follower_demographics'], timeframe));
+  }
+  for (const timeframe of ENGAGED_AUDIENCE_TIMEFRAMES) {
+    const { req, calls } = recordingReq(demoWire);
+    await getAudienceDemographics(req, {
+      accountId: '123',
+      metrics: ['follower_demographics', 'engaged_audience_demographics'],
+      breakdown: 'age',
+      timeframe,
+    });
+    assert.equal(calls[0]?.params?.metric, 'follower_demographics,engaged_audience_demographics');
+    assert.equal(calls[0]?.params?.timeframe, timeframe);
+  }
+});
+
 // --- online followers -------------------------------------------------------
 
 test('getOnlineFollowers requests metric=online_followers period=lifetime', async () => {
@@ -1411,6 +1464,7 @@ const VOCABULARIES: readonly (readonly [string, readonly string[]])[] = [
   ['DEMOGRAPHIC_METRICS', DEMOGRAPHIC_METRICS],
   ['DEMOGRAPHIC_BREAKDOWNS', DEMOGRAPHIC_BREAKDOWNS],
   ['DEMOGRAPHIC_TIMEFRAMES', DEMOGRAPHIC_TIMEFRAMES],
+  ['ENGAGED_AUDIENCE_TIMEFRAMES', ENGAGED_AUDIENCE_TIMEFRAMES],
   ['ACCOUNT_PERIODS', ACCOUNT_PERIODS],
   ['METRIC_TYPES', METRIC_TYPES],
   ['TIME_SERIES_ACCOUNT_METRICS', TIME_SERIES_ACCOUNT_METRICS],

@@ -464,7 +464,7 @@ const audienceDemographicsInput = {
   timeframe: z
     .enum(DEMOGRAPHIC_TIMEFRAMES)
     .describe(
-      'Required. The window the demographics are computed over (demographics use timeframe, not since/until). Requires an account with at least 100 followers.',
+      'Required. The window the demographics are computed over (demographics use timeframe, not since/until). Requires an account with at least 100 followers. engaged_audience_demographics accepts only this_month or this_week (Graph API v20.0 dropped the older windows for it); follower_demographics accepts all six.',
     ),
 };
 

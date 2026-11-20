@@ -933,7 +933,7 @@ IG_TOOL_PACKAGES=account,media,insights</code></pre>
           <div class="tool-params"><table><thead><tr><th>Parameter</th><th>Type</th><th></th><th>Notes</th></tr></thead><tbody>
             <tr><td><code>metrics</code></td><td>enum[]</td><td><span class="opt">optional</span></td><td>Defaults to <code>follower_demographics</code>; <code>engaged_audience_demographics</code> also available.</td></tr>
             <tr><td><code>breakdown</code></td><td>enum</td><td><span class="req">required</span></td><td>The single dimension to break down by.</td></tr>
-            <tr><td><code>timeframe</code></td><td>enum</td><td><span class="req">required</span></td><td>The window demographics are computed over. Needs an account with ≥100 followers.</td></tr>
+            <tr><td><code>timeframe</code></td><td>enum</td><td><span class="req">required</span></td><td>The window demographics are computed over. Needs an account with ≥100 followers. <code>engaged_audience_demographics</code> takes only <code>this_month</code> or <code>this_week</code>.</td></tr>
           </tbody></table></div>
         </details>
         <details class="tool">

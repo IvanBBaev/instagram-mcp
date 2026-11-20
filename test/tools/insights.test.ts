@@ -791,13 +791,13 @@ test('demographics forwards the requested population instead of the default one'
   const { ctx, calls } = makeCtx({ response: { data: [] }, accountId: '5' });
 
   await toolByName('instagram_get_audience_demographics').handler(
-    { metrics: ['engaged_audience_demographics'], breakdown: 'country', timeframe: 'last_14_days' },
+    { metrics: ['engaged_audience_demographics'], breakdown: 'country', timeframe: 'this_week' },
     ctx,
   );
 
   assert.equal(calls[0]?.params?.metric, 'engaged_audience_demographics');
   assert.equal(calls[0]?.params?.breakdown, 'country');
-  assert.equal(calls[0]?.params?.timeframe, 'last_14_days');
+  assert.equal(calls[0]?.params?.timeframe, 'this_week');
 });
 
 test('demographics logs the population it was asked for, naming the implicit one "default"', () => {
@@ -1231,6 +1231,12 @@ test('audience demographics describes the 100-follower floor and that it takes a
     'The window the demographics are computed over (demographics use timeframe, not since/until).',
   );
   assertMentions(timeframe, 'Requires an account with at least 100 followers.');
+  // CC-INS-32: the one population/timeframe pair Graph refuses is stated where
+  // the caller picks the timeframe, not only in the refusal.
+  assertMentions(
+    timeframe,
+    'engaged_audience_demographics accepts only this_month or this_week (Graph API v20.0 dropped the older windows for it); follower_demographics accepts all six.',
+  );
 });
 
 test('online followers describes its 30-day window and its own deprecation risk', () => {
@@ -1672,7 +1678,8 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           ],
           description:
             'Required. The window the demographics are computed over (demographics use ' +
-            'timeframe, not since/until). Requires an account with at least 100 followers.',
+            'timeframe, not since/until). Requires an account with at least 100 followers.' +
+            ' engaged_audience_demographics accepts only this_month or this_week (Graph API v20.0 dropped the older windows for it); follower_demographics accepts all six.',
         },
       },
       required: ['breakdown', 'timeframe'],

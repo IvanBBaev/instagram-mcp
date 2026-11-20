@@ -16,6 +16,8 @@
  *    so legacy names are rejected at the tool's zod enum before any call.
  *  - CC-INS-25: `time_series` for `reach` only, a combination rule taken from
  *    Meta's metrics table.
+ *  - CC-INS-32: `engaged_audience_demographics` only with `this_month` or
+ *    `this_week` (Graph API v20.0); `follower_demographics` keeps all six.
  *
  * Metric availability can differ by auth path, but docs/tools.md marks none of
  * these tools path-specific, so the specs leave `ToolSpec.paths` undefined. The
@@ -324,6 +326,22 @@ export const DEMOGRAPHIC_TIMEFRAMES = Object.freeze([
 ] as const);
 export type DemographicTimeframe = (typeof DEMOGRAPHIC_TIMEFRAMES)[number];
 
+/**
+ * CC-INS-32: the timeframes Meta still serves `engaged_audience_demographics`
+ * for. Graph API v20.0 dropped `last_14_days`, `last_30_days`, `last_90_days`
+ * and `prev_month` for the engaged (and reached) audience, and the change
+ * applies to every version since 2024-08-19 *[verified 2026-11-20 —
+ * developers.facebook.com/docs/graph-api/changelog/version20.0, "Instagram User
+ * Insights"; the account-insights reference repeats it on the
+ * engaged_audience_demographics row]*. `follower_demographics` is not named
+ * there and its row still lists all six, so {@link DEMOGRAPHIC_TIMEFRAMES}
+ * keeps them (removing an accepted value is a v2-analysis §8 q3 decision).
+ */
+export const ENGAGED_AUDIENCE_TIMEFRAMES: readonly DemographicTimeframe[] = Object.freeze([
+  'this_month',
+  'this_week',
+] as const);
+
 /** Aggregation period for account metrics. */
 export const ACCOUNT_PERIODS = Object.freeze(['day', 'week', 'days_28'] as const);
 export type AccountPeriod = (typeof ACCOUNT_PERIODS)[number];
@@ -420,4 +438,22 @@ export function validateBreakdownMetrics(
       { kind: 'validation' },
     );
   }
+}
+
+/**
+ * CC-INS-32: refuse `engaged_audience_demographics` with a timeframe Meta no
+ * longer serves it for ({@link ENGAGED_AUDIENCE_TIMEFRAMES}), before the call.
+ * Graph fails the whole request, so a call that also names
+ * `follower_demographics` would lose that population too.
+ */
+export function validateDemographicTimeframe(
+  metrics: readonly DemographicMetric[],
+  timeframe: DemographicTimeframe,
+): void {
+  if (!metrics.includes('engaged_audience_demographics')) return;
+  if (ENGAGED_AUDIENCE_TIMEFRAMES.includes(timeframe)) return;
+  throw new InstagramError(
+    `engaged_audience_demographics is not available for timeframe ${timeframe}; since Graph API v20.0 Instagram serves it only for: ${ENGAGED_AUDIENCE_TIMEFRAMES.join(', ')}. follower_demographics still accepts ${timeframe}.`,
+    { kind: 'validation' },
+  );
 }

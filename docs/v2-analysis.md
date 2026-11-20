@@ -51,7 +51,7 @@
 | 2026-10-27 (all versions, v25 included) | `GET /?ids=`, `date_format` → error; `pretty`/`debug` ignored; ETag / `If-None-Match` / 304 removed | **None.** The source uses none of them (checked 2026-10-24). |
 | 2026-07-30 | `media_url` is omitted, with HTTP 200, for video with licensed audio and for reels whose owner disabled downloads | **Already handled.** `media_url` is optional in every output schema. Worth one docs line telling clients to fall back to `permalink` / `thumbnail_url`. |
 | 2025-01-21 → 2025-04-21 | `impressions`, `plays`, `clips_replays_count`, `ig_reels_aggregated_all_plays_count` deprecated; `views` added | Check the insights metric enums against the list in §4.3. |
-| since Graph 20 | Demographics timeframes limited to `this_week` / `this_month` | This matches the open owner question on deprecated demographics timeframes. Meta has settled it, so it no longer needs a live check, only a docs-backed change. |
+| since Graph 20 | Demographics timeframes limited to `this_week` / `this_month` for `engaged_audience_demographics` (and `reached_audience_demographics`); `follower_demographics` still lists all six (re-read 2026-11-20) | This matches the open owner question on deprecated demographics timeframes. For the engaged audience Meta has settled it, and the docs-backed change is applied without removing an enum value: the pair is refused before the call (CC-INS-32). The purge of the values themselves stays §8 q3. |
 | 2028-07-29 | v25.0 end of life, per the versions table `[verify — unusually long lifetime]` | The pin is safe for about 21 months. v26 shipped 2026-07-29 with no Instagram-specific breaks found. |
 
 ### 3.2 Contradictions with our own docs to resolve

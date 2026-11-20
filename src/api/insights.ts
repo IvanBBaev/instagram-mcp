@@ -43,6 +43,7 @@ import {
   TIME_SERIES_ACCOUNT_METRICS,
   validateBreakdownMetrics,
   validateMediaMetrics,
+  validateDemographicTimeframe,
   validateMediaMetricsForPath,
 } from './insights-catalogue.js';
 import type {
@@ -572,6 +573,7 @@ export async function getAudienceDemographics(
 ): Promise<AudienceDemographicsResult> {
   const accountId = requireAccountId(params.accountId);
   const metrics = uniqueMetrics(params.metrics ?? (['follower_demographics'] as const));
+  validateDemographicTimeframe(metrics, params.timeframe);
   const read = readInsightsBody(
     await req<unknown>({
       method: 'GET',

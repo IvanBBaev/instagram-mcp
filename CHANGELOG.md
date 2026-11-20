@@ -231,6 +231,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `instagram_get_audience_demographics` refuses `engaged_audience_demographics`
+  with `last_14_days`, `last_30_days`, `last_90_days` or `prev_month` before
+  the call. Graph API v20.0 stopped serving those windows for the engaged
+  audience on every version from 2024-08-19, so the call failed upstream and
+  took a `follower_demographics` asked for beside it down too. The refusal
+  names `this_month` and `this_week`. `follower_demographics` still accepts all
+  six timeframes, and no enum value was removed (CC-INS-32).
 - `login` and `refresh` now replace a mixed-case spelling of the profile's keys
   (`IG_PROFILE_Work_ACCESS_TOKEN` for profile `work`) instead of appending the
   upper-case key below it. Before, the old token stayed on disk and could

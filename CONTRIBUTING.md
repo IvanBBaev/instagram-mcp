@@ -21,7 +21,7 @@ the two Instagram auth paths and the credential resolution order.
 npm run check        # the full gate: lint + format:check + build + corpus + coverage + audit
 npm run lint         # eslint . (type-checked)
 npm run format:check # prettier --check .
-npm test             # node --test over dist (needs a prior build)
+npm test             # node --test over dist, 4 files at a time (needs a prior build)
 npm run test:corpus  # the compiled suite is non-empty and the runner glob reaches it
 npm run test:full    # build + corpus guard + test in one step
 npm run coverage     # c8 text + lcov
@@ -30,6 +30,14 @@ npm run coverage     # c8 text + lcov
 `prepublishOnly` runs `npm run check`, so a publish cannot bypass the gate. CI
 runs the same chain on the Node 22/24 × ubuntu/macOS/Windows matrix, plus
 `npm audit` and CodeQL.
+
+`npm test` runs at most four test files at once (`--test-concurrency=4`)
+rather than Node's default of one fewer than the CPU count. The entry,
+launcher and packaging tests spawn child processes under a 20 s `spawnSync`
+timeout, and on a loaded machine a full fan-out starves them into `ETIMEDOUT`
+failures that are not bugs. A CI runner has three or four CPUs, so Node's
+default there is already below the cap and nothing changes. `test:shard`
+forwards the same cap, so a shard runs the way `npm test` runs.
 
 ## Architecture: the four layers
 

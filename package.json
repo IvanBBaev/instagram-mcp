@@ -42,7 +42,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test \"dist/**/*.test.js\"",
+    "test": "node --test --test-concurrency=4 \"dist/**/*.test.js\"",
     "test:corpus": "node scripts/assert-test-corpus.mjs",
     "test:shard": "node scripts/test-shard.mjs",
     "test:docs": "node --test \"dist/test/docs-*.test.js\" dist/test/source-citations.test.js dist/test/env-catalog.test.js",

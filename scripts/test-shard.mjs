@@ -54,6 +54,9 @@ if (quoted === null) {
   fail(`package.json "test" spells no quoted glob; teach this script the new spelling.`);
 }
 const glob = quoted[1] ?? quoted[2];
+// The concurrency cap `npm test` sets, forwarded so a shard runs its files the
+// way the full suite does (see CONTRIBUTING.md, Quality gate).
+const concurrency = /(?:^|\s)(--test-concurrency=[1-9]\d*)(?=\s|$)/.exec(scripts.test)?.[1];
 
 // Same `*` / `**` subset the corpus guard translates. Counted here only to
 // refuse a `total` that would leave a shard empty; the runner does the slicing.
@@ -78,7 +81,8 @@ if (total > files.length) {
   );
 }
 
-const run = spawnSync(process.execPath, ['--test', `--test-shard=${index}/${total}`, glob], {
+const runnerArgs = ['--test', ...(concurrency === undefined ? [] : [concurrency])];
+const run = spawnSync(process.execPath, [...runnerArgs, `--test-shard=${index}/${total}`, glob], {
   cwd: repoRoot,
   stdio: 'inherit',
 });

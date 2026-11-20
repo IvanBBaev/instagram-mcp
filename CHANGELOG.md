@@ -201,6 +201,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the full lane, and one `CI result` check reports either lane. A new
   `test:shard` script runs one slice of the corpus via Node's `--test-shard`;
   coverage stays one unsharded run. The published package is unchanged.
+- Internal: `npm test` runs at most four test files at once
+  (`--test-concurrency=4`), and `test:shard` forwards the same cap. On a loaded
+  machine the default fan-out (CPU count minus one) starved the spawn tests
+  into 20 s `spawnSync` timeouts that were not bugs. The published package is
+  unchanged.
 - Internal: bootstrap no longer writes `process.env`. It copies the client
   environment, loads the env files into that copy (client > config home >
   project `.env`, unchanged) and hands it to the settings, credential, `login`,

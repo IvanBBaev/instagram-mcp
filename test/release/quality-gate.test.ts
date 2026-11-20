@@ -217,6 +217,19 @@ test('a shard runs the corpus `npm test` runs', () => {
   );
 });
 
+test('the suite runs a bounded number of files at once, and a shard runs under the same cap', () => {
+  const cap = /(?:^|\s)--test-concurrency=([1-9]\d*)(?=\s|$)/.exec(scripts()['test'] ?? '');
+  assert.ok(
+    cap !== null,
+    '`npm test` no longer caps --test-concurrency: on a loaded machine the spawn tests ' +
+      'starve into spawnSync ETIMEDOUT failures (see CONTRIBUTING.md, Quality gate)',
+  );
+  assert.ok(
+    read('scripts/test-shard.mjs').includes('--test-concurrency='),
+    '`test:shard` no longer forwards the cap, so a shard runs differently from `npm test`',
+  );
+});
+
 /**
  * Run the real guard against a throwaway tree holding the given files. The guard
  * resolves its repo root from its own location, so a copy of it inside the tree

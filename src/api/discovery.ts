@@ -80,10 +80,22 @@ export interface SearchedHashtag {
 }
 
 /**
- * The fields requested per entry. `name` is in Meta's reference for the edge,
- * but whether it is served on every entry is unconfirmed live [verify].
+ * The fields requested per entry. Each entry is an IG Hashtag node, and `name`
+ * is an IG Hashtag field ("The hashtag's name, without the leading hash
+ * symbol"). The edge's own reference shows only `id` in its sample answer, so
+ * whether `name` is served on every entry is unconfirmed live [verify].
  */
 export const SEARCHED_HASHTAG_FIELDS = 'id,name';
+
+/**
+ * The page size sent on every request (CC-DATA-136). Meta's reference for the
+ * edge: "The API returns 25 results per page by default", and "you can use the
+ * `limit` parameter to get up to 30 per page (`limit=30`)"; the budget itself
+ * is 30 unique hashtags. At the default size, an account that had searched 26–30
+ * hashtags was read as 25 whenever Graph sent no cursor for the rest, and
+ * the reference documents no cursor for this edge.
+ */
+export const SEARCHED_HASHTAG_PAGE_LIMIT = 30;
 
 /**
  * `GET /{ig-user-id}/recently_searched_hashtags?fields=id,name` on
@@ -93,10 +105,11 @@ export const SEARCHED_HASHTAG_FIELDS = 'id,name';
  * counter it survives restarts and sees every process and app on the account.
  *
  * Read whole (`fetchAll`) up to `maxItems`: a count read off the first page
- * alone would understate the budget spent. No `limit` is sent — Meta documents
- * at most 30 entries, but the edge's page size and paging shape are
- * unconfirmed live [verify], so the walk follows whatever cursor it is handed
- * instead of trusting one page to hold them all. Unreadable pages, unusable cursors
+ * alone would understate the budget spent. Every page asks for
+ * {@link SEARCHED_HASHTAG_PAGE_LIMIT} entries, so the whole 30-hashtag budget
+ * fits in one page. The reference documents no paging object for this edge
+ * [verify], so the walk still follows any cursor it is handed instead of
+ * trusting one page to hold them all. Unreadable pages, unusable cursors
  * and the item cap are decided by {@link fetchPagedEdge}, exactly as for every
  * other paged edge.
  */
@@ -109,7 +122,7 @@ export async function recentlySearchedHashtags(
     (after) => ({
       method: 'GET',
       path: `/${encodeURIComponent(params.igId)}/recently_searched_hashtags`,
-      params: { fields: SEARCHED_HASHTAG_FIELDS, after },
+      params: { fields: SEARCHED_HASHTAG_FIELDS, limit: SEARCHED_HASHTAG_PAGE_LIMIT, after },
       host: 'graph.facebook.com',
     }),
     { maxItems: params.maxItems, fetchAll: true },

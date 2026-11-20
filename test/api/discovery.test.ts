@@ -19,6 +19,7 @@ import {
   NO_PROFILE_NOTE,
   getHashtagMedia,
   recentlySearchedHashtags,
+  SEARCHED_HASHTAG_PAGE_LIMIT,
   searchHashtag,
 } from '../../src/api/discovery.js';
 import { CAP_MID_PAGE_NOTE, SAME_CURSOR_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
@@ -1154,10 +1155,40 @@ test('recentlySearchedHashtags reads /{ig-id}/recently_searched_hashtags on grap
     {
       method: 'GET',
       path: '/999/recently_searched_hashtags',
-      params: { fields: 'id,name', after: undefined },
+      params: { fields: 'id,name', limit: 30, after: undefined },
       host: 'graph.facebook.com',
     },
   ]);
+});
+
+test('recentlySearchedHashtags asks for the documented 30-per-page maximum so one page holds the whole budget (CC-DATA-136)', async () => {
+  // Meta: 25 results per page by default, up to 30 with `limit`; the budget is
+  // 30 unique hashtags. Thirty entries on one cursorless page are all read.
+  assert.equal(SEARCHED_HASHTAG_PAGE_LIMIT, 30);
+  const thirty = Array.from({ length: 30 }, (_, i) => ({ id: `h${i}` }));
+  const { req, calls } = fakeReq((opts) => ({
+    data: thirty.slice(0, Number(opts.params?.limit ?? 25)),
+  }));
+
+  const page = await recentlySearchedHashtags(req, { igId: '999', maxItems: 50 });
+
+  assert.equal(page.items.length, 30);
+  assert.equal(page.truncated, false);
+  assert.equal(calls.length, 1);
+  // Every page of the walk asks for the same size, not only the first.
+  const walk = fakeReq((opts) =>
+    opts.params?.after === undefined
+      ? {
+          data: [{ id: 'h1' }],
+          paging: { cursors: { after: 'P2' }, next: 'https://graph.facebook.com/next' },
+        }
+      : { data: [{ id: 'h2' }] },
+  );
+  await recentlySearchedHashtags(walk.req, { igId: '999', maxItems: 50 });
+  assert.deepEqual(
+    walk.calls.map((c) => c.params?.limit),
+    [30, 30],
+  );
 });
 
 test('recentlySearchedHashtags walks every page and stops at the item cap', async () => {

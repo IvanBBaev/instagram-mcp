@@ -236,6 +236,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `instagram_list_recently_searched_hashtags` asks for 30 entries per page
+  (`limit=30`), Meta's documented maximum for the edge. Without a `limit`,
+  Graph serves 25 per page by default and documents no cursor for this edge, so
+  an account that had searched 26–30 hashtags could be reported as 25 used
+  with `truncated: false` (CC-DATA-136).
 - `instagram_get_audience_demographics` refuses `engaged_audience_demographics`
   with `last_14_days`, `last_30_days`, `last_90_days` or `prev_month` before
   the call. Graph API v20.0 stopped serving those windows for the engaged

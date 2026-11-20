@@ -3131,7 +3131,7 @@ test('list_recently_searched_hashtags reads the edge off the operated account on
   assert.equal(calls[0]?.method, 'GET');
   assert.equal(calls[0]?.path, '/999/recently_searched_hashtags');
   assert.equal(calls[0]?.host, 'graph.facebook.com');
-  assert.deepEqual(calls[0]?.params, { fields: 'id,name', after: undefined });
+  assert.deepEqual(calls[0]?.params, { fields: 'id,name', limit: 30, after: undefined });
   assert.deepEqual(res.structuredContent, {
     hashtags: [
       { id: 'h1', name: fence('coffee') },

@@ -369,13 +369,22 @@ test('an id containing "?" or "&" cannot introduce a query parameter', async () 
       await call(req, hostile);
       const url = soleUrl(urls);
       const keys = [...url.searchParams.keys()];
-      for (const smuggled of ['a', 'b', 'limit']) {
+      for (const smuggled of ['a', 'b']) {
         assert.equal(
           keys.includes(smuggled),
           false,
           `${label} / ${hostile}: no "${smuggled}" parameter appeared`,
         );
       }
+      // A call may send its own `limit` (recently_searched_hashtags asks for
+      // 30, CC-DATA-136), but never a second one, and never the injected 999.
+      const limits = url.searchParams.getAll('limit');
+      assert.equal(limits.length <= 1, true, `${label} / ${hostile}: at most one "limit"`);
+      assert.equal(
+        limits.includes('999'),
+        false,
+        `${label} / ${hostile}: the injected limit did not land`,
+      );
       assert.deepEqual(
         tokensSent(url, bodies),
         ['IG_TOKEN'],

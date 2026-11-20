@@ -919,7 +919,7 @@ test('isHttpsUrl accepts a URL carrying embedded credentials, and nothing echoes
 
 // --- carousel bounds --------------------------------------------------------
 
-test('assertCarouselSize accepts the inclusive 2–10 range and rejects outside it', () => {
+test('assertCarouselSize accepts the inclusive 2–20 range and rejects outside it', () => {
   assert.doesNotThrow(() => assertCarouselSize(CAROUSEL_MIN));
   assert.doesNotThrow(() => assertCarouselSize(CAROUSEL_MAX));
   assert.throws(
@@ -932,34 +932,34 @@ test('assertCarouselSize accepts the inclusive 2–10 range and rejects outside 
   );
 });
 
-test('the carousel bounds are exactly 2 and 10, both sides pinned', () => {
+test('the carousel bounds are exactly 2 and 20, both sides pinned', () => {
   // A one-item "carousel" is not a carousel: the create call would go out with a
   // CAROUSEL media_type and a single child and fail at Meta after the child
-  // containers had already been created and paid for. An eleventh child fails the
+  // containers had already been created and paid for. A twenty-first child fails the
   // same way. The range test above is written in terms of the constants and follows
   // them anywhere they move, so these are asserted against literals.
   assert.equal(CAROUSEL_MIN, 2);
-  assert.equal(CAROUSEL_MAX, 10);
+  assert.equal(CAROUSEL_MAX, 20);
   assert.doesNotThrow(() => assertCarouselSize(2));
-  assert.doesNotThrow(() => assertCarouselSize(10));
+  assert.doesNotThrow(() => assertCarouselSize(20));
   assert.throws(
     () => assertCarouselSize(1),
     (e: unknown) =>
       e instanceof InstagramError &&
       e.kind === 'validation' &&
-      e.message === 'A carousel needs 2–10 items (got 1).',
+      e.message === 'A carousel needs 2–20 items (got 1).',
   );
   assert.throws(
-    () => assertCarouselSize(11),
+    () => assertCarouselSize(21),
     (e: unknown) =>
       e instanceof InstagramError &&
       e.kind === 'validation' &&
-      e.message === 'A carousel needs 2–10 items (got 11).',
+      e.message === 'A carousel needs 2–20 items (got 21).',
   );
 });
 
 test('assertCarouselSize refuses a count that is not a whole number', () => {
-  // NaN is the hole a pure range test cannot cover: `NaN < 2` and `NaN > 10` are BOTH
+  // NaN is the hole a pure range test cannot cover: `NaN < 2` and `NaN > 20` are BOTH
   // false, so `count < MIN || count > MAX` alone returns normally and the caller goes
   // on to assemble a carousel out of a child count that is not a number — the create
   // call then goes to Graph describing an album nobody asked for. `2.5` slips through
@@ -974,7 +974,7 @@ test('assertCarouselSize refuses a count that is not a whole number', () => {
       (e: unknown) =>
         e instanceof InstagramError &&
         e.kind === 'validation' &&
-        e.message === `A carousel needs 2–10 items (got ${bad}).`,
+        e.message === `A carousel needs 2–20 items (got ${bad}).`,
       `${bad} must be refused`,
     );
   }
@@ -1095,7 +1095,7 @@ test('every refusal in this module carries kind and message ONLY — no code, st
     {
       what: 'a carousel below the minimum',
       run: () => assertCarouselSize(1),
-      message: 'A carousel needs 2–10 items (got 1).',
+      message: 'A carousel needs 2–20 items (got 1).',
     },
   ];
 

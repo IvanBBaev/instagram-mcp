@@ -9,7 +9,7 @@
  *   - media URLs: well-formed `https://` (a clearly non-JPEG or video extension
  *     on a still-image field warns, but is never treated as proof — format
  *     stays unverifiable pre-fetch);
- *   - carousels: 2–10 children;
+ *   - carousels: 2–20 children;
  *   - the container `media_type` enum (feed images send NO `media_type`).
  *
  * Validators throw {@link InstagramError} with `kind: 'validation'` on a hard
@@ -32,7 +32,7 @@ export const MAX_MENTIONS = 20;
 export const MAX_USER_TAGS = 20;
 /** Carousel album bounds (inclusive). */
 export const CAROUSEL_MIN = 2;
-export const CAROUSEL_MAX = 10;
+export const CAROUSEL_MAX = 20;
 /** Image alt-text cap, counted in Unicode code points like the caption. */
 export const MAX_ALT_TEXT_CODEPOINTS = 1000;
 
@@ -408,7 +408,7 @@ export function imageUrlFormatWarning(url: string): string | undefined {
 
 /**
  * Throw {@link InstagramError} (`validation`) unless `count` is a whole number
- * within 2–10.
+ * within 2–20.
  *
  * The integrality test is not redundant with the range test. `NaN` compares
  * false against BOTH bounds, so `count < MIN || count > MAX` alone returns

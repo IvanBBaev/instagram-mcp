@@ -57,9 +57,10 @@
 ### 3.2 Contradictions with our own docs to resolve
 
 - **Carousel size.** Meta's publishing guide now says **up to 20** items. The
-  server enforces 2–10 (`CAROUSEL_MAX`, the tool descriptions and
-  corner-cases.md). `[verify]` against the current reference page before
-  changing anything. Widening an input bound is a **minor** change under
+  server enforced 2–10 (`CAROUSEL_MAX`, the tool descriptions and
+  corner-cases.md). Re-read 2026-11-20: the IG User `/media` reference agrees
+  ("an array of up to 20 container IDs"), so the bound is now 2–20 (CC-PUB-6).
+  Widening an input bound is a **minor** change under
   [stability.md](stability.md) §1.
 - **Deleting media.** The 2025-12-03 changelog adds `DELETE /{ig-media-id}`
   (permission `instagram_manage_contents`). corner-cases.md still states that
@@ -198,21 +199,23 @@ the 100 % coverage net and the mutants still describe today's behaviour.
 
 | Phase | Content | Live creds needed |
 |---|---|---|
-| 1.x | Additive work: new media fields, icons, prompts, resources, Graph v26 move, carousel 20 (if confirmed), `IG_HTTP_PORT` alias, deprecation warnings | No (prompts/resources), yes for verification of new fields |
+| 1.x | Additive work: new media fields, icons, prompts, resources, Graph v26 move, carousel 20 (done 2026-11-20), `IG_HTTP_PORT` alias, deprecation warnings | No (prompts/resources), yes for verification of new fields |
 | 2.0-α | Refactors (§6), 2026-07-28 conformance, tasks for publishing | No |
 | 2.0-β | Platform features (§4.1 GO rows), insights refresh, delete media, upload helper | Partly; every new endpoint ships `[verify]` until Lane E |
 | 2.0-rc | Breaking batch (§5), stability.md and CHANGELOG, Lane E pass | Yes |
 
 ## 10. Doc drift found during this analysis
 
-Status 2026-10-27: every item except the carousel bound is fixed.
+Status 2026-10-27: every item except the carousel bound is fixed. The carousel
+bound was fixed 2026-11-20.
 
 - **Fixed.** corner-cases.md, live-qa.md and `scripts/live-probe.mjs` said feed
   media cannot be deleted via the API. The changelog has said otherwise since
   2025-12-03 (§3.2). They now say this server has no delete tool, which is what
   keeps the `--allow-feed-post` lane irreversible.
-- **Open, `[verify]`.** The carousel bound (2–10) disagrees with Meta's current
-  guide (up to 20). It waits for the reference-page check (§4.1).
+- **Fixed 2026-11-20.** The carousel bound (2–10) disagreed with Meta's current
+  guide (up to 20). The IG User `/media` reference now says 20 as well, and the
+  server accepts 2–20 (CC-PUB-6).
 - **Fixed.** tools.md said "all 17" read tools. The surface is now 21 read and
   11 write, and tools.md says 21.
 - **Fixed.** operations.md pointed to a webhook "phase-3 option" in roadmap.md

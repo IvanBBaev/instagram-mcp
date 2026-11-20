@@ -340,7 +340,7 @@ test('create_media_container rejects a non-https imageUrl scheme, not just a pla
   assert.equal(calls.length, 0, 'nothing is created from a rejected URL');
 });
 
-test('create_media_container previews a carousel with its child count and enforces 2-10', async () => {
+test('create_media_container previews a carousel with its child count and enforces 2-20', async () => {
   const { req, calls } = fakeReq(() => ({ id: 'C1' }));
   const res = await tool('instagram_create_media_container').handler(
     { mediaType: 'CAROUSEL', children: ['A', 'B', 'C'], caption: 'album' },
@@ -351,11 +351,11 @@ test('create_media_container previews a carousel with its child count and enforc
   assert.equal(details?.children, 3, 'the preview states how many children would be attached');
   assert.equal(calls.length, 0, 'a preview creates nothing');
 
-  // 1 and 11 are the two sides of the documented 2–10 range. The message is
+  // 1 and 21 are the two sides of the documented 2–20 range. The message is
   // asserted verbatim, not just the error kind: every other rejection in this
   // handler (a plaintext URL, a missing field) is `kind: 'validation'` too, so a
   // kind-only predicate would pass even if the size check never ran.
-  for (const children of [['A'], Array.from({ length: 11 }, (_, i) => `C${i}`)]) {
+  for (const children of [['A'], Array.from({ length: 21 }, (_, i) => `C${i}`)]) {
     const rejecting = fakeReq(() => ({ id: 'C1' }));
     await assert.rejects(
       async () =>
@@ -366,7 +366,7 @@ test('create_media_container previews a carousel with its child count and enforc
       (e: unknown) =>
         e instanceof InstagramError &&
         e.kind === 'validation' &&
-        e.message === `A carousel needs 2–10 items (got ${children.length}).`,
+        e.message === `A carousel needs 2–20 items (got ${children.length}).`,
       `${children.length} children`,
     );
     assert.equal(rejecting.calls.length, 0);
@@ -942,20 +942,20 @@ test('post_image apply with an empty imageUrls list refuses before any network c
   assert.equal(calls.length, 0);
 });
 
-test('post_image refuses an 11-image carousel before creating a single child container', async () => {
-  // The 2-10 bound is Instagram's, and the album is built child-first: an
-  // 11-image call that is not stopped here creates eleven real containers and
+test('post_image refuses a 21-image carousel before creating a single child container', async () => {
+  // The 2-20 bound is Instagram's, and the album is built child-first: a
+  // 21-image call that is not stopped here creates 21 real containers and
   // only then has the album rejected by Graph. Every one of those was a write
   // against the account's rolling publishing quota, spent on a post that could
   // never have existed — and the caller gets a Graph error instead of the
   // client-side validation error that names the actual limit.
   const { req, calls } = fakeReq(() => ({ id: 'C1' }));
-  const urls = Array.from({ length: 11 }, (_, i) => `https://cdn/${i}.jpg`);
+  const urls = Array.from({ length: 21 }, (_, i) => `https://cdn/${i}.jpg`);
 
   await assert.rejects(
     () => runPostImage({ imageUrls: urls, apply: true }, makeCtx(req), { maxPollMs: 0 }),
     (e: unknown) =>
-      e instanceof InstagramError && e.kind === 'validation' && /got 11/.test(e.message),
+      e instanceof InstagramError && e.kind === 'validation' && /got 21/.test(e.message),
   );
   assert.equal(calls.length, 0, 'not one child container is created');
 });
@@ -1544,38 +1544,38 @@ test('every declared media URL field refuses a non-https URL at the schema bound
 });
 
 test('the carousel bounds are declared in the schema, not only re-checked in the handler', () => {
-  // 2–10 is Instagram's own album range and the album is assembled child-first:
-  // an 11-image call that reaches the handler has already cost eleven container
+  // 2–20 is Instagram's own album range and the album is assembled child-first:
+  // a 21-image call that reaches the handler has already cost 21 container
   // creates before Graph rejects the album. An empty child id is the same failure
   // one level down — it builds an album that references nothing.
   const create = inputOf('instagram_create_media_container');
   assert.equal(create.safeParse({ children: ['A'] }).success, false, '1 child is not a carousel');
   assert.equal(create.safeParse({ children: ['A', 'B'] }).success, true, '2 children is the floor');
   assert.equal(
-    create.safeParse({ children: Array.from({ length: 10 }, (_, i) => `C${i}`) }).success,
+    create.safeParse({ children: Array.from({ length: 20 }, (_, i) => `C${i}`) }).success,
     true,
-    '10 children is the ceiling',
+    '20 children is the ceiling',
   );
   assert.equal(
-    create.safeParse({ children: Array.from({ length: 11 }, (_, i) => `C${i}`) }).success,
+    create.safeParse({ children: Array.from({ length: 21 }, (_, i) => `C${i}`) }).success,
     false,
-    '11 children is over the ceiling',
+    '21 children is over the ceiling',
   );
   assert.equal(create.safeParse({ children: ['A', ''] }).success, false, 'no empty child ids');
 
   const image = inputOf('instagram_post_image');
   assert.equal(image.safeParse({ imageUrls: [] }).success, false, 'a post needs an image');
   assert.equal(
-    image.safeParse({ imageUrls: Array.from({ length: 10 }, (_, i) => `https://cdn/${i}.jpg`) })
+    image.safeParse({ imageUrls: Array.from({ length: 20 }, (_, i) => `https://cdn/${i}.jpg`) })
       .success,
     true,
-    '10 images is the ceiling',
+    '20 images is the ceiling',
   );
   assert.equal(
-    image.safeParse({ imageUrls: Array.from({ length: 11 }, (_, i) => `https://cdn/${i}.jpg`) })
+    image.safeParse({ imageUrls: Array.from({ length: 21 }, (_, i) => `https://cdn/${i}.jpg`) })
       .success,
     false,
-    '11 images is over the ceiling',
+    '21 images is over the ceiling',
   );
 });
 
@@ -2338,7 +2338,7 @@ test('create_media_container documents the values Instagram actually accepts', (
   assert.equal(mediaType.includes('IMAGE/VIDEO are invalid values'), true);
 
   const children = tool('instagram_create_media_container').input.children?.description ?? '';
-  assert.equal(children.includes('2–10 previously-created child container ids'), true);
+  assert.equal(children.includes('2–20 previously-created child container ids'), true);
 
   const carouselItem =
     tool('instagram_create_media_container').input.isCarouselItem?.description ?? '';
@@ -2346,7 +2346,7 @@ test('create_media_container documents the values Instagram actually accepts', (
 
   const images = tool('instagram_post_image').input.imageUrls?.description ?? '';
   assert.equal(
-    images.includes('One URL posts a single feed image; 2–10 URLs post a carousel'),
+    images.includes('One URL posts a single feed image; 2–20 URLs post a carousel'),
     true,
   );
 });
@@ -4367,9 +4367,9 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           type: 'array',
           items: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]{1,64}$' },
           minItems: 2,
-          maxItems: 10,
+          maxItems: 20,
           description:
-            'CAROUSEL album only: 2–10 previously-created child container ids to combine.',
+            'CAROUSEL album only: 2–20 previously-created child container ids to combine.',
         },
         coverUrl: {
           type: 'string',
@@ -4507,7 +4507,7 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
     name: 'instagram_post_image',
     title: 'Post an Instagram image or carousel',
     description:
-      'Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish. Preview (the default) performs nothing. If processing exceeds the poll budget the result is status=in_progress with a resume_container_id — re-run with apply:true and resumeContainerId to finish (never create a new post, which would duplicate it). Image format, byte size, and dimensions are validated by Instagram on fetch, not here.',
+      'Publish a single feed image, or a 2–20 image carousel, in one call: create the container(s), wait for processing, then publish. Preview (the default) performs nothing. If processing exceeds the poll budget the result is status=in_progress with a resume_container_id — re-run with apply:true and resumeContainerId to finish (never create a new post, which would duplicate it). Image format, byte size, and dimensions are validated by Instagram on fetch, not here.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -4521,15 +4521,15 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
           type: 'array',
           items: { type: 'string', pattern: '^ *[Hh][Tt][Tt][Pp][Ss]:\\/\\/' },
           minItems: 1,
-          maxItems: 10,
+          maxItems: 20,
           description:
-            'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–10 URLs post a carousel album. Required unless resuming. Format/size/dimensions are unverifiable before Instagram fetches them.',
+            'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–20 URLs post a carousel album. Required unless resuming. Format/size/dimensions are unverifiable before Instagram fetches them.',
         },
         altTexts: {
           type: 'array',
           items: { type: 'string', pattern: '\\S' },
           minItems: 1,
-          maxItems: 10,
+          maxItems: 20,
           description:
             'Alt text per image, in the same order as imageUrls — exactly one entry per URL, each ≤ 1000 characters. Omit to post without alt text.',
         },

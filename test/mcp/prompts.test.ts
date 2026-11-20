@@ -186,7 +186,7 @@ test('get renders the arguments into the template, with defaults when omitted', 
     assert.match(image, /`apply: true`/);
     assert.match(image, /resumeContainerId/);
     const carousel = await promptText(l.client, CAPTION, { brief: 'b', format: 'carousel' });
-    assert.match(carousel, /`instagram_post_image` with `imageUrls` \(2-10 public image URLs\)/);
+    assert.match(carousel, /`instagram_post_image` with `imageUrls` \(2-20 public image URLs\)/);
     const reel = await promptText(l.client, CAPTION, { brief: 'b', format: 'reel' });
     assert.match(reel, /`instagram_post_reel` with `videoUrl`/);
     assert.equal(reel.includes('instagram_post_image'), false, 'a reel never names the image tool');

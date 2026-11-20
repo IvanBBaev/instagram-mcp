@@ -69,14 +69,14 @@ const ARRAY_FIELDS = [
     field: 'imageUrls',
     base: {},
     item: 'https://cdn/a.jpg',
-    max: 10,
+    max: 20,
   },
   {
     tool: 'instagram_create_media_container',
     field: 'children',
     base: { mediaType: 'CAROUSEL' },
     item: '17841400008460056',
-    max: 10,
+    max: 20,
   },
   { tool: 'instagram_get_account_insights', field: 'metrics', base: {}, item: 'reach' },
   {
@@ -98,7 +98,7 @@ test('a string handed to an array argument gets the type error alone, not a char
   for (const { tool, field, base, item } of ARRAY_FIELDS) {
     const cb = cbs.get(tool);
     assert.ok(cb, `${tool} is registered`);
-    // The long string trips a `<=10` bound and the empty one a `>=1` bound —
+    // The long string trips a `<=20` bound and the empty one a `>=1` bound —
     // both used to add a second, character-phrased issue.
     for (const value of [item.repeat(3), '']) {
       const text = textOf(await cb({ ...base, [field]: value }));

@@ -101,7 +101,7 @@ const createContainerInput = {
     ),
   children: boundedArray(graphObjectId(), CAROUSEL_MIN, CAROUSEL_MAX)
     .optional()
-    .describe('CAROUSEL album only: 2–10 previously-created child container ids to combine.'),
+    .describe('CAROUSEL album only: 2–20 previously-created child container ids to combine.'),
   coverUrl: httpsUrl().optional().describe('Reels cover image URL.'),
   thumbOffset: thumbOffsetField('Reels/video cover frame offset, in milliseconds.'),
   shareToFeed: z.boolean().optional().describe('Reels: also cross-post the reel to the main feed.'),

@@ -74,7 +74,7 @@ export interface CreateContainerParams {
   caption?: string;
   locationId?: string;
   userTags?: UserTag[];
-  /** Carousel album: 2–10 child container ids (validated at the tool layer). */
+  /** Carousel album: 2–20 child container ids (validated at the tool layer). */
   children?: string[];
   /** Reels cover image URL. */
   coverUrl?: string;

@@ -160,7 +160,7 @@ interface RawMediaDetail extends MediaItem {
  * paragraph is re-read against the evidence rather than outliving it.
  *
  * Dropping it is nevertheless safe, and the bound is a product rule rather than
- * a page size: a carousel holds **at most 10 children** (CC-PUB-6, verified
+ * a page size: a carousel holds **at most 20 children** (CC-PUB-6, verified
  * against Meta's own docs), so the edge cannot outrun any page Graph would
  * return and there is no second page for a cursor to point at. `children` is
  * therefore published as a bare array — the shape `tools/media.ts` declares in

@@ -144,7 +144,7 @@ const captionToPublish = definePrompt({
     format: z
       .enum(['image', 'carousel', 'reel'])
       .optional()
-      .describe('Post format: image (default), carousel (2-10 images) or reel.'),
+      .describe('Post format: image (default), carousel (2-20 images) or reel.'),
     account: accountArg,
   },
   render: ({ brief, format, account }) => {
@@ -154,7 +154,7 @@ const captionToPublish = definePrompt({
       kind === 'reel'
         ? '`videoUrl` (one public video URL)'
         : kind === 'carousel'
-          ? '`imageUrls` (2-10 public image URLs) and `altTexts` (one per image)'
+          ? '`imageUrls` (2-20 public image URLs) and `altTexts` (one per image)'
           : '`imageUrls` (one public image URL) and `altTexts`';
     return [
       `Prepare and publish an Instagram ${kind} post from the brief below.`,

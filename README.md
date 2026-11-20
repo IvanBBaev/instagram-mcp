@@ -50,7 +50,7 @@ _Built and maintained in my own time — a
 The server exposes an Instagram professional account through **34 MCP tools**
 grouped into six packages:
 
-- **Content publishing** — feed images, 2–10 image carousels, Reels and Stories
+- **Content publishing** — feed images, 2–20 image carousels, Reels and Stories
   via the container → publish flow, plus one-call helpers (`instagram_post_image`
   / `_reel` / `_story`) and publishing-limit reporting.
 - **Media management** — list/read own media (including album children) and
@@ -290,7 +290,7 @@ and `Write` for mutating ones (writes preview by default — see
 | `instagram_delete_media` | publishing | fb-login | Write | Permanently delete a published post, reel, story or whole carousel album (DELETE /{ig-media-id}). |
 | `instagram_get_container_status` | publishing | both | Read | Read a media container's processing state: status_code is IN_PROGRESS, FINISHED, ERROR, EXPIRED, or PUBLISHED. |
 | `instagram_get_publishing_limit` | publishing | both | Read | Report the account's content-publishing usage against its rolling-window quota. |
-| `instagram_post_image` | publishing | both | Write | Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish. |
+| `instagram_post_image` | publishing | both | Write | Publish a single feed image, or a 2–20 image carousel, in one call: create the container(s), wait for processing, then publish. |
 | `instagram_post_reel` | publishing | both | Write | Publish a reel in one call: create the REELS container, wait for processing (reels can take a while), then publish. |
 | `instagram_post_story` | publishing | both | Write | Publish a photo or video story in one call: create the STORIES container, wait for processing, then publish. |
 | `instagram_publish_media` | publishing | both | Write | Phase 2 of publishing: publish a media container that has finished processing, returning the new media id. |

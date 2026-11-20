@@ -98,7 +98,7 @@
     },
     {
       "name": "instagram_post_image",
-      "description": "Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait for processing, then publish."
+      "description": "Publish a single feed image, or a 2–20 image carousel, in one call: create the container(s), wait for processing, then publish."
     },
     {
       "name": "instagram_post_reel",

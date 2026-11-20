@@ -104,7 +104,7 @@ const postImageInput = {
   imageUrls: boundedArray(httpsUrl(), 1, CAROUSEL_MAX)
     .optional()
     .describe(
-      'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–10 ' +
+      'Public HTTPS JPEG image URL(s) Instagram will fetch. One URL posts a single feed image; 2–20 ' +
         'URLs post a carousel album. Required unless resuming. Format/size/dimensions are unverifiable ' +
         'before Instagram fetches them.',
     ),
@@ -128,7 +128,7 @@ const postImageInput = {
 type PostImageArgs = ToolInputArgs<typeof postImageInput>;
 
 /**
- * Create (single image or 2–10 carousel) → poll → publish. Exported so tests can
+ * Create (single image or 2–20 carousel) → poll → publish. Exported so tests can
  * force the in-progress path with `opts.maxPollMs = 0` (not a tool input).
  */
 export async function runPostImage(
@@ -273,7 +273,7 @@ const postImageTool = defineTool({
   name: 'instagram_post_image',
   title: 'Post an Instagram image or carousel',
   description:
-    'Publish a single feed image, or a 2–10 image carousel, in one call: create the container(s), wait ' +
+    'Publish a single feed image, or a 2–20 image carousel, in one call: create the container(s), wait ' +
     'for processing, then publish. Preview (the default) performs nothing. If processing exceeds the ' +
     'poll budget the result is status=in_progress with a resume_container_id — re-run with apply:true ' +
     'and resumeContainerId to finish (never create a new post, which would duplicate it). Image format, ' +

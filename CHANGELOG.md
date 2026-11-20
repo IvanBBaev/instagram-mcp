@@ -148,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Carousels accept up to 20 items, up from 10 (CC-PUB-6). Meta's IG User
+  `/media` reference and content-publishing guide both document 20 (re-read
+  2026-11-20). `instagram_create_media_container` takes 2–20 `children`, and
+  `instagram_post_image` takes up to 20 `imageUrls` and `altTexts`. The lower
+  bound stays at 2. Calls that were valid before are still valid.
 - Tool calls read the active profile through the credential provider, the
   same way the request seam reads its token. After a token rotation inside the
   running server, `instagram_token_status` reports the new token's recorded

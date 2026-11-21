@@ -236,6 +236,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `instagram_get_hashtag_media` no longer reports page 2 onwards of
+  `top_media` / `recent_media` as stuck. Meta documents these edges' `after`
+  cursor as the same on every page, and it still fetches the next one, so a
+  cursor equal to the one sent is now handed back as the next position with
+  `truncated: false`, instead of `truncated: true` and the same-cursor note
+  (CC-DATA-137).
 - `instagram_list_recently_searched_hashtags` asks for 30 entries per page
   (`limit=30`), Meta's documented maximum for the edge. Without a `limit`,
   Graph serves 25 per page by default and documents no cursor for this edge, so

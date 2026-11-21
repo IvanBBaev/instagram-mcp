@@ -22,7 +22,7 @@ import {
   SEARCHED_HASHTAG_PAGE_LIMIT,
   searchHashtag,
 } from '../../src/api/discovery.js';
-import { CAP_MID_PAGE_NOTE, SAME_CURSOR_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
+import { CAP_MID_PAGE_NOTE, UNREADABLE_PAGE_NOTE } from '../../src/api/media.js';
 
 // Every Graph call in this layer goes through the injected IgRequestFn seam, so
 // nothing here may open a socket. Poisoning `fetch` for the whole file makes that
@@ -1117,10 +1117,11 @@ test('getHashtagMedia reports a `next` with no resumable cursor as truncated, no
   assert.deepEqual(res, { items: [{ id: '1' }], truncated: true, note: UNUSABLE_CURSOR_NOTE });
 });
 
-test('getHashtagMedia flags a page that hands back the cursor it was sent (CC-DATA-134)', async () => {
-  // The same repeat the shared walk now flags on its single page: echoing the
-  // caller's own `after` back as the next one is the unbounded loop the test
-  // above guards against, only produced by the edge instead of by this layer.
+test('getHashtagMedia hands back a cursor equal to the one it was sent as the next page, as Meta documents for the hashtag edges (CC-DATA-137)', async () => {
+  // Meta's top_media and recent_media references: the `after` value is the same
+  // on every page and still fetches the next one. A page answered with the
+  // cursor it was sent is therefore an ordinary page with more to come, not the
+  // stall CC-DATA-134 flags on the other single-page reads.
   const { req } = fakeReq(() => ({
     data: [{ id: 'm5' }],
     paging: { cursors: { after: 'CURSOR_FOR_PAGE_2' }, next: 'https://graph.facebook.com/next' },
@@ -1138,9 +1139,11 @@ test('getHashtagMedia flags a page that hands back the cursor it was sent (CC-DA
     res.items.map((i) => i.id),
     ['m5'],
   );
-  assert.equal(res.truncated, true);
-  assert.equal(res.after, 'CURSOR_FOR_PAGE_2');
-  assert.equal(res.note, SAME_CURSOR_NOTE);
+  assert.deepEqual(res, {
+    items: [{ id: 'm5' }],
+    truncated: false,
+    after: 'CURSOR_FOR_PAGE_2',
+  });
 });
 
 test('recentlySearchedHashtags reads /{ig-id}/recently_searched_hashtags on graph.facebook.com', async () => {

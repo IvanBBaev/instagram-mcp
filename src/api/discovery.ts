@@ -25,7 +25,6 @@ import {
   fetchPagedEdge,
   nextPageCursor,
   type PagedResult,
-  SAME_CURSOR_NOTE,
   UNREADABLE_PAGE_NOTE,
   UNUSABLE_CURSOR_NOTE,
 } from './media.js';
@@ -299,14 +298,13 @@ export async function getHashtagMedia(
     result.note = UNUSABLE_CURSOR_NOTE;
     return result;
   }
+  // A cursor equal to the one that was sent is ordinary progress on these two
+  // edges, NOT the stall CC-DATA-134 flags on the other single-page reads.
+  // Meta's top_media and recent_media references both state that the `after`
+  // value is the same on every page and still fetches the next one, so the
+  // repeat is the documented shape of every page after the first (CC-DATA-137).
+  // The read is one page per call, so the caller decides whether to go on.
   result.after = nextAfter;
-  // CC-DATA-134: the edge answered with the very cursor it was sent, so this
-  // page made no progress — flagged as `fetchPagedEdge` flags it, not offered
-  // as the next position.
-  if (nextAfter === params.after) {
-    result.truncated = true;
-    result.note = SAME_CURSOR_NOTE;
-  }
   return result;
 }
 

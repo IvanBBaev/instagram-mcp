@@ -422,7 +422,7 @@ const mediaInsightsTool = defineTool({
   name: 'instagram_get_media_insights',
   title: 'Get media insights',
   description:
-    'Insights for a single media object (GET /{media-id}/insights). The valid metric set varies by media_product_type; supply media_product_type to have invalid combinations rejected client-side. Insights on media created before the account became professional, or on an expired story, may return empty or error. A requested metric Instagram returned no data for is listed in missingMetrics and explained in note; it is absent, not zero.',
+    'Insights for a single media object (GET /{media-id}/insights). The valid metric set varies by media_product_type; supply media_product_type to have invalid combinations rejected client-side. Insights on media created before the account became professional, or on an expired story, may return empty or error. A story with fewer than 5 viewers is refused with code 10 ("Not enough viewers"): the error is labelled permission, but no scope is missing, so re-authenticating does not help. Carousel children have no insights, and figures can lag up to 48 hours. A requested metric Instagram returned no data for is listed in missingMetrics and explained in note; it is absent, not zero.',
   package: PACKAGE,
   annotations: readOnly,
   input: mediaInsightsInput,

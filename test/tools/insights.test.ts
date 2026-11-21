@@ -1545,7 +1545,10 @@ const PUBLISHED_CONTRACT: Record<string, unknown> = {
       'Insights for a single media object (GET /{media-id}/insights). The valid metric set ' +
       'varies by media_product_type; supply media_product_type to have invalid combinations ' +
       'rejected client-side. Insights on media created before the account became professional, ' +
-      'or on an expired story, may return empty or error. A requested metric Instagram ' +
+      'or on an expired story, may return empty or error. A story with fewer than 5 viewers ' +
+      'is refused with code 10 ("Not enough viewers"): the error is labelled permission, but no ' +
+      'scope is missing, so re-authenticating does not help. Carousel children have no insights, ' +
+      'and figures can lag up to 48 hours. A requested metric Instagram ' +
       'returned no data for is listed in missingMetrics and explained in note; it is absent, ' +
       'not zero.',
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -2267,6 +2270,54 @@ test('the other three insights tools repair rows the same way and never invent a
     } finally {
       await live.close();
     }
+  }
+});
+
+test('the media-insights description says a story under 5 viewers is refused with code 10, which is not a missing scope (CC-INS-33)', () => {
+  // Meta's media-insights reference: a story with fewer than 5 viewers answers
+  // error code 10, "(#10) Not enough viewers for the media to show insights".
+  // Code 10 is also Meta's missing-permission code, so it maps to `permission`,
+  // and troubleshooting's remedy for that kind is a fresh login. Without this
+  // sentence a model sends the operator through re-consent for a story that
+  // simply had too few viewers.
+  const d = toolByName('instagram_get_media_insights').description;
+  assertMentions(
+    d,
+    'A story with fewer than 5 viewers is refused with code 10 ("Not enough viewers"): the error ' +
+      'is labelled permission, but no scope is missing, so re-authenticating does not help.',
+  );
+  // Same reference: no insights for any media inside an album, and data can be
+  // delayed up to 48 hours. Both read as an empty answer, not a broken tool.
+  assertMentions(d, 'Carousel children have no insights, and figures can lag up to 48 hours.');
+});
+
+test("a story refused for too few viewers reaches the caller with Meta's text and code 10 (CC-INS-33)", async () => {
+  const refusal = new InstagramError('(#10) Not enough viewers for the media to show insights', {
+    kind: 'permission',
+    status: 400,
+    code: 10,
+  });
+  const req: IgRequestFn = async () => {
+    throw refusal;
+  };
+  const live = await liveInsightsServer(req);
+  try {
+    await live.client.listTools();
+    const res = await live.client.callTool({
+      name: 'instagram_get_media_insights',
+      arguments: { media_id: 's1', media_product_type: 'STORY' },
+    });
+    assert.deepEqual(res, {
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: 'Instagram error (permission): (#10) Not enough viewers for the media to show insights (code 10)',
+        },
+      ],
+    });
+  } finally {
+    await live.close();
   }
 });
 

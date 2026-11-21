@@ -236,6 +236,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `instagram_get_media_insights` now says that a story with fewer than 5
+  viewers is refused with code 10. That answer is labelled `permission`, but
+  re-authenticating does not fix it. The description also notes that carousel
+  children have no insights and that figures can lag up to 48 hours.
+  Troubleshooting's code-10 section no longer sends that case to `login`
+  (CC-INS-33).
 - `instagram_get_hashtag_media` no longer reports page 2 onwards of
   `top_media` / `recent_media` as stuck. Meta documents these edges' `after`
   cursor as the same on every page, and it still fetches the next one, so a

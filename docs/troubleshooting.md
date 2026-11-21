@@ -224,6 +224,12 @@ may instead mean the Business **assets** (Page / IG account) are not assigned to
 the system user — assign them, don't just widen scopes. `doctor` lists the granted
 scopes (Path B) so you can compare against [setup-guide.md](setup-guide.md) §5.
 
+> **Not a scope problem:** `instagram_get_media_insights` on a story with fewer
+> than 5 viewers also answers code 10, with the message "Not enough viewers for
+> the media to show insights". It maps to `permission` because the code does, but
+> re-running `login` changes nothing: the story simply has too few viewers
+> (CC-INS-33).
+
 ### Rate limiting + backoff — codes 4, 17, 32, 613, 80002, HTTP 429 (`kind: rate_limit`)
 
 Instagram enforces app-, user-, and **Business-Use-Case** limits (BUC uses a
